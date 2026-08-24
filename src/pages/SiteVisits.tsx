@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
+import { reportQueryError } from '../services/queryLogger';
 import {
   Search,
   RefreshCw,
@@ -107,7 +108,7 @@ export const SiteVisits: React.FC = () => {
         setChannelPartnerMap(new Map(cpRes.data.map(c => [c.id, `${c.cp_code} - ${c.name}`])));
       }
     } catch (err) {
-      console.warn('Failed to load site-visit lookups:', err);
+      reportQueryError('Site Visits: lookups', err);
     }
   }, []);
 

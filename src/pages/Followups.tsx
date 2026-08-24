@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
+import { reportQueryError } from '../services/queryLogger';
 import {
   Search,
   RefreshCw,
@@ -105,7 +106,7 @@ export const Followups: React.FC = () => {
         setLeadsMap(new Map(leadsRes.data.map(l => [l.id, l])));
       }
     } catch (err) {
-      console.warn('Failed to load follow-up lookups:', err);
+      reportQueryError('Follow-ups: lookups', err);
     }
   }, []);
 

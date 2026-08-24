@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { QueryFailureOverlay } from '../components/QueryFailureOverlay';
 import {
   LayoutDashboard,
   UserCheck,
@@ -243,6 +244,7 @@ export const AppLayout: React.FC = () => {
           <Outlet />
         </main>
       </div>
+      <QueryFailureOverlay />
     </div>
   );
 };

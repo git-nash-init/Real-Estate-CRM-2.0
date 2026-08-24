@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../hooks/useAuth';
+import { reportQueryError } from '../services/queryLogger';
 import {
   ArrowLeft,
   RefreshCw,
@@ -253,25 +254,30 @@ export const ChannelPartnerDetails: React.FC = () => {
         .from('projects')
         .select('id, project_name');
       if (projErr) {
-        console.warn('Projects list query warning:', projErr.message);
+        reportQueryError('Channel Partner details: projects list', projErr);
       } else {
         setAllProjects(data || []);
         setProjectsMap(new Map(data?.map(p => [p.id, p.project_name]) || []));
       }
     } catch (err) {
-      console.warn('Projects query exception:', err);
+      reportQueryError('Channel Partner details: projects list', err);
     }
 
     // Fetch Towers
+    // FIX: 'towers' does not exist in the live database — the real table is
+    // 'project_towers' (see AUDIT.md). This silently left the tower lookup
+    // empty on every Channel Partner detail page.
     try {
       const { data, error: towerErr } = await supabase
-        .from('towers')
+        .from('project_towers')
         .select('id, tower_name');
-      if (!towerErr && data) {
+      if (towerErr) {
+        reportQueryError('Channel Partner details: towers lookup', towerErr);
+      } else if (data) {
         setTowersMap(new Map(data.map(t => [t.id, t.tower_name || ''])));
       }
     } catch (err) {
-      console.warn('Towers query exception:', err);
+      reportQueryError('Channel Partner details: towers lookup', err);
     }
 
     // Fetch Units
@@ -279,11 +285,13 @@ export const ChannelPartnerDetails: React.FC = () => {
       const { data, error: unitErr } = await supabase
         .from('project_inventory')
         .select('id, unit_number');
-      if (!unitErr && data) {
+      if (unitErr) {
+        reportQueryError('Channel Partner details: units lookup', unitErr);
+      } else if (data) {
         setUnitsMap(new Map(data.map(u => [u.id, u.unit_number || ''])));
       }
     } catch (err) {
-      console.warn('Units query exception:', err);
+      reportQueryError('Channel Partner details: units lookup', err);
     }
 
     // 3. Fetch cp projects overrides
@@ -293,12 +301,12 @@ export const ChannelPartnerDetails: React.FC = () => {
         .select('project_id')
         .eq('channel_partner_id', id);
       if (cpProjErr) {
-        console.warn('Channel partner projects link query warning:', cpProjErr.message);
+        reportQueryError('Channel Partner details: project overrides', cpProjErr);
       } else {
         setAssignedProjectIds(data?.map(p => p.project_id) || []);
       }
     } catch (err) {
-      console.warn('Channel partner projects overrides exception:', err);
+      reportQueryError('Channel Partner details: project overrides', err);
     }
 
     let cpLeadIds: string[] = [];
@@ -311,13 +319,13 @@ export const ChannelPartnerDetails: React.FC = () => {
         .eq('channel_partner_id', id)
         .order('created_at', { ascending: false });
       if (leadErr) {
-        console.warn('Leads query warning (leads.channel_partner_id column may be missing):', leadErr.message);
+        reportQueryError('Channel Partner details: referred leads', leadErr);
       } else {
         setLeadsList(data || []);
         cpLeadIds = data?.map(l => l.id) || [];
       }
     } catch (err) {
-      console.warn('Leads query exception:', err);
+      reportQueryError('Channel Partner details: referred leads', err);
     }
 
     // 5. Fetch site visits attributed
@@ -329,7 +337,7 @@ export const ChannelPartnerDetails: React.FC = () => {
           .in('lead_id', cpLeadIds)
           .order('scheduled_at', { ascending: false });
         if (visitErr) {
-          console.warn('Site visits query warning:', visitErr.message);
+          reportQueryError('Channel Partner details: site visits', visitErr);
         } else {
           setSiteVisitsList(data || []);
         }
@@ -337,7 +345,7 @@ export const ChannelPartnerDetails: React.FC = () => {
         setSiteVisitsList([]);
       }
     } catch (err) {
-      console.warn('Site visits query exception:', err);
+      reportQueryError('Channel Partner details: site visits', err);
     }
 
     // 6. Fetch bookings attributed
@@ -348,12 +356,12 @@ export const ChannelPartnerDetails: React.FC = () => {
         .eq('channel_partner_id', id)
         .order('booking_date', { ascending: false });
       if (bookingErr) {
-        console.warn('Bookings query warning (bookings.channel_partner_id column may be missing):', bookingErr.message);
+        reportQueryError('Channel Partner details: bookings', bookingErr);
       } else {
         setBookingsList(data || []);
       }
     } catch (err) {
-      console.warn('Bookings query exception:', err);
+      reportQueryError('Channel Partner details: bookings', err);
     }
 
     // 7. Fetch commissions snapshot (cp_commissions)
@@ -365,13 +373,13 @@ export const ChannelPartnerDetails: React.FC = () => {
         .eq('cp_id', id)
         .order('created_at', { ascending: false });
       if (commErr) {
-        console.warn('Commissions table query warning:', commErr.message);
+        reportQueryError('Channel Partner details: referral fees', commErr);
       } else {
         setCommissionsList(data || []);
         fetchedCommIds = (data || []).map(c => c.id);
       }
     } catch (err) {
-      console.warn('Commissions query exception:', err);
+      reportQueryError('Channel Partner details: referral fees', err);
     }
 
     // 8. Fetch payments disbursements (cp_commission_payouts)
@@ -383,7 +391,7 @@ export const ChannelPartnerDetails: React.FC = () => {
           .in('commission_id', fetchedCommIds)
           .order('payment_date', { ascending: false });
         if (payErr) {
-          console.warn('Commission payments query warning:', payErr.message);
+          reportQueryError('Channel Partner details: referral fee payouts', payErr);
         } else {
           setPaymentsList(data || []);
         }
@@ -391,7 +399,7 @@ export const ChannelPartnerDetails: React.FC = () => {
         setPaymentsList([]);
       }
     } catch (err) {
-      console.warn('Commission payments query exception:', err);
+      reportQueryError('Channel Partner details: referral fee payouts', err);
     }
 
     // 9. Fetch commission structures
@@ -402,12 +410,12 @@ export const ChannelPartnerDetails: React.FC = () => {
         .eq('cp_id', id)
         .order('effective_from', { ascending: false });
       if (structErr) {
-        console.warn('Commission structures query warning:', structErr.message);
+        reportQueryError('Channel Partner details: referral fee structures', structErr);
       } else {
         setStructuresList(data || []);
       }
     } catch (err) {
-      console.warn('Commission structures query exception:', err);
+      reportQueryError('Channel Partner details: referral fee structures', err);
     }
 
     setLoading(false);

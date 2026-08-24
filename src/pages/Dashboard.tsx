@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { reportQueryError } from '../services/queryLogger';
 import { supabase } from '../services/supabaseClient';
 import {
   Users,
@@ -119,7 +120,7 @@ export const Dashboard: React.FC = () => {
           .in('id', visitLeadIds);
         
         if (visitLeadsError) {
-          console.warn('Failed to load lead names for site visits:', visitLeadsError.message);
+          reportQueryError('Dashboard: site visit lead names', visitLeadsError);
         } else {
           newLeadMap = new Map(visitLeads?.map(l => [l.id, l.customer_name || '']) || []);
         }

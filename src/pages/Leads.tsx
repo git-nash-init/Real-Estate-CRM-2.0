@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { reportQueryError } from '../services/queryLogger';
 import { supabase } from '../services/supabaseClient';
 import {
   Search,
@@ -312,7 +313,7 @@ export const Leads: React.FC = () => {
         .maybeSingle();
 
       if (maxLeadError) {
-        console.warn('Failed to fetch max lead number:', maxLeadError.message);
+        reportQueryError('Leads: next lead number', maxLeadError);
       }
 
       // 2. Generate the next lead number

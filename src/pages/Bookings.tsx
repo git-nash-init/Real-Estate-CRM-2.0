@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
+import { reportQueryError } from '../services/queryLogger';
 import {
   Search,
   RefreshCw,
@@ -911,7 +912,7 @@ export const Bookings: React.FC = () => {
             .update({ status: 'available' })
             .eq('id', bookingRecord.inventory_id);
           if (releaseErr) {
-            console.warn("Failed to release unit on cancellation:", releaseErr.message);
+            reportQueryError('Bookings: release inventory on cancel', releaseErr);
           } else {
             setInventoryList(prev => prev.map(item => 
               item.id === bookingRecord.inventory_id ? { ...item, status: 'available' } : item

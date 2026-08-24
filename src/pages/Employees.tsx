@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
+import { reportQueryError } from '../services/queryLogger';
 import { createClient } from '@supabase/supabase-js';
 import {
   Search,
@@ -180,7 +181,7 @@ export const Employees: React.FC = () => {
         })));
       }
     } catch (err) {
-      console.warn('Failed to load lookups:', err);
+      reportQueryError('Employees: lookups', err);
     }
   }, []);
 
@@ -263,7 +264,7 @@ export const Employees: React.FC = () => {
         setAssignedVisits(visitsRes.data || []);
         setAssignedBookings(bookingsRes.data || []);
       } catch (err) {
-        console.warn('Failed to load employee sub-resources:', err);
+        reportQueryError('Employees: sub-resources', err);
       } finally {
         setDetailsLoading(false);
       }
@@ -521,7 +522,7 @@ export const Employees: React.FC = () => {
         try {
           await supabase.from('user_profiles').delete().eq('id', tempCreatedProfileId);
         } catch (cleanupErr) {
-          console.warn('Failed to clean up orphan user profile:', cleanupErr);
+          reportQueryError('Employees: orphan profile cleanup', cleanupErr);
         }
       }
       setFormError(err.message || 'Database error occurred.');

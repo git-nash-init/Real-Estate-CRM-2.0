@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../services/supabaseClient';
+import { reportQueryError } from '../services/queryLogger';
 import {
   Search,
   RefreshCw,
@@ -200,12 +201,12 @@ export const ChannelPartners: React.FC = () => {
         .from('leads')
         .select('id, channel_partner_id');
       if (leadErr) {
-        console.warn('Leads CP referral query warning (leads.channel_partner_id column may be missing):', leadErr.message);
+        reportQueryError('Channel Partners: Leads referral link', leadErr);
       } else {
         setLeads(data || []);
       }
     } catch (err) {
-      console.warn('Leads query exception:', err);
+      reportQueryError('Channel Partners: Leads referral link', err);
     }
 
     // 3. Fetch Bookings reference (independent catch)
@@ -214,26 +215,31 @@ export const ChannelPartners: React.FC = () => {
         .from('bookings')
         .select('id, channel_partner_id, booking_amount, total_payable_amount, status');
       if (bookingErr) {
-        console.warn('Bookings CP referral query warning (bookings.channel_partner_id column may be missing):', bookingErr.message);
+        reportQueryError('Channel Partners: Bookings referral link', bookingErr);
       } else {
         setBookings(data || []);
       }
     } catch (err) {
-      console.warn('Bookings query exception:', err);
+      reportQueryError('Channel Partners: Bookings referral link', err);
     }
 
     // 4. Fetch Commissions (independent catch)
+    // FIX: 'commission_obligations' does not exist in the live database —
+    // this was the source of the reported 'no obligation' error on this
+    // page. The real, populated table is 'cp_commissions' (see AUDIT.md).
+    // Column aliased back to channel_partner_id so nothing downstream needs
+    // to change.
     try {
       const { data, error: commErr } = await supabase
-        .from('commission_obligations')
-        .select('id, channel_partner_id, commission_amount, status');
+        .from('cp_commissions')
+        .select('id, channel_partner_id:cp_id, commission_amount, status');
       if (commErr) {
-        console.warn('Commissions query warning:', commErr.message);
+        reportQueryError('Channel Partner referral fees (list)', commErr);
       } else {
         setCommissions(data || []);
       }
     } catch (err) {
-      console.warn('Commissions query exception:', err);
+      reportQueryError('Channel Partner referral fees (list)', err);
     }
 
     // 5. Fetch Projects (independent catch)
@@ -243,12 +249,12 @@ export const ChannelPartners: React.FC = () => {
         .select('id, project_name')
         .eq('status', 'active');
       if (projErr) {
-        console.warn('Projects list query warning:', projErr.message);
+        reportQueryError('Channel Partners: Projects list', projErr);
       } else {
         setProjectsMap(new Map(data?.map(p => [p.id, p.project_name]) || []));
       }
     } catch (err) {
-      console.warn('Projects list query exception:', err);
+      reportQueryError('Channel Partners: Projects list', err);
     }
 
     // 6. Fetch Channel Partner Project mappings (independent catch)
@@ -257,12 +263,12 @@ export const ChannelPartners: React.FC = () => {
         .from('channel_partner_projects')
         .select('channel_partner_id, project_id');
       if (cpProjErr) {
-        console.warn('Channel partner projects query warning:', cpProjErr.message);
+        reportQueryError('Channel Partners: project mappings', cpProjErr);
       } else {
         setPartnerProjectsList(data || []);
       }
     } catch (err) {
-      console.warn('Channel partner projects link query exception:', err);
+      reportQueryError('Channel Partners: project mappings', err);
     }
 
     setLoading(false);
