@@ -5,7 +5,6 @@ import { AppLayout } from './layouts/AppLayout';
 import { Login } from './pages/Login';
 import { ForgotPassword } from './pages/ForgotPassword';
 import { Dashboard } from './pages/Dashboard';
-import { PlaceholderPage } from './pages/PlaceholderPage';
 import { Leads } from './pages/Leads';
 import { Followups } from './pages/Followups';
 import { SiteVisits } from './pages/SiteVisits';
@@ -21,6 +20,7 @@ import { Marketing } from './pages/Marketing';
 import { Tasks } from './pages/Tasks';
 import { Attendance } from './pages/Attendance';
 import { Reports } from './pages/Reports';
+import { Settings } from './pages/Settings';
 
 function App() {
   return (
@@ -66,7 +66,14 @@ function App() {
                 </ProtectedRoute>
               }
             />
-            <Route path="settings" element={<PlaceholderPage />} />
+            <Route
+              path="settings"
+              element={
+                <ProtectedRoute allowedRoles={['super_admin', 'project_admin']}>
+                  <Settings />
+                </ProtectedRoute>
+              }
+            />
 
             {/* Catch-all redirected back to dashboard */}
             <Route path="*" element={<Navigate to="/" replace />} />

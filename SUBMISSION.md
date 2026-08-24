@@ -66,6 +66,8 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | 9 | Attendance + Leave management | GPS check-in/out against the existing rich schema, leave approval workflow, team view, CSV export. Note: employees table has 0 rows currently — client needs to populate employee records for check-in to work | New `Attendance.tsx` + `leave_requests` table | Done | — | — |
 | 10 | Reports (admin-only) | Lead funnel, bookings/revenue by sales owner, CP-referred vs direct split, telecaller call performance — all via `recharts`. Gated to admin roles (UI-level; full RLS enforcement in Phase 5) | New `Reports.tsx`, `recharts` dependency | Done | — | — |
 | 11 | Role-based access control | `role_permissions` populated (14 roles x 91 permissions, conservative default); Reports gated at the route + nav level; hardcoded super-admin UUID fallback removed (verified dead first); security advisor findings 15→6. Full per-table RLS rewrite deliberately deferred — see AUDIT.md Phase 5 for why and the recommended verified-branch approach | `role_permissions` seed migration, `App.tsx`, `AppLayout.tsx`, `useAuth.tsx`, 2 security migrations | Partially done — app-layer gating + advisor fixes done; DB-layer RLS rewrite deferred, needs a follow-up engagement with live login verification | — | — |
+| 12 | In-app WhatsApp connection status, QR pairing, and logout | New Settings → WhatsApp Connection page (admin-only): live status, QR code as an auto-refreshing image, connected phone number, Log Out button. Gateway heartbeats status into a Supabase table every ~3s and polls for a logout command — no direct browser-to-gateway HTTP calls, so the gateway's API key never reaches the browser and no CORS setup is needed | New `Settings.tsx`, `whatsapp_session` table, gateway `src/index.js` updated (heartbeat + command polling + logout handling), `whatsapp-gateway/README.md` updated | Done | — | — |
+| 13 | Test accounts for every role | Requested by the client to self-test each feature. 2 of 14 created (`super_admin`, `project_admin` — both give full access to every page) before hitting Supabase's free-tier email-sending rate limit on the signup flow. See section 9 (Handover) for credentials and how to get the remaining 12 | — | Partial — 2/14, blocked by a platform rate limit, not a code or permission issue | — | — |
 
 ## 5. Database changes
 
@@ -83,6 +85,7 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | `seed_role_permissions` | Populated `role_permissions` (was 0 rows) with a conservative default mapping. Data only — no RLS policy references it yet. | Applied |
 | `fix_security_advisor_findings` | Pinned `search_path` on 8 functions; revoked `anon`/`PUBLIC` execute on 6 `SECURITY DEFINER` RLS-helper functions. | Applied |
 | `revoke_handle_new_user_authenticated_execute` | Closed the remaining `authenticated` execute grant on the `handle_new_user` trigger function (confirmed trigger-only, no legitimate direct-call use). | Applied |
+| `add_whatsapp_session_status_table` | New `whatsapp_session` table so the CRM can show live gateway status/QR and issue a logout command through Supabase (no direct browser-to-gateway calls). | Applied |
 
 ## 6. Infrastructure
 
@@ -120,11 +123,13 @@ build (`npm run build`) and hosting as already in place.
    `GATEWAY_API_KEY`.
 3. Deploy via the included `Dockerfile` to Fly.io or Render (free tier) —
    exact commands in `whatsapp-gateway/README.md`.
-4. Fetch `GET /qr` from the live URL (with the `x-api-key` header) and scan
-   it with the WhatsApp number to connect (Settings → Linked Devices →
-   Link a Device).
-5. Re-pairing, if ever needed: delete the row in `whatsapp_auth_state`
-   (`session_id = 'default'`) and restart the gateway.
+4. Open the CRM at **Settings → WhatsApp Connection** (as an admin role)
+   and scan the QR code shown there with the WhatsApp number to connect
+   (Settings → Linked Devices → Link a Device, on the phone). It updates
+   live — no need to refresh the page or dig through logs/curl output.
+5. Re-pairing, if ever needed: use the **Log Out WhatsApp** button in that
+   same panel — it clears the session and generates a fresh QR
+   automatically, no restart required.
 
 **Environment variables needed, beyond what already exists:**
 `SUPABASE_SERVICE_ROLE_KEY` and `GATEWAY_API_KEY` for the gateway only —
@@ -141,6 +146,46 @@ work for any user — see the risk noted above.
 **Before the next phase of work (RLS):** enable leaked-password protection
 in the Supabase Auth dashboard (Authentication → Policies) — the one
 remaining security-advisor item that needs manual action, not code.
+
+### Test accounts (for self-testing every feature/role)
+
+Password for all: `CrmTest@2026` — change or delete these accounts before
+going live; they're for testing only.
+
+| Role | Email | Status |
+|---|---|---|
+| `super_admin` | `test.super_admin@gmail.com` | Ready — full access to every page |
+| `project_admin` | `test.project_admin@gmail.com` | Ready — full access to every page |
+| `site_head` | `test.site_head@gmail.com` | Not yet created |
+| `sourcing_manager_tl` | `test.sourcing_manager_tl@gmail.com` | Not yet created |
+| `sourcing_manager` | `test.sourcing_manager@gmail.com` | Not yet created |
+| `telecaller` | `test.telecaller@gmail.com` | Not yet created |
+| `presales_tl` | `test.presales_tl@gmail.com` | Not yet created |
+| `presales` | `test.presales@gmail.com` | Not yet created |
+| `closing_manager_tl` | `test.closing_manager_tl@gmail.com` | Not yet created |
+| `closing_manager` | `test.closing_manager@gmail.com` | Not yet created |
+| `marketing_head` | `test.marketing_head@gmail.com` | Not yet created |
+| `marketing` | `test.marketing@gmail.com` | Not yet created |
+| `receptionist` | `test.receptionist@gmail.com` | Not yet created |
+| `channel_partner` | `test.channel_partner@gmail.com` | Not yet created |
+
+The remaining 12 hit Supabase's free-tier email-sending rate limit on the
+public signup endpoint (not a permission or code issue). Two ways to
+finish this:
+1. **Wait it out** — ask again later in this conversation/a new session and
+   the remaining accounts can be created the same way once the limit
+   resets (typically within an hour on Supabase's default tier).
+2. **Faster — create them yourself:** Supabase Dashboard → Authentication →
+   Users → Add User, enter the email/password above, check **"Auto Confirm
+   User"** (this path isn't rate-limited since it's an authenticated admin
+   action, not the public signup flow). Send me the resulting user IDs (or
+   just say "created the rest") and I'll link each to the correct role in
+   `user_roles` + `user_profiles`.
+
+Note: none of these test users have an `employees` record, so
+Attendance check-in/out, the CP Outreach Sourcing Manager selector, and
+Log Call attribution won't resolve to a real employee for them — same
+caveat as the `employees` table being empty generally (see risks above).
 
 ## 10. Cost summary
 

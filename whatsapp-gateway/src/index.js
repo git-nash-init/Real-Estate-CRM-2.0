@@ -22,6 +22,8 @@ const MIN_GAP_MS = Number(process.env.WA_MIN_GAP_MS || 8000);
 const MAX_GAP_MS = Number(process.env.WA_MAX_GAP_MS || 15000);
 const DAILY_CAP = Number(process.env.WA_DAILY_CAP || 200);
 const POLL_INTERVAL_MS = Number(process.env.WA_POLL_INTERVAL_MS || 5000);
+const HEARTBEAT_INTERVAL_MS = Number(process.env.WA_HEARTBEAT_INTERVAL_MS || 3000);
+const SESSION_ROW_ID = 'default';
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   logger.error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required. See .env.example.');
@@ -33,6 +35,69 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 let sock = null;
 let currentQr = null;
 let connectionState = 'connecting'; // connecting | open | close
+let loggedOut = false;
+let connectedPhone = null;
+let manualLogoutRequested = false;
+
+// ---- Live status: the CRM reads this table instead of calling the
+// gateway's HTTP API directly, so the browser never needs the gateway's
+// API key or a CORS-open endpoint. ---------------------------------------
+
+async function pushStatusHeartbeat() {
+  const status = loggedOut
+    ? 'logged_out'
+    : connectionState === 'open'
+      ? 'open'
+      : currentQr
+        ? 'qr_pending'
+        : 'connecting';
+
+  const qrDataUrl = currentQr ? await QRCode.toDataURL(currentQr) : null;
+
+  const { error } = await supabase
+    .from('whatsapp_session')
+    .upsert({
+      id: SESSION_ROW_ID,
+      status,
+      qr_data_url: qrDataUrl,
+      connected_phone: connectedPhone,
+      last_heartbeat_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+  if (error) logger.error({ error }, 'Failed to push status heartbeat');
+}
+
+async function checkForCommands() {
+  const { data, error } = await supabase
+    .from('whatsapp_session')
+    .select('pending_command')
+    .eq('id', SESSION_ROW_ID)
+    .maybeSingle();
+  if (error) {
+    logger.error({ error }, 'Failed to check for pending commands');
+    return;
+  }
+  if (data?.pending_command === 'logout') {
+    logger.warn('Logout requested from the CRM — logging out and clearing the session.');
+    manualLogoutRequested = true;
+    // Clear the command immediately so it doesn't re-trigger.
+    await supabase.from('whatsapp_session').update({ pending_command: null }).eq('id', SESSION_ROW_ID);
+    try {
+      await sock?.logout();
+    } catch (err) {
+      logger.warn({ err: err.message }, 'sock.logout() threw (often expected if already disconnected)');
+    }
+  }
+}
+
+async function heartbeatLoop() {
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    await pushStatusHeartbeat();
+    await checkForCommands();
+    await new Promise((r) => setTimeout(r, HEARTBEAT_INTERVAL_MS));
+  }
+}
 
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useSupabaseAuthState(supabase);
@@ -50,24 +115,39 @@ async function connectToWhatsApp() {
 
     if (qr) {
       currentQr = qr;
-      logger.info('New QR code generated — scan via GET /qr');
+      logger.info('New QR code generated — visible live on the CRM Settings > WhatsApp page.');
     }
 
     if (connection === 'open') {
       connectionState = 'open';
       currentQr = null;
-      logger.info('WhatsApp connection open');
+      loggedOut = false;
+      connectedPhone = sock?.user?.id?.split(':')[0] || sock?.user?.id || null;
+      logger.info({ connectedPhone }, 'WhatsApp connection open');
     } else if (connection === 'close') {
       connectionState = 'close';
       const statusCode = (lastDisconnect?.error instanceof Boom)
         ? lastDisconnect.error.output?.statusCode
         : undefined;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      logger.warn({ statusCode }, 'Connection closed');
-      if (shouldReconnect) {
-        setTimeout(connectToWhatsApp, 3000);
+      const isLoggedOut = statusCode === DisconnectReason.loggedOut || manualLogoutRequested;
+      logger.warn({ statusCode, isLoggedOut }, 'Connection closed');
+
+      if (isLoggedOut) {
+        loggedOut = true;
+        connectedPhone = null;
+        manualLogoutRequested = false;
+        // Clear the persisted session so the next boot starts a genuinely
+        // fresh pairing (a stale session would otherwise be reloaded and
+        // immediately rejected by WhatsApp).
+        await supabase.from('whatsapp_auth_state').delete().eq('session_id', 'default');
+        logger.warn('Session cleared — reconnecting to generate a fresh QR code.');
+        setTimeout(connectToWhatsApp, 2000);
       } else {
-        logger.error('Logged out — a fresh QR scan is required. Restart the gateway.');
+        // Any other disconnect (including the QR-scan-timeout 408 Baileys
+        // raises after a few unscanned refreshes) — just reconnect, which
+        // generates a new QR automatically. The CRM's live view means a
+        // human is far more likely to actually see and scan it in time now.
+        setTimeout(connectToWhatsApp, 3000);
       }
     }
   });
@@ -163,7 +243,7 @@ async function outboxWorkerLoop() {
   }
 }
 
-// ---- HTTP API ---------------------------------------------------------
+// ---- HTTP API (optional — the CRM uses Supabase directly, not this) ----
 
 const app = express();
 app.use(express.json());
@@ -178,7 +258,7 @@ function requireApiKey(req, res, next) {
 }
 
 app.get('/status', requireApiKey, (_req, res) => {
-  res.json({ connectionState, hasQr: !!currentQr });
+  res.json({ connectionState, hasQr: !!currentQr, connectedPhone, loggedOut });
 });
 
 app.get('/qr', requireApiKey, async (_req, res) => {
@@ -187,6 +267,16 @@ app.get('/qr', requireApiKey, async (_req, res) => {
   }
   const dataUrl = await QRCode.toDataURL(currentQr);
   res.json({ qr: dataUrl });
+});
+
+app.post('/logout', requireApiKey, async (_req, res) => {
+  manualLogoutRequested = true;
+  try {
+    await sock?.logout();
+  } catch (err) {
+    logger.warn({ err: err.message }, 'sock.logout() threw');
+  }
+  res.json({ ok: true });
 });
 
 // Convenience endpoint — mirrors what writing directly to whatsapp_outbox
@@ -213,3 +303,4 @@ app.listen(PORT, () => {
 
 connectToWhatsApp();
 outboxWorkerLoop();
+heartbeatLoop();

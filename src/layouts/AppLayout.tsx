@@ -55,7 +55,7 @@ export const AppLayout: React.FC = () => {
     { name: 'Attendance', path: '/attendance', icon: ClipboardCheck },
     { name: 'Tasks', path: '/tasks', icon: CheckSquare },
     { name: 'Reports', path: '/reports', icon: BarChart3, allowedRoles: ['super_admin', 'project_admin'] },
-    { name: 'Settings', path: '/settings', icon: Settings },
+    { name: 'Settings', path: '/settings', icon: Settings, allowedRoles: ['super_admin', 'project_admin'] },
   ];
 
   const handleLogout = async () => {
