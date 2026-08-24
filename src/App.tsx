@@ -18,6 +18,7 @@ import { ChannelPartnerDetails } from './pages/ChannelPartnerDetails';
 import { CPOutreach } from './pages/CPOutreach';
 import { Employees } from './pages/Employees';
 import { Marketing } from './pages/Marketing';
+import { Tasks } from './pages/Tasks';
 
 function App() {
   return (
@@ -54,7 +55,7 @@ function App() {
             <Route path="marketing" element={<Marketing />} />
             <Route path="employees" element={<Employees />} />
             <Route path="attendance" element={<PlaceholderPage />} />
-            <Route path="tasks" element={<PlaceholderPage />} />
+            <Route path="tasks" element={<Tasks />} />
             <Route path="reports" element={<PlaceholderPage />} />
             <Route path="settings" element={<PlaceholderPage />} />
 

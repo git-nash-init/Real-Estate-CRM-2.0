@@ -32,7 +32,7 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | 5 | Marketing — WhatsApp bulk messaging | Audience builder (project/status/CP-referred filters), {{name}} merge field, live match count, delivery dashboard reading real outbox status | New `Marketing.tsx`, `App.tsx` route wired | Done | — | — |
 | 6 | CP Outreach form | Ported field-for-field from the reference CRM, adapted to this project's live channel_partners schema (company_name/name vs the reference's channel_partner_firm_name); role-driven SM selector; GPS capture | New `CPOutreach.tsx` + `cp_outreach` table, sidebar nav item, route | Done | — | — |
 | 7 | Telecaller call tracking | Call logging wired into Leads.tsx (Log Call action: outcome, duration, notes); admin analytics land with Reports (Phase 4.7) | New `call_logs` table, `Leads.tsx` | Done (Leads.tsx); Follow-ups integration deferred as fast-follow | — | — |
-| 8 | Tasks (create, assign, notify, status tracking) | Uses existing `tasks` + `notifications` tables | New `Tasks.tsx` | Pending | — | — |
+| 8 | Tasks (create, assign, notify, status tracking) | Uses existing `tasks` + `notifications` tables; real-time popup notification via Supabase Realtime (discovered and fixed: neither table was in the realtime publication); wired the previously-decorative sidebar bell; My Tasks panel on Dashboard | New `Tasks.tsx`, `useNotifications.tsx`, `AppLayout.tsx`, `Dashboard.tsx` updated | Done | — | — |
 | 9 | Attendance + Leave management | GPS check-in/out (existing schema), leave approval workflow | New `Attendance.tsx` + `leave_requests` table | Pending | — | — |
 | 10 | Reports (admin-only) | Sales/performance dashboards via `recharts` | New `Reports.tsx` | Pending | — | — |
 | 11 | Role-based access control | Populate `role_permissions`, enforce via RLS + route guards | RLS migration, `ProtectedRoute.tsx`, `AppLayout.tsx` | Pending | — | — |
@@ -48,6 +48,7 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | `add_whatsapp_gateway_tables` | New `whatsapp_outbox` (send queue) and `whatsapp_auth_state` (session persistence) tables. | Applied |
 | `add_cp_outreach_table` | New `cp_outreach` table for field-visit logging. | Applied |
 | `add_call_logs_table` | New `call_logs` table for telecaller call tracking. | Applied |
+| `enable_realtime_for_notifications_and_tasks` | Added `notifications` and `tasks` to the `supabase_realtime` publication (were missing entirely). | Applied |
 
 ## 6. Infrastructure
 

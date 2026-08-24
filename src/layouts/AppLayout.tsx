@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { useNotifications } from '../hooks/useNotifications';
 import { QueryFailureOverlay } from '../components/QueryFailureOverlay';
 import {
   LayoutDashboard,
@@ -35,6 +36,8 @@ export const AppLayout: React.FC = () => {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
+  const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
+  const { notifications, unreadCount, markAsRead, markAllAsRead, justArrived, dismissJustArrived } = useNotifications();
 
   const navigationItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
@@ -167,11 +170,56 @@ export const AppLayout: React.FC = () => {
 
           {/* Header Actions & Profile */}
           <div className="flex items-center space-x-4">
-            {/* Notification bell placeholder */}
-            <button className="p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 focus:outline-none transition-colors relative">
-              <Bell className="h-5 w-5" />
-              <span className="absolute top-1 right-1 w-2 h-2 bg-indigo-600 rounded-full"></span>
-            </button>
+            {/* Notifications */}
+            <div className="relative">
+              <button
+                onClick={() => setNotifDropdownOpen(!notifDropdownOpen)}
+                className="p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 focus:outline-none transition-colors relative"
+              >
+                <Bell className="h-5 w-5" />
+                {unreadCount > 0 && (
+                  <span className="absolute top-0.5 right-0.5 min-w-[16px] h-4 px-1 flex items-center justify-center bg-rose-500 text-white text-[9px] font-bold rounded-full">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {notifDropdownOpen && (
+                <>
+                  <div onClick={() => setNotifDropdownOpen(false)} className="fixed inset-0 z-30 cursor-default" />
+                  <div className="absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-lg py-1.5 z-40 max-h-[420px] overflow-y-auto">
+                    <div className="px-4 py-2 border-b border-slate-100 flex items-center justify-between">
+                      <p className="text-xs text-slate-400 font-medium uppercase">Notifications</p>
+                      {unreadCount > 0 && (
+                        <button onClick={markAllAsRead} className="text-xxs text-indigo-600 font-semibold hover:underline">
+                          Mark all read
+                        </button>
+                      )}
+                    </div>
+                    {notifications.length === 0 ? (
+                      <p className="px-4 py-6 text-center text-xs text-slate-400 italic">No notifications yet.</p>
+                    ) : (
+                      notifications.map((n) => (
+                        <button
+                          key={n.id}
+                          onClick={() => markAsRead(n.id)}
+                          className={`w-full text-left px-4 py-2.5 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors ${n.is_read ? 'opacity-60' : ''}`}
+                        >
+                          <div className="flex items-start gap-2">
+                            {!n.is_read && <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 mt-1.5 flex-shrink-0" />}
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-slate-800 truncate">{n.title}</p>
+                              <p className="text-xxs text-slate-500 mt-0.5 line-clamp-2">{n.message}</p>
+                              <p className="text-[10px] text-slate-350 mt-1">{new Date(n.created_at).toLocaleString('en-IN')}</p>
+                            </div>
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
 
             {/* Profile Dropdown */}
             <div className="relative">
@@ -247,6 +295,19 @@ export const AppLayout: React.FC = () => {
         </main>
       </div>
       <QueryFailureOverlay />
+
+      {justArrived && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[80] bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-bottom-4 duration-200">
+          <Bell className="h-4 w-4 text-indigo-400 flex-shrink-0" />
+          <div className="text-sm">
+            <p className="font-semibold">{justArrived.title}</p>
+            <p className="text-slate-300 text-xs">{justArrived.message}</p>
+          </div>
+          <button onClick={dismissJustArrived} className="ml-2 text-slate-400 hover:text-white">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   );
 };

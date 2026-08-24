@@ -13,7 +13,8 @@ import {
   RefreshCw,
   TrendingUp,
   FileText,
-  AlertCircle
+  AlertCircle,
+  CheckSquare
 } from 'lucide-react';
 
 interface Lead {
@@ -43,8 +44,87 @@ interface DashboardStats {
   totalBookingsCount: number;
 }
 
+interface MyTask {
+  id: string;
+  title: string;
+  priority: string | null;
+  status: string | null;
+  due_date: string | null;
+}
+
+const taskStatusOptions = ['pending', 'in_progress', 'completed', 'cancelled', 'overdue'];
+
+const MyTasksPanel: React.FC<{ userId: string | undefined }> = ({ userId }) => {
+  const [tasks, setTasks] = useState<MyTask[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!userId) { setLoading(false); return; }
+    supabase
+      .from('tasks')
+      .select('id, title, priority, status, due_date')
+      .eq('assigned_to', userId)
+      .not('status', 'in', '(completed,cancelled)')
+      .order('due_date', { ascending: true, nullsFirst: false })
+      .limit(6)
+      .then(({ data, error }) => {
+        if (error) reportQueryError('Dashboard: my tasks', error);
+        else setTasks(data || []);
+        setLoading(false);
+      });
+  }, [userId]);
+
+  const handleStatusChange = async (taskId: string, newStatus: string) => {
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: newStatus } : t));
+    const { error } = await supabase
+      .from('tasks')
+      .update({ status: newStatus, completed_at: newStatus === 'completed' ? new Date().toISOString() : null })
+      .eq('id', taskId);
+    if (error) {
+      reportQueryError('Dashboard: my tasks status update', error);
+    } else if (newStatus === 'completed' || newStatus === 'cancelled') {
+      setTasks(prev => prev.filter(t => t.id !== taskId));
+    }
+  };
+
+  return (
+    <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+          <CheckSquare className="h-4 w-4 text-indigo-600" /> My Tasks
+        </h3>
+      </div>
+      {loading ? (
+        <p className="text-xs text-slate-400">Loading...</p>
+      ) : tasks.length === 0 ? (
+        <p className="text-xs text-slate-400 italic">No open tasks assigned to you.</p>
+      ) : (
+        <div className="space-y-2.5">
+          {tasks.map(t => (
+            <div key={t.id} className="flex items-center justify-between gap-3 border-b border-slate-50 last:border-0 pb-2.5 last:pb-0">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-slate-800 truncate">{t.title}</p>
+                <p className="text-xxs text-slate-400 mt-0.5">
+                  {t.due_date ? `Due ${new Date(t.due_date).toLocaleDateString('en-IN')}` : 'No due date'} · <span className="capitalize">{t.priority}</span>
+                </p>
+              </div>
+              <select
+                value={t.status || 'pending'}
+                onChange={(e) => handleStatusChange(t.id, e.target.value)}
+                className="text-xxs font-semibold rounded-full px-2 py-1 border border-slate-200 capitalize flex-shrink-0"
+              >
+                {taskStatusOptions.map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+              </select>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const Dashboard: React.FC = () => {
-  const { profile } = useAuth();
+  const { profile, user } = useAuth();
   const navigate = useNavigate();
   
   // Filter states
@@ -242,6 +322,8 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      <MyTasksPanel userId={user?.id} />
 
       {/* KPI Stats Cards (Live States) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">

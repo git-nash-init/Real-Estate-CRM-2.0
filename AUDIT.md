@@ -216,7 +216,6 @@ system activation), since fixing them properly requires the same RLS pass.
 
 ## Not yet done (tracked for subsequent phases per the engagement plan)
 
-- Tasks UI (schema already exists).
 - Attendance + Leave UI (schema already exists, `leave_requests` still needed).
 - Reports (admin-only).
 - Turn on the permission system; remediate the 4 security advisor findings.
@@ -394,3 +393,28 @@ follow if the client wants call logging directly from the Follow-ups list
 too.
 
 Verified the insert shape with a rolled-back SQL dry run.
+
+## Phase 4.5: Tasks + live notifications (this pass)
+
+New `src/pages/Tasks.tsx` replaces the `PlaceholderPage` at `/tasks` — the
+`tasks` table was already schema-complete (see Phase 0 audit). Create,
+assign to anyone, priority, due date; status changes gated to the assignee
+or the creator. Filter tabs: Assigned to Me / Created by Me / All.
+
+**Live notifications, not polling.** New `src/hooks/useNotifications.tsx`
+subscribes to Supabase Realtime `postgres_changes` on `notifications`
+filtered to the current user. Discovered along the way that `notifications`
+and `tasks` were not in the `supabase_realtime` publication at all — added
+both (migration `enable_realtime_for_notifications_and_tasks`); without
+this, Realtime subscriptions would have silently received nothing.
+
+Wired the previously-decorative bell in `AppLayout.tsx` (flagged in the
+Phase 0 audit as a placeholder with a hardcoded dot) into a real dropdown:
+unread count badge, list, mark-as-read / mark-all-read, plus a toast popup
+that fires live the moment a new notification arrives — no refresh needed.
+Added a "My Tasks" panel to `Dashboard.tsx` showing the current user's open
+tasks with inline status change.
+
+On assignment, `Tasks.tsx` writes a `notifications` row for the assignee;
+on status change, one goes back to the creator. Both insert shapes verified
+against the live schema with a rolled-back SQL dry run.
