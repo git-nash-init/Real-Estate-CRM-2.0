@@ -2396,6 +2396,91 @@ export type Database = {
           },
         ]
       }
+      whatsapp_auth_state: {
+        Row: {
+          files: Json
+          session_id: string
+          updated_at: string
+        }
+        Insert: {
+          files?: Json
+          session_id?: string
+          updated_at?: string
+        }
+        Update: {
+          files?: Json
+          session_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      whatsapp_outbox: {
+        Row: {
+          attempts: number
+          campaign_id: string | null
+          cp_lead_id: string | null
+          created_at: string
+          created_by: string | null
+          error: string | null
+          id: string
+          lead_id: string | null
+          message: string
+          sent_at: string | null
+          status: string
+          to_phone: string
+        }
+        Insert: {
+          attempts?: number
+          campaign_id?: string | null
+          cp_lead_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          error?: string | null
+          id?: string
+          lead_id?: string | null
+          message: string
+          sent_at?: string | null
+          status?: string
+          to_phone: string
+        }
+        Update: {
+          attempts?: number
+          campaign_id?: string | null
+          cp_lead_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          error?: string | null
+          id?: string
+          lead_id?: string | null
+          message?: string
+          sent_at?: string | null
+          status?: string
+          to_phone?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_outbox_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_outbox_cp_lead_id_fkey"
+            columns: ["cp_lead_id"]
+            isOneToOne: false
+            referencedRelation: "cp_leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_outbox_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never

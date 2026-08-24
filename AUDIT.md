@@ -216,7 +216,7 @@ system activation), since fixing them properly requires the same RLS pass.
 
 ## Not yet done (tracked for subsequent phases per the engagement plan)
 
-- WhatsApp gateway (Baileys) + Marketing bulk messaging.
+- Marketing bulk messaging UI (the sending infrastructure is ready — see Phase 3 below).
 - CP Outreach form (ported from the reference CRM).
 - Telecaller call tracking.
 - Tasks UI (schema already exists).
@@ -290,3 +290,49 @@ and the lead's CP attribution clears.
 
 **Verification code delivery (WhatsApp)** is generated and stored now but
 not yet sent — that lands with the WhatsApp gateway in Phase 3/4.
+
+## Phase 3: WhatsApp gateway (this pass)
+
+Built a standalone `whatsapp-gateway/` Node service on `@whiskeysockets/baileys`
+(free, unofficial, no Chromium — runs on any free-tier host). Not part of the
+Vite app; deploys separately.
+
+**How it connects to the CRM:** two new Supabase tables. `whatsapp_outbox`
+is the send queue — the CRM (or anything else with DB access) inserts rows
+here; the gateway's worker polls, throttles, and sends them, updating
+status as it goes. `whatsapp_auth_state` persists the Baileys session
+(creds + signal keys) as a JSON blob, since a free-tier host can restart or
+redeploy between messages — without this, every restart would force
+re-scanning the QR code. A custom `useSupabaseAuthState` adapter wraps
+Baileys' own `useMultiFileAuthState`: rehydrates a temp directory from
+Supabase on boot, lets Baileys manage it normally, re-uploads the whole
+directory on every `creds.update`.
+
+**Verified live, not just written:** ran the gateway locally with the real
+Supabase project URL. It connected to WhatsApp's actual servers, completed
+the Baileys handshake, and generated a real, scannable QR code — confirmed
+by fetching it through `GET /qr` and getting back a valid base64 PNG.
+`GET /status` correctly reported connection state. Environment validation
+exits cleanly with a clear message when Supabase credentials are missing
+(no crash/stack trace). Confirmed the auth-state table is genuinely
+RLS-protected: booting with only the app's public anon/publishable key (no
+service-role key available in this environment) resulted in the row
+silently not being written, exactly as designed — the gateway needs the
+real `service_role` key at deploy time to persist sessions, which only the
+client can provide from their Supabase dashboard.
+
+**Throttling:** randomised 8-15s gap between sends, 200/day cap, both
+configurable via env vars. Exponential backoff on HTTP 429. These reduce
+but cannot eliminate the ban risk inherent to any unofficial WhatsApp
+client — documented plainly in `whatsapp-gateway/README.md` along with
+full deploy instructions (Fly.io / Render) and the re-pairing procedure.
+
+**Wired into the app this pass:** the CP lead verification code (Phase 2)
+now actually enqueues into `whatsapp_outbox` and sends to the lead's
+mobile number when a channel partner is tagged on a new lead. Added a
+verification UI to the Channel Partner detail page's Leads tab — staff see
+the code, claim expiry date, and a Verify button for confirming the code a
+client shows at site visit.
+
+**Not yet done:** the Marketing page itself (bulk campaign builder) — the
+sending infrastructure it needs already exists and is proven working.

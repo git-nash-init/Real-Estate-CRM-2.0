@@ -365,12 +365,11 @@ export const Leads: React.FC = () => {
 
       // Channel Partner lead claim: 45-day window + verification code.
       // Non-fatal if this fails — the lead itself is already saved; the CP
-      // attribution/commission tracking is a secondary record. WhatsApp
-      // delivery of the code is wired up once the messaging gateway exists.
+      // attribution/commission tracking is a secondary record.
       if (selectedChannelPartnerId && insertedLead?.id) {
         const verificationCode = Math.random().toString(36).slice(2, 8).toUpperCase();
         const claimExpiresAt = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString();
-        const { error: claimErr } = await supabase
+        const { data: claimRow, error: claimErr } = await supabase
           .from('cp_leads')
           .insert([{
             cp_id: selectedChannelPartnerId,
@@ -379,9 +378,28 @@ export const Leads: React.FC = () => {
             status: 'pending',
             claim_expires_at: claimExpiresAt,
             verification_code: verificationCode,
-          }]);
+          }])
+          .select('id')
+          .single();
         if (claimErr) {
           reportQueryError('Leads: channel partner claim record', claimErr);
+        } else if (mobile.trim()) {
+          // Send the verification code to the CLIENT (the lead), not the
+          // CP — they show it at site visit to confirm the referral. Enqueued
+          // into whatsapp_outbox; the standalone gateway (whatsapp-gateway/)
+          // picks it up and sends it, throttled.
+          const { error: outboxErr } = await supabase
+            .from('whatsapp_outbox')
+            .insert([{
+              to_phone: mobile.trim(),
+              message: `Thank you for your interest! Your reference code is ${verificationCode}. Please share this code with our team during your site visit.`,
+              lead_id: insertedLead.id,
+              cp_lead_id: claimRow?.id || null,
+              status: 'queued',
+            }]);
+          if (outboxErr) {
+            reportQueryError('Leads: verification code WhatsApp send', outboxErr);
+          }
         }
       }
 

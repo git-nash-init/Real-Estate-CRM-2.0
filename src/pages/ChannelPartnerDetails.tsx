@@ -64,6 +64,15 @@ interface Lead {
   project_id: string | null;
 }
 
+interface CpLeadClaim {
+  id: string;
+  lead_id: string;
+  status: string | null;
+  claim_expires_at: string | null;
+  verification_code: string | null;
+  verified_at: string | null;
+}
+
 interface SiteVisit {
   id: string;
   scheduled_at: string | null;
@@ -155,6 +164,8 @@ export const ChannelPartnerDetails: React.FC = () => {
 
   // Related lists
   const [leadsList, setLeadsList] = useState<Lead[]>([]);
+  const [cpLeadClaims, setCpLeadClaims] = useState<CpLeadClaim[]>([]);
+  const [verifyingClaimId, setVerifyingClaimId] = useState<string | null>(null);
   const [siteVisitsList, setSiteVisitsList] = useState<SiteVisit[]>([]);
   const [bookingsList, setBookingsList] = useState<Booking[]>([]);
   const [commissionsList, setCommissionsList] = useState<Commission[]>([]);
@@ -326,6 +337,21 @@ export const ChannelPartnerDetails: React.FC = () => {
       }
     } catch (err) {
       reportQueryError('Channel Partner details: referred leads', err);
+    }
+
+    // 4b. Fetch Channel Partner lead claims (verification codes, 45-day window)
+    try {
+      const { data: claimsData, error: claimsErr } = await supabase
+        .from('cp_leads')
+        .select('id, lead_id, status, claim_expires_at, verification_code, verified_at')
+        .eq('cp_id', id);
+      if (claimsErr) {
+        reportQueryError('Channel Partner details: lead claims', claimsErr);
+      } else {
+        setCpLeadClaims(claimsData || []);
+      }
+    } catch (err) {
+      reportQueryError('Channel Partner details: lead claims', err);
     }
 
     // 5. Fetch site visits attributed
@@ -941,6 +967,28 @@ export const ChannelPartnerDetails: React.FC = () => {
   const validToVal = partner.rera_valid_to || partner.valid_to || '—';
   const commissionVal = partner.default_commission_rate || partner.commission_value || 0;
 
+  const cpLeadClaimsByLeadId = new Map(cpLeadClaims.map(c => [c.lead_id, c]));
+
+  // Staff confirms the code the client showed at site visit matches the one
+  // sent via WhatsApp when the CP tagged the lead.
+  const handleVerifyClaim = async (claimId: string) => {
+    setVerifyingClaimId(claimId);
+    try {
+      const { error } = await supabase
+        .from('cp_leads')
+        .update({ status: 'verified', verified_at: new Date().toISOString() })
+        .eq('id', claimId);
+      if (error) throw error;
+      setCpLeadClaims(prev => prev.map(c => c.id === claimId ? { ...c, status: 'verified', verified_at: new Date().toISOString() } : c));
+      setNotification({ type: 'success', message: 'Lead referral code verified.' });
+    } catch (err: any) {
+      reportQueryError('Channel Partner details: verify lead claim', err);
+      setNotification({ type: 'error', message: err.message || 'Failed to verify code.' });
+    } finally {
+      setVerifyingClaimId(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* ALERTS */}
@@ -1169,12 +1217,16 @@ export const ChannelPartnerDetails: React.FC = () => {
                   <th className="py-2.5 px-4">Email</th>
                   <th className="py-2.5 px-4">Project Focus</th>
                   <th className="py-2.5 px-4">Status</th>
+                  <th className="py-2.5 px-4">Referral Code</th>
+                  <th className="py-2.5 px-4">Claim Expires</th>
                   <th className="py-2.5 px-4">Created Date</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {leadsList.length > 0 ? (
-                  leadsList.map(l => (
+                  leadsList.map(l => {
+                    const claim = cpLeadClaimsByLeadId.get(l.id);
+                    return (
                     <tr key={l.id} className="hover:bg-slate-50/50">
                       <td className="py-3 px-4 font-semibold text-slate-900">{l.customer_name}</td>
                       <td className="py-3 px-4 text-slate-600">{l.mobile || '—'}</td>
@@ -1187,12 +1239,40 @@ export const ChannelPartnerDetails: React.FC = () => {
                           {l.status}
                         </span>
                       </td>
+                      <td className="py-3 px-4">
+                        {claim ? (
+                          claim.status === 'verified' ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xxs font-bold bg-emerald-50 text-emerald-700">
+                              ✓ Verified
+                            </span>
+                          ) : claim.status === 'expired' ? (
+                            <span className="inline-flex px-2 py-0.5 rounded-full text-xxs font-bold bg-slate-100 text-slate-500">Expired</span>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-xs font-bold text-indigo-700">{claim.verification_code}</span>
+                              <button
+                                onClick={() => handleVerifyClaim(claim.id)}
+                                disabled={verifyingClaimId === claim.id}
+                                className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md text-xxs font-semibold disabled:opacity-50"
+                              >
+                                {verifyingClaimId === claim.id ? '...' : 'Verify'}
+                              </button>
+                            </div>
+                          )
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 text-slate-500 text-xs">
+                        {claim?.claim_expires_at ? new Date(claim.claim_expires_at).toLocaleDateString('en-IN') : '—'}
+                      </td>
                       <td className="py-3 px-4 text-slate-500 text-xs">{new Date(l.created_at).toLocaleDateString('en-IN')}</td>
                     </tr>
-                  ))
+                    );
+                  })
                 ) : (
                   <tr>
-                    <td colSpan={6} className="py-10 text-center text-slate-400 italic">No leads registered from this channel partner.</td>
+                    <td colSpan={8} className="py-10 text-center text-slate-400 italic">No leads registered from this channel partner.</td>
                   </tr>
                 )}
               </tbody>
