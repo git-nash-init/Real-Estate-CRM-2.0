@@ -216,7 +216,6 @@ system activation), since fixing them properly requires the same RLS pass.
 
 ## Not yet done (tracked for subsequent phases per the engagement plan)
 
-- Attendance + Leave UI (schema already exists, `leave_requests` still needed).
 - Reports (admin-only).
 - Turn on the permission system; remediate the 4 security advisor findings.
 
@@ -418,3 +417,32 @@ tasks with inline status change.
 On assignment, `Tasks.tsx` writes a `notifications` row for the assignee;
 on status change, one goes back to the creator. Both insert shapes verified
 against the live schema with a rolled-back SQL dry run.
+
+## Phase 4.6: Attendance + Leave management (this pass)
+
+New `src/pages/Attendance.tsx` replaces the `PlaceholderPage` at
+`/attendance`. Against the already-rich `attendance` table (Phase 0 audit:
+GPS lat/long for both check-in and check-out, selfie URL columns, status,
+late_minutes): GPS check-in/check-out, own history, team view, CSV export
+for both. New `leave_requests` table for the approval workflow (submit,
+withdraw while pending, approve/reject) — this was the one genuinely
+missing piece.
+
+**Important caveat, not a bug:** the live `employees` table currently has
+**zero rows**. Check-in/out requires resolving the logged-in user to an
+`employees` record via `user_id`, so until the client populates real
+employee records, every user will see "No employee record is linked to
+your account" instead of the check-in button. The Team and Leave-Approval
+views still work regardless, since they read across all attendance/leave
+rows rather than depending on the current user's own employee record.
+
+**Not done this pass:** selfie capture on check-in/out. The schema already
+has columns for it (`check_in_selfie_url`, `check_out_selfie_url`), but
+wiring it requires a Supabase Storage bucket + upload flow, which wasn't
+built in this pass — GPS alone was prioritized to match the reference
+CRM's scope. Flagged as a fast-follow if the client wants it.
+
+Verified both insert shapes (`attendance`, `leave_requests`) against the
+live schema with a rolled-back SQL dry run — since `employees` has no real
+rows yet, the dry run created a throwaway test employee inside the same
+transaction to exercise the foreign keys, then rolled everything back.

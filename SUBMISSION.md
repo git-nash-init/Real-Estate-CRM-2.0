@@ -33,7 +33,7 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | 6 | CP Outreach form | Ported field-for-field from the reference CRM, adapted to this project's live channel_partners schema (company_name/name vs the reference's channel_partner_firm_name); role-driven SM selector; GPS capture | New `CPOutreach.tsx` + `cp_outreach` table, sidebar nav item, route | Done | — | — |
 | 7 | Telecaller call tracking | Call logging wired into Leads.tsx (Log Call action: outcome, duration, notes); admin analytics land with Reports (Phase 4.7) | New `call_logs` table, `Leads.tsx` | Done (Leads.tsx); Follow-ups integration deferred as fast-follow | — | — |
 | 8 | Tasks (create, assign, notify, status tracking) | Uses existing `tasks` + `notifications` tables; real-time popup notification via Supabase Realtime (discovered and fixed: neither table was in the realtime publication); wired the previously-decorative sidebar bell; My Tasks panel on Dashboard | New `Tasks.tsx`, `useNotifications.tsx`, `AppLayout.tsx`, `Dashboard.tsx` updated | Done | — | — |
-| 9 | Attendance + Leave management | GPS check-in/out (existing schema), leave approval workflow | New `Attendance.tsx` + `leave_requests` table | Pending | — | — |
+| 9 | Attendance + Leave management | GPS check-in/out against the existing rich schema, leave approval workflow, team view, CSV export. Note: employees table has 0 rows currently — client needs to populate employee records for check-in to work | New `Attendance.tsx` + `leave_requests` table | Done | — | — |
 | 10 | Reports (admin-only) | Sales/performance dashboards via `recharts` | New `Reports.tsx` | Pending | — | — |
 | 11 | Role-based access control | Populate `role_permissions`, enforce via RLS + route guards | RLS migration, `ProtectedRoute.tsx`, `AppLayout.tsx` | Pending | — | — |
 
@@ -49,6 +49,7 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | `add_cp_outreach_table` | New `cp_outreach` table for field-visit logging. | Applied |
 | `add_call_logs_table` | New `call_logs` table for telecaller call tracking. | Applied |
 | `enable_realtime_for_notifications_and_tasks` | Added `notifications` and `tasks` to the `supabase_realtime` publication (were missing entirely). | Applied |
+| `add_leave_requests_table` | New `leave_requests` table for the leave approval workflow. | Applied |
 
 ## 6. Infrastructure
 
