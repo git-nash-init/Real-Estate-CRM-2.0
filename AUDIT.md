@@ -110,19 +110,46 @@ repaired, so type safety ratchets forward instead of blocking unrelated work.
 
 | Trigger | Table | Behaviour |
 |---|---|---|
-| `release_inventory_after_booking_cancel_trigger` | `bookings` UPDATE | Sets the linked `project_inventory` unit back to `available` on **any** cancellation |
+| `release_inventory_after_booking_cancel_trigger` | `bookings` UPDATE | Sets the linked `project_inventory` unit back to `available` when a booking's status transitions to **exactly `'cancelled'`** (verified: a transition to `'refunded'` does **not** fire it — see below) |
 | `validate_booking_inventory_trigger` | `bookings` INSERT | Server-side booking validation |
 | `update_inventory_after_booking_trigger` | `bookings` INSERT | Marks inventory booked |
 | `calculate_cp_commission_trigger` | `cp_commissions` INSERT | Recomputes `pending_amount` and `status` from `payable_amount`/`paid_amount` — the app's own status-setting logic on insert is redundant |
 | `calculate_attendance_late_minutes_trigger` | `attendance` INSERT | Auto-computes lateness |
 | `calculate_campaign_metrics_trigger` | `campaigns` INSERT | Auto-computes campaign metrics |
 
-**Known contradiction (not yet fixed):** `Bookings.tsx:1842` tells the user
-that cancelling a *confirmed* booking leaves the inventory unit locked. The
-trigger above releases it regardless of prior status. The UI's warning is
-false. `Bookings.tsx` also manually re-implements the release for draft
-bookings (~line 914), duplicating what the trigger already does. Flagged for
-the booking-cancellation repair phase.
+### Fixed in this pass: booking cancellation, token refund, loss log
+
+`Bookings.tsx` previously told the user that cancelling a *confirmed*
+booking leaves the inventory unit locked (false — the trigger above releases
+it) and had no way to record a token-money refund or a loss when money was
+forfeited. Rebuilt as a dedicated `handleCancelBooking` flow:
+
+- Corrected the misleading notice; the cancellation modal now states the
+  unit will be released (accurate).
+- Added a required cancellation reason and, when the booking has
+  `token_amount > 0`, a refund-amount field (capped to the token amount).
+- Writes `cancelled_at`, `cancellation_reason`, `refund_amount` on the
+  booking, and voids any linked `cp_commissions` row (`status = 'cancelled'`)
+  since the referral fee was earned on a sale that no longer exists.
+- Any amount not refunded is written to a new `loss_logs` table (additive
+  migration `add_loss_logs_table`; no existing tables altered).
+
+**A real bug was caught before it shipped, via a rolled-back SQL dry run
+against the live database (not guessed, not assumed):** the first version of
+this fix set the booking's terminal status to `'refunded'` when any money
+was returned, reasoning that `booking_status` has both `'cancelled'` and
+`'refunded'` as distinct enum values. Testing against the live schema
+showed the release trigger only fires on `status = 'cancelled'` — using
+`'refunded'` silently skipped inventory release. Fixed: the booking status
+is always set to `'cancelled'`; `refund_amount` alone fully captures how
+much was returned. Re-verified with a second dry run (`BEGIN ... ROLLBACK`,
+no data touched) confirming the booking updates, the inventory unit
+releases via the trigger, and the loss log is written.
+
+Removed the old duplicate manual inventory-release code for the
+confirmed→cancelled transition from `handleUpdateStatus`, since the trigger
+already handles it; `handleUpdateStatus` now only handles `draft →
+confirmed`, and all cancellations go through `handleCancelBooking`.
 
 ### Tables already present that reduce "new feature" scope
 
@@ -178,7 +205,7 @@ system activation), since fixing them properly requires the same RLS pass.
 | Channel Partners — detail: Towers lookup | Fixed this pass | Was broken (missing table) |
 | Channel Partners — commission rate edit (list page modal) | Dead code removed this pass | Never had a live UI surface; real rates are set via commission_structures on the detail page |
 | Bookings — create/confirm | Working | Validated by live triggers |
-| Bookings — cancel (confirmed) | Misleading, not yet fixed | UI claims unit stays locked; DB trigger releases it anyway. No token refund or loss log yet. |
+| Bookings — cancel (draft or confirmed) | Fixed this pass | Accurate UI copy, reason + refund capture, referral fee void, loss log |
 | Marketing | Placeholder | `PlaceholderPage.tsx` |
 | Attendance | Placeholder | `PlaceholderPage.tsx` — but `attendance` table already exists and is schema-rich |
 | Tasks | Placeholder | `PlaceholderPage.tsx` — but `tasks` + `notifications` tables already exist |
@@ -188,8 +215,6 @@ system activation), since fixing them properly requires the same RLS pass.
 
 ## Not yet done (tracked for subsequent phases per the engagement plan)
 
-- Booking cancellation: correct the false UI warning, remove the duplicate
-  manual inventory release, add token refund + loss log.
 - Rename "Commission" -> "Referral Fee" in CP-facing copy.
 - Deactivate-a-channel-partner UI + referrer guard.
 - Lead dedup, 45-day claim window, first-come-first-served, verification codes.

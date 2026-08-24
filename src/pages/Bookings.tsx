@@ -43,6 +43,10 @@ interface Booking {
   customer_name?: string | null;
   created_by?: string | null;
   channel_partner_id: string | null;
+  token_amount?: number | null;
+  refund_amount?: number | null;
+  cancellation_reason?: string | null;
+  cancelled_at?: string | null;
 }
 
 interface Lead {
@@ -111,6 +115,10 @@ export const Bookings: React.FC = () => {
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
   const [confirmingBooking, setConfirmingBooking] = useState<Booking | null>(null);
   const [cancellingBooking, setCancellingBooking] = useState<Booking | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelRefundAmount, setCancelRefundAmount] = useState('');
+  const [cancelSubmitting, setCancelSubmitting] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -894,32 +902,7 @@ export const Bookings: React.FC = () => {
       const currentBookingStatus = bookingRecord.status?.toLowerCase();
       const nextStatus = newStatus.toLowerCase();
 
-      if (currentBookingStatus === 'confirmed' && nextStatus === 'cancelled') {
-        // Transition from Confirmed -> Cancelled
-        const { error: updateError } = await supabase
-          .from('bookings')
-          .update({ status: 'cancelled' })
-          .eq('id', bookingId)
-          .eq('status', 'confirmed');
-        if (updateError) {
-          throw new Error("Unable to cancel booking. Please try again.");
-        }
-
-        // Release unit status back to available
-        if (bookingRecord.inventory_id) {
-          const { error: releaseErr } = await supabase
-            .from('project_inventory')
-            .update({ status: 'available' })
-            .eq('id', bookingRecord.inventory_id);
-          if (releaseErr) {
-            reportQueryError('Bookings: release inventory on cancel', releaseErr);
-          } else {
-            setInventoryList(prev => prev.map(item => 
-              item.id === bookingRecord.inventory_id ? { ...item, status: 'available' } : item
-            ));
-          }
-        }
-      } else if (currentBookingStatus === 'draft' && nextStatus === 'confirmed') {
+      if (currentBookingStatus === 'draft' && nextStatus === 'confirmed') {
         // Transition from Draft -> Confirmed
         if (!bookingRecord.inventory_id) {
           throw new Error("Booking record is missing a valid unit assignment.");
@@ -969,17 +952,9 @@ export const Bookings: React.FC = () => {
         setInventoryList(prev => prev.map(item => 
           item.id === bookingRecord.inventory_id ? { ...item, status: 'booked' } : item
         ));
-      } else if (currentBookingStatus === 'draft' && nextStatus === 'cancelled') {
-        // Transition from Draft -> Cancelled
-        const { error: updateError } = await supabase
-          .from('bookings')
-          .update({ status: 'cancelled' })
-          .eq('id', bookingId)
-          .eq('status', 'draft');
-        if (updateError) {
-          throw new Error("Unable to cancel booking. Please try again.");
-        }
       } else {
+        // Cancellation is handled by handleCancelBooking (captures reason +
+        // refund + loss log); this function now only handles draft -> confirmed.
         throw new Error(`Invalid status transition from ${currentBookingStatus?.toUpperCase()} to ${newStatus.toUpperCase()}.`);
       }
 
@@ -1003,6 +978,121 @@ export const Bookings: React.FC = () => {
       });
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  // Cancel a booking, capturing a reason and any token-money refund.
+  //
+  // Inventory release is handled entirely by the live DB trigger
+  // release_inventory_after_booking_cancel_trigger (fires on ANY
+  // cancellation, not just from 'confirmed'), so this function does not
+  // duplicate that — it only updates local state afterward so the UI
+  // reflects it immediately instead of waiting for the next refetch.
+  //
+  // token_amount is treated as the money collected on this booking so far.
+  // refund_amount capped to [0, token_amount]; anything not refunded is
+  // logged to loss_logs as forfeited. Booking status becomes 'refunded'
+  // when any money is returned, 'cancelled' otherwise (both terminal
+  // states in booking_status, kept distinct for reporting).
+  const handleCancelBooking = async (booking: Booking, reason: string, refundAmountInput: string) => {
+    setCancelSubmitting(true);
+    setCancelError(null);
+    try {
+      const trimmedReason = reason.trim();
+      if (!trimmedReason) {
+        throw new Error('Please provide a reason for cancelling this booking.');
+      }
+
+      const tokenAmount = booking.token_amount || 0;
+      let refundAmount = Number(refundAmountInput) || 0;
+      if (refundAmount < 0) refundAmount = 0;
+      if (refundAmount > tokenAmount) refundAmount = tokenAmount;
+      const forfeitedAmount = Math.max(0, tokenAmount - refundAmount);
+
+      const nowIso = new Date().toISOString();
+      // Always 'cancelled', never 'refunded': the live DB trigger
+      // release_inventory_after_booking_cancel_trigger only fires on
+      // status = 'cancelled' (verified against the live schema via a
+      // rolled-back dry run). Using 'refunded' here would silently skip
+      // inventory release. refund_amount already fully captures how much
+      // was returned; a separate terminal status isn't needed for that.
+      const newStatus = 'cancelled';
+
+      const { error: updateError } = await supabase
+        .from('bookings')
+        .update({
+          status: newStatus,
+          cancelled_at: nowIso,
+          cancellation_reason: trimmedReason,
+          refund_amount: refundAmount,
+        })
+        .eq('id', booking.id)
+        .in('status', ['draft', 'confirmed']);
+      if (updateError) {
+        throw new Error('Unable to cancel booking. Please try again.');
+      }
+
+      // Inventory release: the DB trigger already does this on any
+      // cancellation. Mirror it into local state so the UI updates without
+      // waiting for a refetch.
+      if (booking.inventory_id) {
+        setInventoryList(prev => prev.map(item =>
+          item.id === booking.inventory_id ? { ...item, status: 'available' } : item
+        ));
+      }
+
+      // Void any referral fee tied to this booking — it was earned on a
+      // sale that no longer exists.
+      const { error: commissionErr } = await supabase
+        .from('cp_commissions')
+        .update({ status: 'cancelled' })
+        .eq('booking_id', booking.id);
+      if (commissionErr) {
+        reportQueryError('Bookings: void referral fee on cancel', commissionErr);
+      }
+
+      // Loss log: only meaningful when money was actually collected and not
+      // fully returned.
+      if (forfeitedAmount > 0) {
+        const { data: userData } = await supabase.auth.getUser();
+        const { error: lossErr } = await supabase
+          .from('loss_logs')
+          .insert([{
+            booking_id: booking.id,
+            booking_amount: tokenAmount,
+            refunded_amount: refundAmount,
+            forfeited_amount: forfeitedAmount,
+            reason: trimmedReason,
+            recorded_by: userData?.user?.id || null,
+          }]);
+        if (lossErr) {
+          reportQueryError('Bookings: loss log', lossErr);
+        }
+      }
+
+      setBookings(prev => prev.map(b => b.id === booking.id ? {
+        ...b, status: newStatus, cancelled_at: nowIso, cancellation_reason: trimmedReason, refund_amount: refundAmount,
+      } : b));
+      if (selectedBooking && selectedBooking.id === booking.id) {
+        setSelectedBooking(prev => prev ? { ...prev, status: newStatus, cancelled_at: nowIso, cancellation_reason: trimmedReason, refund_amount: refundAmount } : null);
+      }
+
+      setNotification({
+        type: 'success',
+        message: forfeitedAmount > 0
+          ? 'Booking cancelled. Rs.' + forfeitedAmount.toLocaleString('en-IN') + ' forfeited, Rs.' + refundAmount.toLocaleString('en-IN') + ' refunded.'
+          : 'Booking cancelled and refund recorded.',
+      });
+
+      setCancellingBooking(null);
+      setCancelReason('');
+      setCancelRefundAmount('');
+      await fetchLookups();
+      await fetchBookings();
+    } catch (err: any) {
+      setCancelError(err.message || 'Failed to cancel booking.');
+    } finally {
+      setCancelSubmitting(false);
     }
   };
 
@@ -1264,7 +1354,7 @@ export const Bookings: React.FC = () => {
                               {/* Cancel Booking Action */}
                               {(b.status?.toLowerCase() === 'draft' || b.status?.toLowerCase() === 'confirmed') && (
                                 <button
-                                  onClick={() => setCancellingBooking(b)}
+                                  onClick={() => { setCancellingBooking(b); setCancelReason(''); setCancelRefundAmount(String(b.token_amount || 0)); setCancelError(null); }}
                                   disabled={updatingId === b.id}
                                   className="px-2.5 py-1.5 bg-rose-50 border border-rose-100 text-rose-700 hover:bg-rose-100 rounded-lg text-xs font-semibold disabled:opacity-50"
                                 >
@@ -1716,7 +1806,7 @@ export const Bookings: React.FC = () => {
                 )}
                 {(selectedBooking.status?.toLowerCase() === 'draft' || selectedBooking.status?.toLowerCase() === 'confirmed') && (
                   <button
-                    onClick={() => { setCancellingBooking(selectedBooking); setSelectedBooking(null); }}
+                    onClick={() => { setCancellingBooking(selectedBooking); setSelectedBooking(null); setCancelReason(''); setCancelRefundAmount(String(selectedBooking.token_amount || 0)); setCancelError(null); }}
                     className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-semibold transition-all"
                   >
                     Cancel Booking
@@ -1826,11 +1916,11 @@ export const Bookings: React.FC = () => {
       {/* CANCELLATION MODAL */}
       {cancellingBooking && (
         <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setCancellingBooking(null)} />
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => !cancelSubmitting && setCancellingBooking(null)} />
           <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             <div className="bg-rose-600 text-white px-6 py-4 flex items-center justify-between">
               <span className="font-bold tracking-tight">Cancel Booking</span>
-              <button onClick={() => setCancellingBooking(null)} className="p-1 rounded-lg text-rose-200 hover:text-white focus:outline-none">
+              <button onClick={() => !cancelSubmitting && setCancellingBooking(null)} className="p-1 rounded-lg text-rose-200 hover:text-white focus:outline-none">
                 <X className="h-5 w-5" />
               </button>
             </div>
@@ -1838,16 +1928,10 @@ export const Bookings: React.FC = () => {
               <p className="text-sm text-slate-600">
                 Are you sure you want to cancel this booking?
               </p>
-              {cancellingBooking.status?.toLowerCase() === 'confirmed' ? (
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
-                  ⚠️ <strong>Notice</strong>: Since this booking has already been <strong>Confirmed</strong>, cancelling it will not automatically release the unit's inventory status back to available (it remains locked).
-                </div>
-              ) : (
-                <div className="bg-emerald-50 border border-emerald-250 rounded-xl p-3 text-xs text-emerald-850">
-                  ✅ <strong>Notice</strong>: Since this booking is currently in <strong>Draft</strong> status, cancelling it will automatically release the inventory unit back to <strong>Available</strong>.
-                </div>
-              )}
-              
+              <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 text-xs text-sky-800">
+                The inventory unit will be released back to <strong>Available</strong> automatically once cancelled.
+              </div>
+
               {(() => {
                 const lead = leadsMap.get(cancellingBooking.lead_id || '');
                 const unit = inventoryMap.get(cancellingBooking.inventory_id || '');
@@ -1869,26 +1953,68 @@ export const Bookings: React.FC = () => {
                         </span>
                       </div>
                     </div>
+                    {(cancellingBooking.token_amount || 0) > 0 && (
+                      <div className="pt-2 border-t border-slate-200/60">
+                        <span className="block font-bold text-slate-400 uppercase tracking-wide">Token Money Collected</span>
+                        <span className="font-semibold text-slate-800">Rs. {(cancellingBooking.token_amount || 0).toLocaleString('en-IN')}</span>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">
+                  Cancellation Reason <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  rows={2}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-rose-400"
+                  placeholder="Why is this booking being cancelled?"
+                />
+              </div>
+
+              {(cancellingBooking.token_amount || 0) > 0 && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">
+                    Refund Amount (of Rs. {(cancellingBooking.token_amount || 0).toLocaleString('en-IN')} collected)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={cancellingBooking.token_amount || 0}
+                    value={cancelRefundAmount}
+                    onChange={(e) => setCancelRefundAmount(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-rose-400"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Any amount not refunded is recorded as a loss against this booking.
+                  </p>
+                </div>
+              )}
+
+              {cancelError && (
+                <div className="bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 text-xs text-rose-700">
+                  {cancelError}
+                </div>
+              )}
             </div>
             <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-2 border-t border-slate-100">
               <button
                 onClick={() => setCancellingBooking(null)}
-                className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-100 transition-all"
+                disabled={cancelSubmitting}
+                className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-100 transition-all disabled:opacity-50"
               >
                 No, Keep Booking
               </button>
               <button
-                onClick={async () => {
-                  const bId = cancellingBooking.id;
-                  setCancellingBooking(null);
-                  await handleUpdateStatus(bId, 'cancelled');
-                }}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all"
+                onClick={() => handleCancelBooking(cancellingBooking, cancelReason, cancelRefundAmount)}
+                disabled={cancelSubmitting}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all disabled:opacity-50"
               >
-                Yes, Cancel Booking
+                {cancelSubmitting ? 'Cancelling...' : 'Yes, Cancel Booking'}
               </button>
             </div>
           </div>
