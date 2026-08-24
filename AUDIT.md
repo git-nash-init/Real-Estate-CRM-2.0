@@ -216,7 +216,6 @@ system activation), since fixing them properly requires the same RLS pass.
 
 ## Not yet done (tracked for subsequent phases per the engagement plan)
 
-- Telecaller call tracking.
 - Tasks UI (schema already exists).
 - Attendance + Leave UI (schema already exists, `leave_requests` still needed).
 - Reports (admin-only).
@@ -377,3 +376,21 @@ field) confirms the logger was actually on-site. New sidebar nav item
 Verified with a rolled-back SQL dry run confirming the insert shape
 (including the `leads_source_active_in` array column) matches the live
 schema exactly.
+
+## Phase 4.4: Telecaller call tracking (this pass)
+
+New `call_logs` table (`employee_id`, `lead_id`, `channel_partner_id`
+— denormalized from the lead at log time so Reports can split CP-sourced
+vs direct without a join per row — `direction`, `outcome`,
+`duration_seconds`, `notes`, `called_at`). Wired a "Log Call" action into
+the Lead detail modal in `Leads.tsx`: outcome, duration, notes, attributed
+to the logged-in user's resolved `employees` row.
+
+**Not done this pass:** the same quick action on `Followups.tsx` — leads
+typically get called from the Lead detail view either way, so this was
+deprioritized in favor of building the admin-facing analytics (Phase 4.7
+Reports) that make the logged data actually useful. Flagged as a fast
+follow if the client wants call logging directly from the Follow-ups list
+too.
+
+Verified the insert shape with a rolled-back SQL dry run.

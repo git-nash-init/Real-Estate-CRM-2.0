@@ -394,6 +394,67 @@ export type Database = {
           },
         ]
       }
+      call_logs: {
+        Row: {
+          called_at: string
+          channel_partner_id: string | null
+          created_at: string
+          direction: string
+          duration_seconds: number | null
+          employee_id: string | null
+          id: string
+          lead_id: string | null
+          notes: string | null
+          outcome: string | null
+        }
+        Insert: {
+          called_at?: string
+          channel_partner_id?: string | null
+          created_at?: string
+          direction?: string
+          duration_seconds?: number | null
+          employee_id?: string | null
+          id?: string
+          lead_id?: string | null
+          notes?: string | null
+          outcome?: string | null
+        }
+        Update: {
+          called_at?: string
+          channel_partner_id?: string | null
+          created_at?: string
+          direction?: string
+          duration_seconds?: number | null
+          employee_id?: string | null
+          id?: string
+          lead_id?: string | null
+          notes?: string | null
+          outcome?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "call_logs_channel_partner_id_fkey"
+            columns: ["channel_partner_id"]
+            isOneToOne: false
+            referencedRelation: "channel_partners"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "call_logs_employee_id_fkey"
+            columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "employees"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "call_logs_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       campaigns: {
         Row: {
           bookings: number

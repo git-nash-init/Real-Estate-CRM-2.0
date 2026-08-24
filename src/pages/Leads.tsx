@@ -15,6 +15,7 @@ import {
   Calendar,
   Mail,
   Phone,
+  PhoneCall,
   Bookmark,
   FileText
 } from 'lucide-react';
@@ -64,6 +65,13 @@ export const Leads: React.FC = () => {
   // Auth and Routing hooks
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [currentEmployeeId, setCurrentEmployeeId] = useState<string | null>(null);
+  const [isLogCallOpen, setIsLogCallOpen] = useState(false);
+  const [callOutcome, setCallOutcome] = useState('connected');
+  const [callDuration, setCallDuration] = useState('');
+  const [callNotes, setCallNotes] = useState('');
+  const [callSubmitting, setCallSubmitting] = useState(false);
+  const [callError, setCallError] = useState<string | null>(null);
 
   // Create Lead modal & notification states
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -218,6 +226,20 @@ export const Leads: React.FC = () => {
     }
   }, [searchQuery, statusFilter, projectFilter, sourceFilter, ownerFilter, page, pageSize]);
 
+  // Resolve the current user's employee record, needed to attribute call logs.
+  useEffect(() => {
+    if (!user) return;
+    supabase
+      .from('employees')
+      .select('id')
+      .eq('user_id', user.id)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error) reportQueryError('Leads: current employee lookup', error);
+        else setCurrentEmployeeId(data?.id || null);
+      });
+  }, [user]);
+
   // Load configuration and data
   useEffect(() => {
     fetchFilterOptions();
@@ -233,6 +255,39 @@ export const Leads: React.FC = () => {
     setSyncing(true);
     await fetchFilterOptions();
     await fetchLeads();
+  };
+
+  const openLogCall = () => {
+    setCallOutcome('connected');
+    setCallDuration('');
+    setCallNotes('');
+    setCallError(null);
+    setIsLogCallOpen(true);
+  };
+
+  const handleLogCall = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedLead) return;
+    setCallSubmitting(true);
+    setCallError(null);
+    try {
+      const { error } = await supabase.from('call_logs').insert([{
+        employee_id: currentEmployeeId,
+        lead_id: selectedLead.id,
+        channel_partner_id: selectedLead.channel_partner_id || null,
+        direction: 'outbound',
+        outcome: callOutcome,
+        duration_seconds: callDuration ? Number(callDuration) : null,
+        notes: callNotes.trim() || null,
+      }]);
+      if (error) throw error;
+      setNotification({ type: 'success', message: 'Call logged.' });
+      setIsLogCallOpen(false);
+    } catch (err: any) {
+      setCallError(err.message || 'Failed to log call.');
+    } finally {
+      setCallSubmitting(false);
+    }
   };
 
   // Reset page when filters change
@@ -839,7 +894,13 @@ export const Leads: React.FC = () => {
             </div>
 
             {/* Modal Footer */}
-            <div className="bg-slate-50 px-6 py-4 flex justify-end border-t border-slate-100">
+            <div className="bg-slate-50 px-6 py-4 flex justify-end gap-2 border-t border-slate-100">
+              <button
+                onClick={openLogCall}
+                className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
+              >
+                <PhoneCall className="h-3.5 w-3.5" /> Log Call
+              </button>
               <button
                 onClick={() => setSelectedLead(null)}
                 className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
@@ -850,6 +911,78 @@ export const Leads: React.FC = () => {
           </div>
         </div>
       )}
+
+        {isLogCallOpen && (
+          <div className="fixed inset-0 z-[70] overflow-y-auto flex items-center justify-center p-4">
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => !callSubmitting && setIsLogCallOpen(false)} />
+            <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-sm w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+              <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
+                <span className="font-bold tracking-tight">Log Call</span>
+                <button onClick={() => !callSubmitting && setIsLogCallOpen(false)} className="p-1 rounded-lg text-indigo-200 hover:text-white">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <form onSubmit={handleLogCall}>
+                <div className="p-6 space-y-4">
+                  {callError && (
+                    <div className="bg-rose-50 border border-rose-200 text-rose-800 px-3 py-2 rounded-lg text-xs">{callError}</div>
+                  )}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Outcome</label>
+                    <select
+                      value={callOutcome}
+                      onChange={(e) => setCallOutcome(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                    >
+                      <option value="connected">Connected</option>
+                      <option value="not_reachable">Not Reachable</option>
+                      <option value="busy">Busy</option>
+                      <option value="switched_off">Switched Off</option>
+                      <option value="call_back_later">Call Back Later</option>
+                      <option value="wrong_number">Wrong Number</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Duration (seconds)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={callDuration}
+                      onChange={(e) => setCallDuration(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Notes</label>
+                    <textarea
+                      value={callNotes}
+                      onChange={(e) => setCallNotes(e.target.value)}
+                      rows={2}
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                    />
+                  </div>
+                </div>
+                <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setIsLogCallOpen(false)}
+                    disabled={callSubmitting}
+                    className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={callSubmitting}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm disabled:opacity-50"
+                  >
+                    {callSubmitting ? 'Saving...' : 'Save Call Log'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
       {/* CREATE LEAD MODAL */}
       {isCreateOpen && (
