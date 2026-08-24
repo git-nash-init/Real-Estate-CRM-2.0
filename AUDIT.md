@@ -215,7 +215,6 @@ system activation), since fixing them properly requires the same RLS pass.
 
 ## Not yet done (tracked for subsequent phases per the engagement plan)
 
-- Deactivate-a-channel-partner UI + referrer guard.
 - Lead dedup, 45-day claim window, first-come-first-served, verification codes.
 - WhatsApp gateway (Baileys) + Marketing bulk messaging.
 - CP Outreach form (ported from the reference CRM).
@@ -245,3 +244,19 @@ the engagement plan ("table names stay as-is").
 Verified via `tsc -b --noEmit`, `npm run build`, and `npm run lint` all
 clean, plus a manual scan confirming no remaining user-facing "Commission"
 text in the four files.
+
+## Phase 1.4: Channel Partner deactivation (this pass)
+
+A deactivate/activate toggle for channel partners **already existed** in
+`ChannelPartners.tsx` (`handleToggleStatus`, confirmation modal, list-row
+button) — it correctly flips `status` between the live `channel_partner_status`
+enum values `active`/`inactive`. No feature was missing here; the client's
+request was already implemented.
+
+What was actually missing was the **referrer guard**: checked all three
+places a channel partner can be picked as a lead/booking referrer.
+`Leads.tsx` and `SiteVisits.tsx` already filter `.eq('status', 'active')`
+when loading the partner dropdown. `Bookings.tsx` did not — its query was
+commented `// Fetch active Channel Partners` but had no actual status
+filter, so a deactivated partner could still be selected as the referrer on
+a new booking. Fixed: added the missing `.eq('status', 'active')`.

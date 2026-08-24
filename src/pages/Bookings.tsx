@@ -456,9 +456,14 @@ export const Bookings: React.FC = () => {
       }
 
       // Fetch active Channel Partners
+      // FIX: this previously fetched ALL partners despite the comment —
+      // .eq('status', 'active') was missing, so a deactivated CP could
+      // still be picked as the referrer on a new booking. Leads.tsx and
+      // SiteVisits.tsx already filtered correctly; this was the one gap.
       const { data: cpData, error: cpError } = await supabase
         .from('channel_partners')
-        .select('id, name, partner_code');
+        .select('id, name, partner_code')
+        .eq('status', 'active');
       if (!cpError && cpData) {
         setChannelPartnersList(cpData as any);
         setChannelPartnerMap(new Map(cpData.map(c => [c.id, `${c.partner_code || ''} - ${c.name || ''}`])));

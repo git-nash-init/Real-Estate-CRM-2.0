@@ -26,7 +26,7 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | # | Feature | Scope | Files | Status | Hours | Cost |
 |---|---|---|---|---|---|---|
 | 1 | "Commission" renamed to "Referral Fee" (CP-facing copy) | UI copy only (labels, tabs, buttons, messages) — table/column/identifier names deliberately unchanged | `ChannelPartnerDetails.tsx`, `ChannelPartners.tsx`, `Payments.tsx`, `Bookings.tsx` | Done | — | — |
-| 2 | Deactivate a Channel Partner | Status toggle + referrer guard | `ChannelPartners.tsx`, `ChannelPartnerDetails.tsx` | Pending | — | — |
+| 2 | Deactivate a Channel Partner | Toggle already existed and worked; found and fixed one real gap: Bookings.tsx loaded ALL partners as referrer options (no status filter), unlike Leads.tsx / SiteVisits.tsx which already filtered correctly | `Bookings.tsx` | Done | — | — |
 | 3 | Lead integrity: dedup, 45-day claim window, first-come-first-served, verification codes | New migration + `cp_leads` extension | New migration, `Leads.tsx`, `ChannelPartnerDetails.tsx` | Pending | — | — |
 | 4 | WhatsApp gateway (Baileys) | Standalone service, QR pairing, outbox worker | New `whatsapp-gateway/` folder | Pending | — | — |
 | 5 | Marketing — WhatsApp bulk messaging | Audience builder, templates, delivery dashboard | New `Marketing.tsx` | Pending | — | — |
