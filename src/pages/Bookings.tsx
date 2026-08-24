@@ -14,7 +14,7 @@ import {
   Bookmark,
   CheckCircle,
   Home,
-  DollarSign,
+  IndianRupee,
   Plus,
   Users
 } from 'lucide-react';
@@ -1384,7 +1384,7 @@ export const Bookings: React.FC = () => {
                       <td colSpan={7} className="py-20 text-center text-slate-400">
                         <div className="flex flex-col items-center justify-center space-y-3">
                           <div className="bg-slate-50 p-4 rounded-full text-slate-300">
-                            <DollarSign className="h-8 w-8" />
+                            <IndianRupee className="h-8 w-8" />
                           </div>
                           <p className="text-slate-500 font-semibold text-sm">No Bookings Found</p>
                           <p className="text-xs max-w-sm text-slate-400">
@@ -1440,7 +1440,7 @@ export const Bookings: React.FC = () => {
             {/* Header */}
             <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
-                <DollarSign className="h-5 w-5 text-indigo-400" />
+                <IndianRupee className="h-5 w-5 text-indigo-400" />
                 <span className="font-bold tracking-tight">Booking Consideration Details</span>
               </div>
               <button onClick={() => setSelectedBooking(null)} className="p-1 rounded-lg text-slate-400 hover:text-white focus:outline-none">
@@ -1506,7 +1506,7 @@ export const Bookings: React.FC = () => {
                         </div>
 
                         <div className="flex items-start space-x-2 text-slate-700">
-                          <DollarSign className="h-4 w-4 text-slate-400 mt-1 flex-shrink-0" />
+                          <IndianRupee className="h-4 w-4 text-slate-400 mt-1 flex-shrink-0" />
                           <div>
                             <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Booking Consideration</span>
                             <span className="text-sm font-bold text-indigo-700">
@@ -1566,7 +1566,7 @@ export const Bookings: React.FC = () => {
                         </div>
 
                         <div className="flex items-start space-x-2 text-slate-700">
-                          <DollarSign className="h-4 w-4 text-slate-400 mt-1 flex-shrink-0" />
+                          <IndianRupee className="h-4 w-4 text-slate-400 mt-1 flex-shrink-0" />
                           <div>
                             <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Unit Base Price</span>
                             <span className="text-sm font-semibold text-slate-800">
@@ -2160,7 +2160,7 @@ export const Bookings: React.FC = () => {
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Consideration Amount (Base) *</label>
                       <div className="relative">
-                        <DollarSign className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
+                        <IndianRupee className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
                         <input
                           type="number"
                           required
@@ -2177,7 +2177,7 @@ export const Bookings: React.FC = () => {
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">GST Amount</label>
                       <div className="relative">
-                        <DollarSign className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
+                        <IndianRupee className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
                         <input
                           type="number"
                           min="0"
@@ -2193,7 +2193,7 @@ export const Bookings: React.FC = () => {
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Stamp Duty Amount</label>
                       <div className="relative">
-                        <DollarSign className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
+                        <IndianRupee className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
                         <input
                           type="number"
                           min="0"
@@ -2209,7 +2209,7 @@ export const Bookings: React.FC = () => {
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Registration Amount</label>
                       <div className="relative">
-                        <DollarSign className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
+                        <IndianRupee className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
                         <input
                           type="number"
                           min="0"
@@ -2225,7 +2225,7 @@ export const Bookings: React.FC = () => {
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Development Charges</label>
                       <div className="relative">
-                        <DollarSign className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
+                        <IndianRupee className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
                         <input
                           type="number"
                           min="0"
@@ -2241,7 +2241,7 @@ export const Bookings: React.FC = () => {
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Maintenance Charges</label>
                       <div className="relative">
-                        <DollarSign className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
+                        <IndianRupee className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
                         <input
                           type="number"
                           min="0"
@@ -2257,7 +2257,7 @@ export const Bookings: React.FC = () => {
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Parking Charges</label>
                       <div className="relative">
-                        <DollarSign className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
+                        <IndianRupee className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
                         <input
                           type="number"
                           min="0"
@@ -2273,7 +2273,7 @@ export const Bookings: React.FC = () => {
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Other Charges</label>
                       <div className="relative">
-                        <DollarSign className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
+                        <IndianRupee className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
                         <input
                           type="number"
                           min="0"

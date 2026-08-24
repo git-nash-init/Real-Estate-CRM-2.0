@@ -12,7 +12,7 @@ import {
   Home,
   Clock,
   User,
-  DollarSign,
+  IndianRupee,
   Map as MapIcon,
   List
 } from 'lucide-react';
@@ -2331,7 +2331,7 @@ export const Inventory: React.FC = () => {
                             <span>Client: <strong>{leadsMap.get(relatedBooking.lead_id || '') || 'Unnamed Lead'}</strong></span>
                           </div>
                           <div className="flex items-center space-x-1 text-slate-700">
-                            <DollarSign className="h-3.5 w-3.5 text-slate-400" />
+                            <IndianRupee className="h-3.5 w-3.5 text-slate-400" />
                             <span>Consideration: <strong>₹{(relatedBooking.booking_amount || 0).toLocaleString('en-IN')}</strong></span>
                           </div>
                           <div className="flex items-center space-x-1 text-slate-700">

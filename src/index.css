@@ -1,5 +1,31 @@
 @import "tailwindcss";
 
+/*
+ * Half-step colour shades used across the app (e.g. bg-indigo-650,
+ * text-slate-750) that don't exist in Tailwind's default scale (which only
+ * defines 50/100/.../900/950). Tailwind v4 is CSS-first — there's no
+ * tailwind.config.js to extend, so undefined classes like these previously
+ * emitted NO CSS rule at all, most seriously on `bg-indigo-650 text-white`
+ * buttons: transparent background + white text = invisible until :hover
+ * kicked in with the (valid) hover:bg-indigo-700. That was the Channel
+ * Partner status-confirmation modal's "hidden Confirm button" bug.
+ *
+ * Values are linear interpolations between the adjacent real Tailwind
+ * shades (e.g. indigo-650 sits exactly between indigo-600 and indigo-700).
+ */
+@theme {
+  --color-indigo-650: #493fd7;
+  --color-emerald-650: #048760;
+  --color-slate-150: #e9eef4;
+  --color-slate-250: #d6dee8;
+  --color-slate-350: #afbccc;
+  --color-slate-450: #7c8ba1;
+  --color-slate-550: #55647a;
+  --color-slate-650: #3d4b5f;
+  --color-slate-750: #28354a;
+  --color-slate-850: #172032;
+}
+
 /* Custom scrollbars for a clean enterprise CRM feel */
 ::-webkit-scrollbar {
   width: 6px;

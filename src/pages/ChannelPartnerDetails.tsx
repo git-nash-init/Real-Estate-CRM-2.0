@@ -8,7 +8,7 @@ import {
   RefreshCw,
   Users,
   CheckCircle,
-  DollarSign,
+  IndianRupee,
   AlertCircle,
   Plus,
   X
@@ -1759,7 +1759,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Payment Amount (₹) *</label>
                   <div className="relative">
-                    <DollarSign className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
+                    <IndianRupee className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
                     <input
                       type="number"
                       required
@@ -1915,7 +1915,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Approved Referral Fee Amount (₹) *</label>
                       <div className="relative">
-                        <DollarSign className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
+                        <IndianRupee className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
                         <input
                           type="number"
                           required

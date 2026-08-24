@@ -241,6 +241,13 @@ export const Attendance: React.FC = () => {
       setLeaveError('Start and end dates are required.');
       return;
     }
+    if (!currentEmployeeId) {
+      // leave_requests.employee_id is NOT NULL — without this guard the
+      // insert below would fail with a raw Postgres constraint error
+      // instead of the clear message here.
+      setLeaveError('No employee record is linked to your account, so a leave request cannot be submitted. Ask an admin to link one on the Employees page.');
+      return;
+    }
     setLeaveError(null);
     setLeaveSubmitting(true);
     try {
@@ -331,7 +338,11 @@ export const Attendance: React.FC = () => {
           <p className="text-slate-500 text-xs mt-1">GPS check-in/out and leave management.{currentEmployeeName ? ` — ${currentEmployeeName}` : ""}</p>
         </div>
         <div className="flex items-center gap-2">
-          {!currentEmployeeId ? null : !todaysAttendance ? (
+          {!currentEmployeeId ? (
+            <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 max-w-xs">
+              Check-in unavailable — see notice below
+            </span>
+          ) : !todaysAttendance ? (
             <button
               onClick={handleCheckIn}
               disabled={gettingLocation}
@@ -360,6 +371,20 @@ export const Attendance: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {!currentEmployeeId && !loading && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-4 text-sm flex items-start gap-3">
+          <MapPin className="h-5 w-5 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Check-in/out isn't available for your account yet.</p>
+            <p className="mt-0.5">
+              No employee record is linked to your login. Ask an admin to create one for you on the{' '}
+              <a href="/employees" className="underline font-semibold hover:text-amber-900">Employees</a> page and
+              link it to this account. Leave requests and the Team/Approval views below still work in the meantime.
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="flex rounded-xl border border-slate-200 overflow-hidden w-fit">
         {([['my', 'My Attendance'], ['team', 'Team'], ['leave', 'Leave Requests']] as const).map(([value, label]) => (
@@ -590,11 +615,6 @@ export const Attendance: React.FC = () => {
         </div>
       )}
 
-      {!currentEmployeeId && !loading && (
-        <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-4 text-sm flex items-center gap-2">
-          <MapPin className="h-4 w-4" /> No employee record is linked to your account, so check-in/out is unavailable. Team and leave-approval views still work.
-        </div>
-      )}
     </div>
   );
 };

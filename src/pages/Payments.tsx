@@ -10,7 +10,7 @@ import {
   X,
   AlertCircle,
   CheckCircle,
-  DollarSign,
+  IndianRupee,
   Plus,
   Printer,
   Trash2,
@@ -1115,7 +1115,7 @@ export const Payments: React.FC = () => {
                     <tr>
                       <td colSpan={10} className="py-16 text-center">
                         <div className="flex flex-col items-center justify-center space-y-2">
-                          <DollarSign className="h-8 w-8 text-slate-300" />
+                          <IndianRupee className="h-8 w-8 text-slate-300" />
                           <p className="text-slate-500 font-semibold text-sm">No Referral Fee Payouts Found</p>
                           <p className="text-xs max-w-sm text-slate-400">
                             Log a referral fee payout or adjust filters. Payouts must reference approved referral fee obligations.
