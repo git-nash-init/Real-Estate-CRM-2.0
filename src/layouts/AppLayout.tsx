@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useNotifications } from '../hooks/useNotifications';
 import { QueryFailureOverlay } from '../components/QueryFailureOverlay';
+import { GlobalSearch } from '../components/GlobalSearch';
 import {
   LayoutDashboard,
   UserCheck,
@@ -26,7 +27,6 @@ import {
   Building,
   Handshake,
   ChevronDown,
-  Search,
   Bell
 } from 'lucide-react';
 
@@ -160,14 +160,7 @@ export const AppLayout: React.FC = () => {
             <h1 className="text-xl font-bold text-slate-900 tracking-tight">
               {getPageTitle()}
             </h1>
-            <div className="hidden md:flex items-center bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5 w-64 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500 transition-all">
-              <Search className="h-4 w-4 text-slate-400 mr-2" />
-              <input
-                type="text"
-                placeholder="Global search..."
-                className="bg-transparent border-none text-sm w-full focus:outline-none text-slate-700"
-              />
-            </div>
+            <GlobalSearch />
           </div>
 
           {/* Header Actions & Profile */}
