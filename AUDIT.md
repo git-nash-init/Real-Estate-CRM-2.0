@@ -216,7 +216,7 @@ system activation), since fixing them properly requires the same RLS pass.
 
 ## Not yet done (tracked for subsequent phases per the engagement plan)
 
-- Turn on the permission system; remediate the 4 security advisor findings.
+- Full per-table RLS rewrite driven by `role_permissions` — see Phase 5 below for why, and the recommended approach.
 
 ## Phase 1.3: "Commission" -> "Referral Fee" rename (this pass)
 
@@ -464,3 +464,106 @@ direct split for both leads and bookings (pie charts), and telecaller call
 performance (total calls, connect rate, average duration) — sourced from
 the `call_logs` table added in Phase 4.4, closing the loop on the client's
 request to see "how many calls are being made by the telecallers."
+
+## Phase 5: Permission system activation (this pass)
+
+**Scoped deliberately narrower than the original plan.** The original plan
+called for populating `role_permissions`, replacing every table's blanket
+`TO authenticated USING (true)` RLS policy with ones driven by that data,
+adding route-level role gating, and fixing the security advisor findings.
+Everything except the full RLS rewrite across all 35 tables was done. That
+rewrite was deliberately **not** attempted in this pass — the reason is
+explained below, not a shortcut taken lightly.
+
+### Done
+
+**`role_permissions` populated** (was 0 rows despite 14 roles x 91
+permissions already existing — see Phase 0 finding). Conservative default,
+not a bespoke matrix verified against the client's actual org policy:
+`super_admin`/`project_admin` get every permission (matches their current
+de-facto access under the existing blanket policies); every other role gets
+view/create/edit on operational modules (leads, followups, site_visits,
+bookings, payments, channel_partners, projects, attendance, tasks,
+dashboard) — not delete/approve/export, and not admin-only modules
+(reports, settings, audit_logs, permissions, users). This data does not by
+itself change any RLS behaviour yet, since no policy references it.
+
+**Route + nav gating (application layer).** Reports is now wrapped in
+`ProtectedRoute allowedRoles={['super_admin','project_admin']}` — a
+non-admin hitting `/reports` directly is blocked at the router level, not
+just the in-page soft check Phase 4.7 already had. The sidebar nav item is
+filtered the same way. This is real, working access control — it's just
+application-layer, not database-layer, so it protects the UI but not a
+direct API call.
+
+**Removed the hardcoded super-admin UUID fallback** in `useAuth.tsx`
+(flagged in Phase 0). Verified first that the specific user it covered
+already has a real `user_roles` row assigning `super_admin` through the
+normal path, and a real `user_profiles` row — so the fallback (both the
+role grant and the `'Super Admin'` display-name default) was dead weight,
+not load-bearing. Confirmed no other reference to that UUID anywhere in the
+codebase before removing it.
+
+**Security advisor findings: 15 -> 6.** Pinned `search_path = ''` on all 8
+flagged functions (verified behavior-neutral with a rolled-back dry run of
+the booking-cancellation trigger chain afterward — inventory still released
+correctly). Revoked `anon`/`PUBLIC` EXECUTE on the 6 `SECURITY DEFINER`
+RLS-helper functions (confirmed via `pg_policies` that none of them are
+actually referenced by any existing policy yet, and via a codebase grep
+that the app never calls them through `supabase.rpc()`) — closing the
+"probe `/rest/v1/rpc/is_super_admin` while unauthenticated" exposure.
+`handle_new_user` (confirmed to be purely the `on_auth_user_created`
+trigger on `auth.users`, nothing else) had its `authenticated` grant
+revoked too, since trigger firing doesn't depend on direct EXECUTE grants —
+Postgres invokes it as the function owner via `SECURITY DEFINER`
+regardless. The other 5 functions kept their `authenticated` grant
+intentionally, as forward compatibility for the RLS rewrite described
+below — remove it if that rewrite is decided against.
+
+**Remaining, requires client action:** `auth_leaked_password_protection` is
+a Supabase Auth dashboard setting (Authentication -> Policies), not
+reachable via SQL or any tool available in this session. Client needs to
+toggle it on directly.
+
+### Deliberately not done: the full per-table RLS rewrite
+
+Every one of the 35 tables currently has a blanket
+`FOR ALL TO authenticated USING (true) WITH CHECK (true)` policy — any
+logged-in user, regardless of role, can read and write everything. Wiring
+the newly-populated `role_permissions` data into real per-table,
+per-action RLS policies (e.g. a telecaller shouldn't be able to `DELETE`
+bookings, a channel partner should only see their own commission rows) is
+the actual security-hardening step the earlier phases have been setting up
+for.
+
+**Why it wasn't done blind in this pass:** this is a live, single-tenant
+production database the client is actively using, and getting a single
+policy wrong can either (a) silently lock legitimate users out of data they
+need, or (b) leave a real hole. I have no way to log in as each of the 14
+roles and click through the app to verify the rewrite end-to-end — creating
+a privileged test account for that purpose was correctly blocked earlier in
+this engagement by the environment's own safety controls, and that's the
+right call, not a limitation to route around. Applying 30+ policy rewrites
+to a live app with zero verification path is a materially different risk
+than the additive-only migrations the rest of this engagement has used, and
+isn't a call to make unilaterally.
+
+**Recommended next-phase approach**, so this isn't just deferred without a
+plan:
+1. Use `create_branch` (available via the Supabase MCP tools already used
+   throughout this engagement) to spin up a development branch — a full
+   copy of the schema with its own `project_id`, safe to break.
+2. Write the per-table policies keyed off `role_permissions` (the
+   `has_module_access()`-style pattern the reference CRM already
+   demonstrates working, in `CRM/supabase/migrations/*rls*.sql`) against
+   that branch.
+3. Log in as one user per role (or as close as the client can arrange) and
+   click through the actual app against the branch, not just run SQL
+   dry-runs — RLS bugs often only surface through the exact query shapes
+   PostgREST generates from the app's `.select()`/`.insert()` calls.
+4. Merge the branch once verified.
+
+This keeps the same "verify before trusting" discipline the rest of this
+engagement has used (rolled-back dry runs throughout) but applied at the
+right scale for a change this broad — a full interactive pass, not a
+single transaction.

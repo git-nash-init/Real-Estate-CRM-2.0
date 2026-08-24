@@ -54,7 +54,7 @@ export const AppLayout: React.FC = () => {
     { name: 'Employees', path: '/employees', icon: Briefcase },
     { name: 'Attendance', path: '/attendance', icon: ClipboardCheck },
     { name: 'Tasks', path: '/tasks', icon: CheckSquare },
-    { name: 'Reports', path: '/reports', icon: BarChart3 },
+    { name: 'Reports', path: '/reports', icon: BarChart3, allowedRoles: ['super_admin', 'project_admin'] },
     { name: 'Settings', path: '/settings', icon: Settings },
   ];
 
@@ -109,7 +109,9 @@ export const AppLayout: React.FC = () => {
 
         {/* Sidebar Navigation */}
         <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
-          {navigationItems.map((item) => {
+          {navigationItems
+            .filter((item) => !item.allowedRoles || (role && item.allowedRoles.includes(role)))
+            .map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
             return (

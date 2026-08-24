@@ -4,7 +4,37 @@ _Scaffolded at the start of the engagement; filled in as each phase lands. Hours
 
 ## 1. Executive summary
 
-_Pending — filled in once all phases are complete or at handover, whichever comes first._
+All six planned phases are complete, with one deliberate exception flagged
+below rather than shipped unverified.
+
+**Phase 0-1 (audit + repair):** the two Channel Partner bugs and the
+booking-cancellation issue all traced back to the app querying tables that
+don't exist in the live database, or UI copy that had drifted out of sync
+with a real DB trigger. Fixed, plus a dead-code cleanup and an orphaned
+table removed.
+
+**Phase 2-3 (lead integrity + WhatsApp):** duplicate-lead blocking, a
+45-day first-come-first-served Channel Partner claim window, and a
+standalone WhatsApp gateway that was verified live against WhatsApp's real
+servers (not just written and assumed to work).
+
+**Phase 4 (new features):** Marketing bulk messaging, the CP Outreach
+form, telecaller call tracking, Tasks with live notifications, Attendance +
+Leave management, and an admin Reports dashboard — all built against the
+live schema and verified with rolled-back SQL dry runs before being
+trusted, several of which caught real bugs (a booking-status trigger
+mismatch, a bare-identifier rename hazard) before they shipped.
+
+**Phase 5 (permissions) — partially done, and here's the one thing to
+review before calling this finished:** the permission *data* is populated
+and application-layer route/nav gating works, but the database itself
+still lets any logged-in user read and write every table regardless of
+role. Finishing that (wiring `role_permissions` into real RLS policies
+across all 35 tables) requires logging in as each role and clicking through
+the live app to verify — not something safe to do blind against a
+production database in a single pass. AUDIT.md has the recommended
+approach for that follow-up. Everything else in this document reflects
+verified, working state.
 
 ## 2. Codebase & database audit findings
 
@@ -35,7 +65,7 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | 8 | Tasks (create, assign, notify, status tracking) | Uses existing `tasks` + `notifications` tables; real-time popup notification via Supabase Realtime (discovered and fixed: neither table was in the realtime publication); wired the previously-decorative sidebar bell; My Tasks panel on Dashboard | New `Tasks.tsx`, `useNotifications.tsx`, `AppLayout.tsx`, `Dashboard.tsx` updated | Done | — | — |
 | 9 | Attendance + Leave management | GPS check-in/out against the existing rich schema, leave approval workflow, team view, CSV export. Note: employees table has 0 rows currently — client needs to populate employee records for check-in to work | New `Attendance.tsx` + `leave_requests` table | Done | — | — |
 | 10 | Reports (admin-only) | Lead funnel, bookings/revenue by sales owner, CP-referred vs direct split, telecaller call performance — all via `recharts`. Gated to admin roles (UI-level; full RLS enforcement in Phase 5) | New `Reports.tsx`, `recharts` dependency | Done | — | — |
-| 11 | Role-based access control | Populate `role_permissions`, enforce via RLS + route guards | RLS migration, `ProtectedRoute.tsx`, `AppLayout.tsx` | Pending | — | — |
+| 11 | Role-based access control | `role_permissions` populated (14 roles x 91 permissions, conservative default); Reports gated at the route + nav level; hardcoded super-admin UUID fallback removed (verified dead first); security advisor findings 15→6. Full per-table RLS rewrite deliberately deferred — see AUDIT.md Phase 5 for why and the recommended verified-branch approach | `role_permissions` seed migration, `App.tsx`, `AppLayout.tsx`, `useAuth.tsx`, 2 security migrations | Partially done — app-layer gating + advisor fixes done; DB-layer RLS rewrite deferred, needs a follow-up engagement with live login verification | — | — |
 
 ## 5. Database changes
 
@@ -50,6 +80,9 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | `add_call_logs_table` | New `call_logs` table for telecaller call tracking. | Applied |
 | `enable_realtime_for_notifications_and_tasks` | Added `notifications` and `tasks` to the `supabase_realtime` publication (were missing entirely). | Applied |
 | `add_leave_requests_table` | New `leave_requests` table for the leave approval workflow. | Applied |
+| `seed_role_permissions` | Populated `role_permissions` (was 0 rows) with a conservative default mapping. Data only — no RLS policy references it yet. | Applied |
+| `fix_security_advisor_findings` | Pinned `search_path` on 8 functions; revoked `anon`/`PUBLIC` execute on 6 `SECURITY DEFINER` RLS-helper functions. | Applied |
+| `revoke_handle_new_user_authenticated_execute` | Closed the remaining `authenticated` execute grant on the `handle_new_user` trigger function (confirmed trigger-only, no legitimate direct-call use). | Applied |
 
 ## 6. Infrastructure
 
@@ -71,11 +104,43 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 
 - **WhatsApp bans:** Baileys is an unofficial client. Aggressive bulk sending risks the connected WhatsApp number being banned by Meta. Mitigated with throttling (8-15s randomised gaps), a daily send cap, and opt-out handling — but the risk cannot be fully eliminated on a zero-cost path. Recommend a secondary/dedicated number for bulk marketing.
 - **Free-tier hosting sleep:** the WhatsApp gateway may sleep on an inactive free tier; session is persisted to Supabase so a restart does not require re-scanning the QR code, but there may be a short reconnect delay.
-- Any additional risks discovered during later phases will be added here.
+- **Every table is still readable/writable by every logged-in user regardless of role.** `role_permissions` is populated but not yet wired into RLS policies — see item 11 above and AUDIT.md's Phase 5 section. This was a deliberate scope decision (the alternative was applying 30+ untested policy changes to a live production database with no way to verify each of the 14 roles' access afterward) and should be treated as the top-priority item for the next phase of work, alongside enabling leaked-password protection in the Supabase Auth dashboard (also not yet done — requires manual action in the dashboard, not reachable via SQL/API).
+- **`employees` table has 0 rows.** Attendance check-in/out and any feature that resolves the logged-in user to an employee record won't work until the client populates real employee records.
 
 ## 9. Handover & runbook
 
-_Pending — filled in at project handover: deployment steps, environment variables, WhatsApp gateway QR re-pairing procedure, and how to regenerate `src/types/database.ts` when the schema changes._
+**Deploying the main app:** unchanged from before this engagement — same
+build (`npm run build`) and hosting as already in place.
+
+**Deploying the WhatsApp gateway** (new, not yet live):
+1. `cd whatsapp-gateway && npm install`
+2. Get the Supabase **service_role** key (Project Settings → API in the
+   Supabase dashboard) — never the anon/publishable key. Set it as
+   `SUPABASE_SERVICE_ROLE_KEY` alongside `SUPABASE_URL` and a random
+   `GATEWAY_API_KEY`.
+3. Deploy via the included `Dockerfile` to Fly.io or Render (free tier) —
+   exact commands in `whatsapp-gateway/README.md`.
+4. Fetch `GET /qr` from the live URL (with the `x-api-key` header) and scan
+   it with the WhatsApp number to connect (Settings → Linked Devices →
+   Link a Device).
+5. Re-pairing, if ever needed: delete the row in `whatsapp_auth_state`
+   (`session_id = 'default'`) and restart the gateway.
+
+**Environment variables needed, beyond what already exists:**
+`SUPABASE_SERVICE_ROLE_KEY` and `GATEWAY_API_KEY` for the gateway only —
+the main app's `.env.local` is unchanged.
+
+**Regenerating `src/types/database.ts`** when the schema changes: via the
+Supabase MCP `generate_typescript_types` tool, or `npx supabase gen types
+typescript` against the project if working outside this MCP-connected
+environment.
+
+**Populating `employees`** is required before Attendance check-in/out will
+work for any user — see the risk noted above.
+
+**Before the next phase of work (RLS):** enable leaked-password protection
+in the Supabase Auth dashboard (Authentication → Policies) — the one
+remaining security-advisor item that needs manual action, not code.
 
 ## 10. Cost summary
 

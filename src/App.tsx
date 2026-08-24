@@ -58,7 +58,14 @@ function App() {
             <Route path="employees" element={<Employees />} />
             <Route path="attendance" element={<Attendance />} />
             <Route path="tasks" element={<Tasks />} />
-            <Route path="reports" element={<Reports />} />
+            <Route
+              path="reports"
+              element={
+                <ProtectedRoute allowedRoles={['super_admin', 'project_admin']}>
+                  <Reports />
+                </ProtectedRoute>
+              }
+            />
             <Route path="settings" element={<PlaceholderPage />} />
 
             {/* Catch-all redirected back to dashboard */}

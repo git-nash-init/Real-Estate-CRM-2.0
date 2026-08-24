@@ -56,21 +56,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
-      // Fallback rule for Super Admin UUID:
-      // "CURRENT SUPER ADMIN AUTH USER: 53812816-2e5f-4909-8163-2261cb2013bd"
-      let finalRole = roleName;
-      if (userId === '53812816-2e5f-4909-8163-2261cb2013bd' && !finalRole) {
-        finalRole = 'super_admin';
-      }
+      // Previously had a hardcoded fallback granting super_admin to one
+      // specific auth UUID when the DB-driven role lookup came back empty.
+      // Removed: verified that user now has a real user_roles row assigning
+      // super_admin through the normal path, and a real user_profiles row,
+      // so both fallbacks were dead weight — and a hardcoded admin grant is
+      // a standing security liability regardless (see AUDIT.md Phase 5).
+      const finalRole = roleName;
 
       const finalProfile: UserProfile = profile || {
         id: userId,
         email: email,
-        full_name: profile?.full_name || (userId === '53812816-2e5f-4909-8163-2261cb2013bd' ? 'Super Admin' : null),
-        avatar_url: profile?.avatar_url || null,
-        status: profile?.status || 'active',
-        created_at: profile?.created_at || new Date().toISOString(),
-        updated_at: profile?.updated_at || new Date().toISOString(),
+        full_name: null,
+        avatar_url: null,
+        status: 'active',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       };
 
       return {
