@@ -27,7 +27,7 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 |---|---|---|---|---|---|---|
 | 1 | "Commission" renamed to "Referral Fee" (CP-facing copy) | UI copy only (labels, tabs, buttons, messages) — table/column/identifier names deliberately unchanged | `ChannelPartnerDetails.tsx`, `ChannelPartners.tsx`, `Payments.tsx`, `Bookings.tsx` | Done | — | — |
 | 2 | Deactivate a Channel Partner | Toggle already existed and worked; found and fixed one real gap: Bookings.tsx loaded ALL partners as referrer options (no status filter), unlike Leads.tsx / SiteVisits.tsx which already filtered correctly | `Bookings.tsx` | Done | — | — |
-| 3 | Lead integrity: dedup, 45-day claim window, first-come-first-served, verification codes | New migration + `cp_leads` extension | New migration, `Leads.tsx`, `ChannelPartnerDetails.tsx` | Pending | — | — |
+| 3 | Lead integrity: dedup, 45-day claim window, first-come-first-served, verification codes | Trigger-based dedup (existing test-data duplicates made a hard UNIQUE index unsafe to add), cp_leads claim lifecycle, daily pg_cron expiry job. Verification code generated/stored now; WhatsApp delivery lands with the gateway (Phase 3/4) | `Leads.tsx`, 2 migrations | Done (codes not yet sent) | — | — |
 | 4 | WhatsApp gateway (Baileys) | Standalone service, QR pairing, outbox worker | New `whatsapp-gateway/` folder | Pending | — | — |
 | 5 | Marketing — WhatsApp bulk messaging | Audience builder, templates, delivery dashboard | New `Marketing.tsx` | Pending | — | — |
 | 6 | CP Outreach form | Ported from reference CRM | New `CPOutreach.tsx` + `cp_outreach` table | Pending | — | — |
@@ -43,6 +43,8 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 |---|---|---|
 | `add_loss_logs_table` | New additive table (`loss_logs`) recording refunded/forfeited amounts on booking cancellation. No existing tables altered. | Applied |
 | `drop_orphaned_commission_payouts_table` | Removed the empty, unreferenced, policy-less `commission_payouts` table (duplicate of `cp_commission_payouts`). | Applied |
+| `add_lead_phone_dedup_and_cp_claim_fields` | Trigger-based lead phone dedup (no existing data touched); added claim_expires_at/verification_code/verified_at to cp_leads. | Applied |
+| `add_cp_lead_claim_expiry_job` | pg_cron daily job expiring lapsed CP lead claims and clearing attribution. | Applied |
 
 ## 6. Infrastructure
 

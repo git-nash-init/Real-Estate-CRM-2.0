@@ -216,7 +216,6 @@ system activation), since fixing them properly requires the same RLS pass.
 
 ## Not yet done (tracked for subsequent phases per the engagement plan)
 
-- Lead dedup, 45-day claim window, first-come-first-served, verification codes.
 - WhatsApp gateway (Baileys) + Marketing bulk messaging.
 - CP Outreach form (ported from the reference CRM).
 - Telecaller call tracking.
@@ -261,3 +260,33 @@ when loading the partner dropdown. `Bookings.tsx` did not — its query was
 commented `// Fetch active Channel Partners` but had no actual status
 filter, so a deactivated partner could still be selected as the referrer on
 a new booking. Fixed: added the missing `.eq('status', 'active')`.
+
+## Phase 2: Lead integrity rules (this pass)
+
+**Global lead dedup + first-come-first-served.** `leads` already had a few
+pre-existing duplicate phone numbers among test data (normalized numbers
+1234567890 and 7894561230, 2-3 rows each). A plain `UNIQUE` index would
+have failed to create against that data, and cleaning/merging those rows
+wasn't this migration's call to make. Used a `BEFORE INSERT` trigger
+(`prevent_duplicate_lead_phone_trigger`) instead — it only evaluates new
+rows, so existing data was never touched or validated, and it gives a
+clean custom error instead of a raw constraint violation. Phone numbers are
+normalized (`normalize_phone()`) before comparison so `98765 43210`,
+`+919876543210`, and `919876543210` are recognised as the same number.
+Verified with a rolled-back SQL dry run: a genuine duplicate is blocked, a
+fresh number succeeds, no existing rows were read/write-locked or altered.
+
+**45-day Channel Partner lead claim.** `cp_leads` already existed
+(`cp_id`, `lead_id`, `project_id`, `submitted_at`, `status`, `remarks`) but
+nothing in the app wrote to it. Extended with `claim_expires_at`,
+`verification_code`, `verified_at`. `Leads.tsx` now creates a `cp_leads`
+row (45-day expiry, unique verification code) whenever a lead is tagged
+with a referring channel partner. A daily `pg_cron` job
+(`expire-cp-lead-claims-daily`, 2am UTC) marks lapsed claims `expired` and
+clears `leads.channel_partner_id` so the CP is no longer attributed —
+unless the lead already reached `booking_done`. Verified with a rolled-back
+dry run: a claim set to expire in the past correctly flips to `expired`
+and the lead's CP attribution clears.
+
+**Verification code delivery (WhatsApp)** is generated and stored now but
+not yet sent — that lands with the WhatsApp gateway in Phase 3/4.

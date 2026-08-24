@@ -330,7 +330,7 @@ export const Leads: React.FC = () => {
       console.log('------------------------------');
 
       // 3. Insert record supplying generated lead_number and selected project UUID
-      const { error: insertError } = await supabase
+      const { data: insertedLead, error: insertError } = await supabase
         .from('leads')
         .insert([
           {
@@ -355,10 +355,34 @@ export const Leads: React.FC = () => {
             telecaller_id: telecallerId || null,
             next_followup_at: nextFollowupAt ? new Date(nextFollowupAt).toISOString() : null
           }
-        ]);
+        ])
+        .select('id')
+        .single();
 
       if (insertError) {
         throw new Error(insertError.message);
+      }
+
+      // Channel Partner lead claim: 45-day window + verification code.
+      // Non-fatal if this fails — the lead itself is already saved; the CP
+      // attribution/commission tracking is a secondary record. WhatsApp
+      // delivery of the code is wired up once the messaging gateway exists.
+      if (selectedChannelPartnerId && insertedLead?.id) {
+        const verificationCode = Math.random().toString(36).slice(2, 8).toUpperCase();
+        const claimExpiresAt = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString();
+        const { error: claimErr } = await supabase
+          .from('cp_leads')
+          .insert([{
+            cp_id: selectedChannelPartnerId,
+            lead_id: insertedLead.id,
+            project_id: selectedProjectId || null,
+            status: 'pending',
+            claim_expires_at: claimExpiresAt,
+            verification_code: verificationCode,
+          }]);
+        if (claimErr) {
+          reportQueryError('Leads: channel partner claim record', claimErr);
+        }
       }
 
       // Close modal & clear input fields
@@ -395,6 +419,10 @@ export const Leads: React.FC = () => {
       // Clean up PostgreSQL constraint errors for the user
       if (err.message && err.message.toLowerCase().includes('violates not-null constraint')) {
         setCreateError('Database Insertion Denied: Please make sure a valid Project is selected and all other required fields are filled out.');
+      } else if (err.message && err.message.toLowerCase().includes('already exists in the system')) {
+        // Raised by the prevent_duplicate_lead_phone_trigger DB trigger —
+        // strip the internal lead id before showing it to the user.
+        setCreateError('A lead with this mobile number already exists in the system. Duplicate submissions are not allowed.');
       } else {
         setCreateError(err.message || 'Database connection error occurred while inserting lead.');
       }

@@ -627,57 +627,6 @@ export type Database = {
           },
         ]
       }
-      commission_payouts: {
-        Row: {
-          amount: number
-          commission_id: string
-          created_at: string
-          created_by: string | null
-          id: string
-          notes: string | null
-          payment_date: string
-          payment_mode: string
-          reference_number: string | null
-        }
-        Insert: {
-          amount: number
-          commission_id: string
-          created_at?: string
-          created_by?: string | null
-          id?: string
-          notes?: string | null
-          payment_date?: string
-          payment_mode: string
-          reference_number?: string | null
-        }
-        Update: {
-          amount?: number
-          commission_id?: string
-          created_at?: string
-          created_by?: string | null
-          id?: string
-          notes?: string | null
-          payment_date?: string
-          payment_mode?: string
-          reference_number?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "commission_payouts_commission_id_fkey"
-            columns: ["commission_id"]
-            isOneToOne: false
-            referencedRelation: "cp_commissions"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "commission_payouts_created_by_fkey"
-            columns: ["created_by"]
-            isOneToOne: false
-            referencedRelation: "user_profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       commission_structures: {
         Row: {
           commission_percentage: number | null
@@ -886,6 +835,7 @@ export type Database = {
       }
       cp_leads: {
         Row: {
+          claim_expires_at: string | null
           cp_id: string
           created_at: string
           id: string
@@ -894,8 +844,11 @@ export type Database = {
           remarks: string | null
           status: string
           submitted_at: string
+          verification_code: string | null
+          verified_at: string | null
         }
         Insert: {
+          claim_expires_at?: string | null
           cp_id: string
           created_at?: string
           id?: string
@@ -904,8 +857,11 @@ export type Database = {
           remarks?: string | null
           status?: string
           submitted_at?: string
+          verification_code?: string | null
+          verified_at?: string | null
         }
         Update: {
+          claim_expires_at?: string | null
           cp_id?: string
           created_at?: string
           id?: string
@@ -914,6 +870,8 @@ export type Database = {
           remarks?: string | null
           status?: string
           submitted_at?: string
+          verification_code?: string | null
+          verified_at?: string | null
         }
         Relationships: [
           {
@@ -1484,6 +1442,47 @@ export type Database = {
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      loss_logs: {
+        Row: {
+          booking_amount: number
+          booking_id: string
+          created_at: string
+          forfeited_amount: number
+          id: string
+          reason: string | null
+          recorded_by: string | null
+          refunded_amount: number
+        }
+        Insert: {
+          booking_amount?: number
+          booking_id: string
+          created_at?: string
+          forfeited_amount?: number
+          id?: string
+          reason?: string | null
+          recorded_by?: string | null
+          refunded_amount?: number
+        }
+        Update: {
+          booking_amount?: number
+          booking_id?: string
+          created_at?: string
+          forfeited_amount?: number
+          id?: string
+          reason?: string | null
+          recorded_by?: string | null
+          refunded_amount?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loss_logs_booking_id_fkey"
+            columns: ["booking_id"]
+            isOneToOne: false
+            referencedRelation: "bookings"
             referencedColumns: ["id"]
           },
         ]
@@ -2405,9 +2404,11 @@ export type Database = {
       can_manage_leads: { Args: never; Returns: boolean }
       can_manage_project: { Args: { p_project_id: string }; Returns: boolean }
       current_user_has_role: { Args: { p_roles: string[] }; Returns: boolean }
+      expire_cp_lead_claims: { Args: never; Returns: undefined }
       has_project_access: { Args: { p_project_id: string }; Returns: boolean }
       is_authenticated: { Args: never; Returns: boolean }
       is_super_admin: { Args: never; Returns: boolean }
+      normalize_phone: { Args: { p: string }; Returns: string }
       write_audit_log: {
         Args: {
           p_action: string
