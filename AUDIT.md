@@ -38,10 +38,11 @@ which are frequently wrong (see "Dead migrations" below).
   data across statuses `pending / approved / partially_paid / paid`. Only the
   two table-name mismatches above were breaking things.
 - **An orphaned table**, `commission_payouts` (singular fee, no `cp_` prefix),
-  exists with RLS enabled and **zero policies** — confirmed by Supabase's own
-  `rls_enabled_no_policy` advisor. It silently returns 0 rows to everyone and
-  duplicates `cp_commission_payouts`. Nothing in the app queries it. Recommend
-  dropping it in a future migration so it cannot confuse anyone later.
+  existed with RLS enabled and **zero policies** — confirmed by Supabase's own
+  `rls_enabled_no_policy` advisor. It silently returned 0 rows to everyone and
+  duplicated `cp_commission_payouts`. Nothing in the app queried it. **Fixed
+  this pass:** confirmed 0 rows, then dropped (migration
+  `drop_orphaned_commission_payouts_table`).
 
 ### Dead migrations — do not trust the repo's `.sql` files
 

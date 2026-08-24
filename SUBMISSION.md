@@ -19,7 +19,7 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | 3 | 37 silently swallowed Supabase errors across 8 pages | Errors logged to console only, rendered as empty state | Central `reportQueryError` + visible dev overlay | 8 page files, new `queryLogger.ts`, `QueryFailureOverlay.tsx` | Done | — | — |
 | 4 | Dead code cleanup: vestigial commission fields on CP list page | Leftover state/fields from dead migrations, never wired to any input or the submit payload — not a live bug, just clutter | Removed dead state, population blocks, interface fields, and the unused-var suppression hack | `ChannelPartners.tsx` | Done | — | — |
 | 5 | Booking cancellation UI misled users about inventory release; no token refund/loss log | UI text out of sync with a real DB trigger; feature not built | Rebuilt cancellation flow: accurate copy, reason capture, refund amount, referral fee void, loss log. Caught and fixed a second bug in the fix itself via a rolled-back SQL dry run: using status=`refunded` bypassed the release trigger, which only fires on exactly `cancelled` | `Bookings.tsx` | Done | — | — |
-| 6 | Orphaned `commission_payouts` table (RLS enabled, no policies) | Leftover/duplicate table | — | DB migration | Pending | — | — |
+| 6 | Orphaned `commission_payouts` table (RLS enabled, no policies) | Leftover/duplicate table, 0 rows, unused by any query | Confirmed empty and unreferenced, then dropped | DB migration `drop_orphaned_commission_payouts_table` | Done | — | — |
 
 ## 4. Features delivered
 
@@ -42,6 +42,7 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | Migration | Purpose | Status |
 |---|---|---|
 | `add_loss_logs_table` | New additive table (`loss_logs`) recording refunded/forfeited amounts on booking cancellation. No existing tables altered. | Applied |
+| `drop_orphaned_commission_payouts_table` | Removed the empty, unreferenced, policy-less `commission_payouts` table (duplicate of `cp_commission_payouts`). | Applied |
 
 ## 6. Infrastructure
 
