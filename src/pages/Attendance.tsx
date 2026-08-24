@@ -48,7 +48,8 @@ const leaveStatusColors: Record<string, string> = {
 };
 
 export const Attendance: React.FC = () => {
-  const { user } = useAuth();
+  const { user, role } = useAuth();
+  const isSuperAdmin = role === 'super_admin';
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | null>(null);
   const [currentEmployeeName, setCurrentEmployeeName] = useState<string>('');
 
@@ -522,48 +523,54 @@ export const Attendance: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-slate-200">
-              <h3 className="text-sm font-bold text-slate-800">All Leave Requests (Approval)</h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-sm">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                    <th className="py-3 px-6">Employee</th>
-                    <th className="py-3 px-6">Dates</th>
-                    <th className="py-3 px-6">Type</th>
-                    <th className="py-3 px-6">Status</th>
-                    <th className="py-3 px-6">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {allLeaveRequests.length > 0 ? allLeaveRequests.map(lr => (
-                    <tr key={lr.id}>
-                      <td className="py-3 px-6 font-semibold text-slate-800">{employeesMap.get(lr.employee_id) || '—'}</td>
-                      <td className="py-3 px-6 text-slate-600">
-                        {new Date(lr.start_date).toLocaleDateString('en-IN')} – {new Date(lr.end_date).toLocaleDateString('en-IN')}
-                      </td>
-                      <td className="py-3 px-6 text-slate-600 capitalize">{lr.leave_type}</td>
-                      <td className="py-3 px-6">
-                        <span className={`inline-flex px-2 py-0.5 rounded-full text-xxs font-semibold capitalize ${leaveStatusColors[lr.status]}`}>{lr.status}</span>
-                      </td>
-                      <td className="py-3 px-6">
-                        {lr.status === 'pending' && (
-                          <div className="flex gap-2">
-                            <button onClick={() => handleReviewLeave(lr.id, 'approved')} className="text-xxs text-emerald-600 font-semibold hover:underline">Approve</button>
-                            <button onClick={() => handleReviewLeave(lr.id, 'rejected')} className="text-xxs text-rose-600 font-semibold hover:underline">Reject</button>
-                          </div>
-                        )}
-                      </td>
+          {isSuperAdmin && (
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+              <div className="p-4 border-b border-slate-200">
+                <h3 className="text-sm font-bold text-slate-800">All Leave Requests (Approval)</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Only Super Admins can approve or reject leave — enforced by database policy, not just this screen.</p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
+                      <th className="py-3 px-6">Employee</th>
+                      <th className="py-3 px-6">Dates</th>
+                      <th className="py-3 px-6">Type</th>
+                      <th className="py-3 px-6">Status</th>
+                      <th className="py-3 px-6">Actions</th>
                     </tr>
-                  )) : (
-                    <tr><td colSpan={5} className="py-10 text-center text-slate-400 italic">No leave requests to review.</td></tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {allLeaveRequests.length > 0 ? allLeaveRequests.map(lr => (
+                      <tr key={lr.id}>
+                        <td className="py-3 px-6 font-semibold text-slate-800">{employeesMap.get(lr.employee_id) || '—'}</td>
+                        <td className="py-3 px-6 text-slate-600">
+                          {new Date(lr.start_date).toLocaleDateString('en-IN')} – {new Date(lr.end_date).toLocaleDateString('en-IN')}
+                        </td>
+                        <td className="py-3 px-6 text-slate-600 capitalize">{lr.leave_type}</td>
+                        <td className="py-3 px-6">
+                          <span className={`inline-flex px-2 py-0.5 rounded-full text-xxs font-semibold capitalize ${leaveStatusColors[lr.status]}`}>{lr.status}</span>
+                        </td>
+                        <td className="py-3 px-6">
+                          {lr.status === 'pending' && lr.employee_id !== currentEmployeeId && (
+                            <div className="flex gap-2">
+                              <button onClick={() => handleReviewLeave(lr.id, 'approved')} className="text-xxs text-emerald-600 font-semibold hover:underline">Approve</button>
+                              <button onClick={() => handleReviewLeave(lr.id, 'rejected')} className="text-xxs text-rose-600 font-semibold hover:underline">Reject</button>
+                            </div>
+                          )}
+                          {lr.status === 'pending' && lr.employee_id === currentEmployeeId && (
+                            <span className="text-xxs text-slate-400 italic">Your own request — another Super Admin must review it</span>
+                          )}
+                        </td>
+                      </tr>
+                    )) : (
+                      <tr><td colSpan={5} className="py-10 text-center text-slate-400 italic">No leave requests to review.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
 
