@@ -209,7 +209,7 @@ export const Bookings: React.FC = () => {
       ]);
 
       if (cpRes.error || !cpRes.data) {
-        console.error('Failed to load CP for commission calculation:', cpRes.error);
+        console.error('Failed to load CP for referral fee calculation:', cpRes.error);
         return;
       }
 
@@ -217,7 +217,7 @@ export const Bookings: React.FC = () => {
       const bookingData = bookingRes.data;
       const projectId = bookingData?.project_id || null;
 
-      // 1. Fetch active commission structures for this Channel Partner
+      // 1. Fetch active referral fee structures for this Channel Partner
       const { data: structures, error: structErr } = await supabase
         .from('commission_structures')
         .select('*')
@@ -225,7 +225,7 @@ export const Bookings: React.FC = () => {
         .eq('status', 'active');
 
       if (structErr) {
-        console.error('Failed to fetch commission structures:', structErr);
+        console.error('Failed to fetch referral fee structures:', structErr);
       }
 
       // Find structure for specific project first, then general (where project_id is null)
@@ -252,7 +252,7 @@ export const Bookings: React.FC = () => {
       // Default base is CONSIDERATION_AMOUNT
       const baseAmount = considerationAmount || totalPayableAmount || 0;
 
-      // Calculate commission amount
+      // Calculate referral fee amount
       let commissionAmount = 0;
       let activeRate = rate;
 
@@ -279,7 +279,7 @@ export const Bookings: React.FC = () => {
         commissionAmount = fixedAmt;
       }
 
-      // Insert commission snapshot record into cp_commissions table
+      // Insert referral fee snapshot record into cp_commissions table
       const { error: commInsertErr } = await supabase
         .from('cp_commissions')
         .insert([
@@ -292,17 +292,17 @@ export const Bookings: React.FC = () => {
             paid_amount: 0,
             pending_amount: commissionAmount,
             status: 'pending',
-            remarks: `Auto-generated commission from booking creation. Structure: ${commType}`
+            remarks: `Auto-generated referral fee from booking creation. Structure: ${commType}`
           }
         ]);
 
       if (commInsertErr) {
-        console.error('Failed to create booking commission record:', commInsertErr.message);
+        console.error('Failed to create booking referral fee record:', commInsertErr.message);
       } else {
-        console.log('Commission obligation record created successfully for booking:', bookingId);
+        console.log('Referral Fee obligation record created successfully for booking:', bookingId);
       }
     } catch (err) {
-      console.error('Error creating commission:', err);
+      console.error('Error creating referral fee:', err);
     }
   };
 
@@ -804,7 +804,7 @@ export const Bookings: React.FC = () => {
           throw new Error(`Unable to create booking. Please try again. ${insertError.message}`);
         }
 
-        // Generate commission if channel partner is associated
+        // Generate referral fee if channel partner is associated
         if (selectedChannelPartnerId && newBookings && newBookings[0]) {
           await createCommissionForBooking(newBookings[0].id, selectedChannelPartnerId, baseAmt, calculatedTotalPayable);
         }
@@ -939,7 +939,7 @@ export const Bookings: React.FC = () => {
           throw new Error("Unable to confirm booking. Please try again.");
         }
 
-        // Generate commission if channel partner is associated
+        // Generate referral fee if channel partner is associated
         if (bookingRecord.channel_partner_id) {
           await createCommissionForBooking(
             bookingId,

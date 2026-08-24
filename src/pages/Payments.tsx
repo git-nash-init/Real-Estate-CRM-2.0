@@ -98,10 +98,10 @@ export const Payments: React.FC = () => {
   const { role } = useAuth();
   const isAuthorized = role === 'super_admin' || role === 'project_admin';
 
-  // Tab view selector: 'customer' | 'commission'
-  const [activeView, setActiveView] = useState<'customer' | 'commission'>('customer');
+  // Tab view selector: 'customer' | 'referral fee'
+  const [activeView, setActiveView] = useState<'customer' | 'referral fee'>('customer');
 
-  // Commission data states
+  // Referral Fee data states
   const [cpCommissions, setCpCommissions] = useState<any[]>([]);
   const [cpPayouts, setCpPayouts] = useState<any[]>([]);
   const [cpMap, setCpMap] = useState<Map<string, any>>(new Map());
@@ -198,7 +198,7 @@ export const Payments: React.FC = () => {
       if (cpErr) throw cpErr;
       setCpMap(new Map(cpData?.map(cp => [cp.id, cp]) || []));
 
-      // 7. Fetch CP commissions
+      // 7. Fetch CP referral fees
       const { data: commsData, error: commsErr } = await supabase
         .from('cp_commissions')
         .select('*')
@@ -233,11 +233,11 @@ export const Payments: React.FC = () => {
     await fetchData();
   };
 
-  // Record commission payout submission
+  // Record referral fee payout submission
   const handlePayoutSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedCommissionId) {
-      setPayoutError('Please select a commission obligation.');
+      setPayoutError('Please select a referral fee obligation.');
       return;
     }
     const amt = parseFloat(payoutAmountInput) || 0;
@@ -251,16 +251,16 @@ export const Payments: React.FC = () => {
 
     try {
       const comm = cpCommissions.find(c => c.id === selectedCommissionId);
-      if (!comm) throw new Error('Commission record not found.');
+      if (!comm) throw new Error('Referral Fee record not found.');
 
       const statusLower = comm.status?.toLowerCase();
       if (statusLower === 'pending' || statusLower === 'cancelled') {
-        throw new Error('Commission must be approved before recording a payout.');
+        throw new Error('Referral Fee must be approved before recording a payout.');
       }
 
       const outstanding = comm.pending_amount ?? (comm.payable_amount - comm.paid_amount);
       if (amt > outstanding) {
-        throw new Error(`Payout amount exceeds outstanding commission of ₹${outstanding.toLocaleString('en-IN')}. Overpayment is denied.`);
+        throw new Error(`Payout amount exceeds outstanding referral fee of ₹${outstanding.toLocaleString('en-IN')}. Overpayment is denied.`);
       }
 
       const { data: userData } = await supabase.auth.getUser();
@@ -283,7 +283,7 @@ export const Payments: React.FC = () => {
 
       if (payErr) throw payErr;
 
-      // 2. Update commission status and paid/pending balances
+      // 2. Update referral fee status and paid/pending balances
       const totalPaid = (comm.paid_amount || 0) + amt;
       const nextPending = Math.max(0, comm.payable_amount - totalPaid);
       const nextCommStatus = totalPaid >= comm.payable_amount ? 'paid' : 'partially_paid';
@@ -302,7 +302,7 @@ export const Payments: React.FC = () => {
 
       setNotification({
         type: 'success',
-        message: `Commission payout of ₹${amt.toLocaleString('en-IN')} successfully logged!`
+        message: `Referral Fee payout of ₹${amt.toLocaleString('en-IN')} successfully logged!`
       });
 
       setIsPayoutOpen(false);
@@ -313,7 +313,7 @@ export const Payments: React.FC = () => {
       await fetchData();
     } catch (err: any) {
       console.error('Payout submit error:', err);
-      setPayoutError(err.message || 'Failed to record commission payout.');
+      setPayoutError(err.message || 'Failed to record referral fee payout.');
     } finally {
       setPayoutLoading(false);
     }
@@ -610,14 +610,14 @@ export const Payments: React.FC = () => {
     return true;
   });
 
-  // Commission summary aggregations
+  // Referral Fee summary aggregations
   const approvedCommissions = cpCommissions.filter(c => c.status?.toLowerCase() !== 'cancelled' && c.status?.toLowerCase() !== 'pending');
   const totalApprovedCommission = approvedCommissions.reduce((sum, c) => sum + (c.payable_amount || 0), 0);
   const totalCommissionPaid = cpPayouts.reduce((sum, p) => sum + (p.amount || 0), 0);
   const totalCommissionOutstanding = approvedCommissions.reduce((sum, c) => sum + (c.pending_amount || 0), 0);
   const totalCommissionPendingApproval = cpCommissions.filter(c => c.status?.toLowerCase() === 'pending').reduce((sum, c) => sum + (c.commission_amount || 0), 0);
 
-  // Filter commission payouts in-memory
+  // Filter referral fee payouts in-memory
   const filteredCommissionPayouts = cpPayouts.filter(p => {
     const comm = cpCommissions.find(c => c.id === p.commission_id);
     const booking = comm ? bookingMap.get(comm.booking_id) : null;
@@ -730,14 +730,14 @@ export const Payments: React.FC = () => {
           Customer Payments
         </button>
         <button
-          onClick={() => { setActiveView('commission'); setPage(0); }}
+          onClick={() => { setActiveView('referral fee'); setPage(0); }}
           className={`pb-3 text-sm font-semibold border-b-2 transition-all ${
-            activeView === 'commission'
+            activeView === 'referral fee'
               ? 'border-indigo-600 text-indigo-600'
               : 'border-transparent text-slate-500 hover:text-slate-800'
           }`}
         >
-          Commission Payouts
+          Referral Fee Payouts
         </button>
       </div>
 
@@ -772,7 +772,7 @@ export const Payments: React.FC = () => {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm">
-            <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Total Approved Commission</span>
+            <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Total Approved Referral Fee</span>
             <span className="block text-lg font-extrabold text-slate-950 mt-1">₹{totalApprovedCommission.toLocaleString('en-IN')}</span>
           </div>
           <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm">
@@ -1116,9 +1116,9 @@ export const Payments: React.FC = () => {
                       <td colSpan={10} className="py-16 text-center">
                         <div className="flex flex-col items-center justify-center space-y-2">
                           <DollarSign className="h-8 w-8 text-slate-300" />
-                          <p className="text-slate-500 font-semibold text-sm">No Commission Payouts Found</p>
+                          <p className="text-slate-500 font-semibold text-sm">No Referral Fee Payouts Found</p>
                           <p className="text-xs max-w-sm text-slate-400">
-                            Log a commission payout or adjust filters. Payouts must reference approved commission obligations.
+                            Log a referral fee payout or adjust filters. Payouts must reference approved referral fee obligations.
                           </p>
                         </div>
                       </td>
@@ -1128,7 +1128,7 @@ export const Payments: React.FC = () => {
               </table>
             </div>
 
-            {/* Pagination controls for commission payouts */}
+            {/* Pagination controls for referral fee payouts */}
             {totalFilteredCommCount > 0 && (
               <div className="bg-slate-50 px-6 py-4 border-t border-slate-100 flex items-center justify-between">
                 <span className="text-xs font-medium text-slate-500">
@@ -1773,7 +1773,7 @@ export const Payments: React.FC = () => {
           
           <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-left">
             <div className="bg-emerald-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">Record Commission Payout</span>
+              <span className="font-bold tracking-tight">Record Referral Fee Payout</span>
               <button type="button" onClick={() => setIsPayoutOpen(false)} className="p-1 rounded-lg text-emerald-100 hover:text-white focus:outline-none">
                 <X className="h-5 w-5" />
               </button>
@@ -1789,14 +1789,14 @@ export const Payments: React.FC = () => {
                 )}
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Approved Commission Obligation *</label>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Approved Referral Fee Obligation *</label>
                   <select
                     required
                     value={selectedCommissionId}
                     onChange={(e) => handlePayoutCommissionChange(e.target.value)}
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
                   >
-                    <option value="">Select commission obligation...</option>
+                    <option value="">Select referral fee obligation...</option>
                     {cpCommissions
                       .filter(c => {
                         const statusLower = c.status?.toLowerCase();

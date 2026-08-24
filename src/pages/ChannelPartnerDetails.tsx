@@ -151,7 +151,7 @@ export const ChannelPartnerDetails: React.FC = () => {
   const [allProjects, setAllProjects] = useState<Project[]>([]);
 
   // Tab selections
-  const [activeTab, setActiveTab] = useState<'overview' | 'leads' | 'visits' | 'bookings' | 'commission' | 'payouts' | 'projects' | 'structure'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'leads' | 'visits' | 'bookings' | 'referral fee' | 'payouts' | 'projects' | 'structure'>('overview');
 
   // Related lists
   const [leadsList, setLeadsList] = useState<Lead[]>([]);
@@ -186,7 +186,7 @@ export const ChannelPartnerDetails: React.FC = () => {
   const [isRejectMode, setIsRejectMode] = useState(false);
   const [approvalLoading, setApprovalLoading] = useState(false);
 
-  // Commission Structure Modal States
+  // Referral Fee Structure Modal States
   const [isStructOpen, setIsStructOpen] = useState(false);
   const [structProjectId, setStructProjectId] = useState('');
   const [structType, setStructType] = useState('PERCENTAGE'); // PERCENTAGE, FIXED, SLAB
@@ -201,7 +201,7 @@ export const ChannelPartnerDetails: React.FC = () => {
   const [structLoading, setStructLoading] = useState(false);
   const [structError, setStructError] = useState<string | null>(null);
 
-  // Manual Commission Obligation Modal States
+  // Manual Referral Fee Obligation Modal States
   const [isManualCommOpen, setIsManualCommOpen] = useState(false);
   const [manualBookingId, setManualBookingId] = useState('');
   const [manualProjectId, setManualProjectId] = useState('');
@@ -364,7 +364,7 @@ export const ChannelPartnerDetails: React.FC = () => {
       reportQueryError('Channel Partner details: bookings', err);
     }
 
-    // 7. Fetch commissions snapshot (cp_commissions)
+    // 7. Fetch referral fees snapshot (cp_commissions)
     let fetchedCommIds: string[] = [];
     try {
       const { data, error: commErr } = await supabase
@@ -402,7 +402,7 @@ export const ChannelPartnerDetails: React.FC = () => {
       reportQueryError('Channel Partner details: referral fee payouts', err);
     }
 
-    // 9. Fetch commission structures
+    // 9. Fetch referral fee structures
     try {
       const { data, error: structErr } = await supabase
         .from('commission_structures')
@@ -441,7 +441,7 @@ export const ChannelPartnerDetails: React.FC = () => {
     await fetchPartnerDetails();
   };
 
-  // Commission Approval / Rejection Actions
+  // Referral Fee Approval / Rejection Actions
   const handleApproveAction = async (approvedAmt: number, remarksText: string) => {
     if (!selectedApproveComm) return;
     if (approvedAmt < 0) {
@@ -449,7 +449,7 @@ export const ChannelPartnerDetails: React.FC = () => {
       return;
     }
     if (approvedAmt > selectedApproveComm.commission_amount) {
-      setNotification({ type: 'error', message: 'Approved amount cannot exceed commission amount.' });
+      setNotification({ type: 'error', message: 'Approved amount cannot exceed referral fee amount.' });
       return;
     }
     setApprovalLoading(true);
@@ -493,13 +493,13 @@ export const ChannelPartnerDetails: React.FC = () => {
 
       setNotification({
         type: 'success',
-        message: `Commission obligation approved successfully for ₹${approvedAmt.toLocaleString('en-IN')}.`
+        message: `Referral Fee obligation approved successfully for ₹${approvedAmt.toLocaleString('en-IN')}.`
       });
       setIsApproveOpen(false);
       setSelectedApproveComm(null);
     } catch (err: any) {
-      console.error('Commission approval error:', err);
-      setNotification({ type: 'error', message: err.message || 'Failed to approve commission.' });
+      console.error('Referral Fee approval error:', err);
+      setNotification({ type: 'error', message: err.message || 'Failed to approve referral fee.' });
     } finally {
       setApprovalLoading(false);
     }
@@ -549,13 +549,13 @@ export const ChannelPartnerDetails: React.FC = () => {
 
       setNotification({
         type: 'success',
-        message: 'Commission obligation has been successfully rejected.'
+        message: 'Referral Fee obligation has been successfully rejected.'
       });
       setIsApproveOpen(false);
       setSelectedApproveComm(null);
     } catch (err: any) {
-      console.error('Commission rejection error:', err);
-      setNotification({ type: 'error', message: err.message || 'Failed to reject commission.' });
+      console.error('Referral Fee rejection error:', err);
+      setNotification({ type: 'error', message: err.message || 'Failed to reject referral fee.' });
     } finally {
       setApprovalLoading(false);
     }
@@ -594,7 +594,7 @@ export const ChannelPartnerDetails: React.FC = () => {
   const handlePayoutSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedCommissionId) {
-      setPayoutError('Please select an approved commission obligation.');
+      setPayoutError('Please select an approved referral fee obligation.');
       return;
     }
     const amt = parseFloat(payoutAmountInput) || 0;
@@ -608,11 +608,11 @@ export const ChannelPartnerDetails: React.FC = () => {
 
     try {
       const selectedComm = commissionsList.find(c => c.id === selectedCommissionId);
-      if (!selectedComm) throw new Error('Selected commission record not found.');
+      if (!selectedComm) throw new Error('Selected referral fee record not found.');
 
       const outstanding = selectedComm.pending_amount ?? selectedComm.commission_amount;
       if (amt > outstanding) {
-        throw new Error(`Payment exceeds the remaining outstanding commission balance of ₹${outstanding.toLocaleString('en-IN')}. Overpayment is denied.`);
+        throw new Error(`Payment exceeds the remaining outstanding referral fee balance of ₹${outstanding.toLocaleString('en-IN')}. Overpayment is denied.`);
       }
 
       const { data: userData } = await supabase.auth.getUser();
@@ -656,7 +656,7 @@ export const ChannelPartnerDetails: React.FC = () => {
 
       setNotification({
         type: 'success',
-        message: `Commission payout of ₹${amt.toLocaleString('en-IN')} successfully logged!`
+        message: `Referral Fee payout of ₹${amt.toLocaleString('en-IN')} successfully logged!`
       });
 
       setIsPayoutOpen(false);
@@ -667,13 +667,13 @@ export const ChannelPartnerDetails: React.FC = () => {
       await fetchPartnerDetails();
     } catch (err: any) {
       console.error('Payout failed:', err);
-      setPayoutError(err.message || 'Failed to record commission payout.');
+      setPayoutError(err.message || 'Failed to record referral fee payout.');
     } finally {
       setPayoutLoading(false);
     }
   };
 
-  // Create Commission Structure submission
+  // Create Referral Fee Structure submission
   const handleCreateStructure = async (e: React.FormEvent) => {
     e.preventDefault();
     setStructLoading(true);
@@ -697,7 +697,7 @@ export const ChannelPartnerDetails: React.FC = () => {
         const { data: overlapData, error: checkErr } = await query;
         if (checkErr) throw checkErr;
         if (overlapData && overlapData.length > 0) {
-          throw new Error('An active commission structure already exists for this Project configuration. Please set the existing one to Inactive first.');
+          throw new Error('An active referral fee structure already exists for this Project configuration. Please set the existing one to Inactive first.');
         }
       }
 
@@ -723,7 +723,7 @@ export const ChannelPartnerDetails: React.FC = () => {
 
       if (insertErr) throw insertErr;
 
-      setNotification({ type: 'success', message: 'Commission structure created successfully!' });
+      setNotification({ type: 'success', message: 'Referral Fee structure created successfully!' });
       setIsStructOpen(false);
       setStructProjectId('');
       setStructType('PERCENTAGE');
@@ -737,14 +737,14 @@ export const ChannelPartnerDetails: React.FC = () => {
       setStructNotes('');
       await fetchPartnerDetails();
     } catch (err: any) {
-      console.error('Failed to create commission structure:', err);
-      setStructError(err.message || 'Failed to create commission structure.');
+      console.error('Failed to create referral fee structure:', err);
+      setStructError(err.message || 'Failed to create referral fee structure.');
     } finally {
       setStructLoading(false);
     }
   };
 
-  // Booking selection onChange handler for manual commission
+  // Booking selection onChange handler for manual referral fee
   const handleManualBookingChange = async (bookingId: string) => {
     setManualBookingId(bookingId);
     if (!bookingId) {
@@ -764,7 +764,7 @@ export const ChannelPartnerDetails: React.FC = () => {
       const saleVal = booking.consideration_amount || booking.booking_amount || 0;
       setManualSaleValue(saleVal);
 
-      // Auto-load commission structure active for this CP + Project
+      // Auto-load referral fee structure active for this CP + Project
       const matchingStruct = structuresList.find(
         s => s.status === 'active' && 
         (s.project_id === booking.project_id || s.project_id === null)
@@ -799,7 +799,7 @@ export const ChannelPartnerDetails: React.FC = () => {
     }
   };
 
-  // Create Manual Commission Obligation submission
+  // Create Manual Referral Fee Obligation submission
   const handleCreateManualCommission = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualBookingId) {
@@ -827,7 +827,7 @@ export const ChannelPartnerDetails: React.FC = () => {
 
       if (checkErr) throw checkErr;
       if (existingComm) {
-        throw new Error('This booking already has a commission obligation. Duplicate creation is blocked.');
+        throw new Error('This booking already has a referral fee obligation. Duplicate creation is blocked.');
       }
 
       // 2. Insert into cp_commissions
@@ -849,7 +849,7 @@ export const ChannelPartnerDetails: React.FC = () => {
 
       if (insertErr) throw insertErr;
 
-      setNotification({ type: 'success', message: 'Manual commission obligation recorded successfully!' });
+      setNotification({ type: 'success', message: 'Manual referral fee obligation recorded successfully!' });
       setIsManualCommOpen(false);
       setManualBookingId('');
       setManualProjectId('');
@@ -864,8 +864,8 @@ export const ChannelPartnerDetails: React.FC = () => {
       setManualRemarks('');
       await fetchPartnerDetails();
     } catch (err: any) {
-      console.error('Failed to create manual commission:', err);
-      setManualError(err.message || 'Failed to record manual commission obligation.');
+      console.error('Failed to create manual referral fee:', err);
+      setManualError(err.message || 'Failed to record manual referral fee obligation.');
     } finally {
       setManualLoading(false);
     }
@@ -1010,9 +1010,9 @@ export const ChannelPartnerDetails: React.FC = () => {
         </div>
 
         <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 md:w-80 space-y-2.5 text-xs text-slate-700">
-          <h4 className="text-xxs font-bold text-slate-400 uppercase tracking-wider">Commission settings</h4>
+          <h4 className="text-xxs font-bold text-slate-400 uppercase tracking-wider">Referral Fee settings</h4>
           <div className="flex justify-between">
-            <span className="text-slate-500">Commission Structure:</span>
+            <span className="text-slate-500">Referral Fee Structure:</span>
             <span className="font-semibold text-slate-800">
               {partner.commission_type === 'PERCENTAGE' 
                 ? `${commissionVal}%` 
@@ -1022,7 +1022,7 @@ export const ChannelPartnerDetails: React.FC = () => {
             </span>
           </div>
           <div className="border-t border-slate-200 pt-2 flex justify-between font-semibold">
-            <span className="text-slate-800">Commissions Earned:</span>
+            <span className="text-slate-800">Referral Fees Earned:</span>
             <span className="text-indigo-650 font-bold">₹{totalCommission.toLocaleString('en-IN')}</span>
           </div>
         </div>
@@ -1080,7 +1080,7 @@ export const ChannelPartnerDetails: React.FC = () => {
 
       {/* TABS SELECTOR */}
       <div className="border-b border-slate-200 flex flex-wrap gap-2">
-        {(['overview', 'leads', 'visits', 'bookings', 'commission', 'payouts', 'projects', 'structure'] as const).map(tab => (
+        {(['overview', 'leads', 'visits', 'bookings', 'referral fee', 'payouts', 'projects', 'structure'] as const).map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -1090,14 +1090,14 @@ export const ChannelPartnerDetails: React.FC = () => {
                 : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            {tab === 'commission' 
-              ? 'Commission' 
+            {tab === 'referral fee' 
+              ? 'Referral Fee' 
               : tab === 'visits' 
               ? 'Site Visits' 
               : tab === 'payouts' 
               ? 'Payouts' 
               : tab === 'structure' 
-              ? 'Commission Structure' 
+              ? 'Referral Fee Structure' 
               : tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
@@ -1285,10 +1285,10 @@ export const ChannelPartnerDetails: React.FC = () => {
         )}
 
         {/* COMMISSION LEDGER TAB */}
-        {activeTab === 'commission' && (
+        {activeTab === 'referral fee' && (
           <div className="space-y-4 text-left">
             <div className="flex justify-between items-center mb-2">
-              <h4 className="text-xs font-bold text-indigo-650 uppercase tracking-wider">Commission ledger</h4>
+              <h4 className="text-xs font-bold text-indigo-650 uppercase tracking-wider">Referral Fee ledger</h4>
               {isAuthorized && (
                 <button
                   onClick={() => {
@@ -1308,7 +1308,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                   className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  <span>+ Add Commission</span>
+                  <span>+ Add Referral Fee</span>
                 </button>
               )}
             </div>
@@ -1414,7 +1414,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                                       }}
                                       className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xxs font-bold shadow transition-all focus:outline-none"
                                     >
-                                      Pay Commission
+                                      Pay Referral Fee
                                     </button>
                                   )}
                                   {statusLower === 'paid' && (
@@ -1435,7 +1435,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={13} className="py-10 text-center text-slate-400 italic">No commission obligations recorded.</td>
+                      <td colSpan={13} className="py-10 text-center text-slate-400 italic">No referral fee obligations recorded.</td>
                     </tr>
                   )}
                 </tbody>
@@ -1455,7 +1455,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                   className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  <span>+ Record Commission Payout</span>
+                  <span>+ Record Referral Fee Payout</span>
                 </button>
               )}
             </div>
@@ -1494,7 +1494,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={7} className="py-10 text-center text-slate-400 italic">No commission payouts logged.</td>
+                      <td colSpan={7} className="py-10 text-center text-slate-400 italic">No referral fee payouts logged.</td>
                     </tr>
                   )}
                 </tbody>
@@ -1533,7 +1533,7 @@ export const ChannelPartnerDetails: React.FC = () => {
         {activeTab === 'structure' && (
           <div className="space-y-4 text-left">
             <div className="flex justify-between items-center mb-2">
-              <h4 className="text-xs font-bold text-indigo-650 uppercase tracking-wider">Commission Structures</h4>
+              <h4 className="text-xs font-bold text-indigo-650 uppercase tracking-wider">Referral Fee Structures</h4>
               {isAuthorized && (
                 <button
                   onClick={() => {
@@ -1553,7 +1553,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                   className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  <span>+ Add Commission Structure</span>
+                  <span>+ Add Referral Fee Structure</span>
                 </button>
               )}
             </div>
@@ -1605,7 +1605,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={8} className="py-10 text-center text-slate-400 italic">No commission structures assigned.</td>
+                      <td colSpan={8} className="py-10 text-center text-slate-400 italic">No referral fee structures assigned.</td>
                     </tr>
                   )}
                 </tbody>
@@ -1622,7 +1622,7 @@ export const ChannelPartnerDetails: React.FC = () => {
           
           <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-left">
             <div className="bg-emerald-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">Record Commission Payout</span>
+              <span className="font-bold tracking-tight">Record Referral Fee Payout</span>
               <button type="button" onClick={() => setIsPayoutOpen(false)} className="p-1 rounded-lg text-emerald-100 hover:text-white focus:outline-none">
                 <X className="h-5 w-5" />
               </button>
@@ -1638,7 +1638,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                 )}
 
                  <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Select Approved Commission *</label>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Select Approved Referral Fee *</label>
                   <select
                     required
                     value={selectedCommissionId}
@@ -1654,7 +1654,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                     }}
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                   >
-                    <option value="">Select commission obligation...</option>
+                    <option value="">Select referral fee obligation...</option>
                     {commissionsList
                       .filter(c => {
                         const statusLower = c.status?.toLowerCase();
@@ -1783,7 +1783,7 @@ export const ChannelPartnerDetails: React.FC = () => {
             
             <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-left">
               <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-                <span className="font-bold tracking-tight">Approve / Reject Commission</span>
+                <span className="font-bold tracking-tight">Approve / Reject Referral Fee</span>
                 <button type="button" onClick={() => { setIsApproveOpen(false); setSelectedApproveComm(null); }} className="p-1 rounded-lg text-indigo-100 hover:text-white focus:outline-none">
                   <X className="h-5 w-5" />
                 </button>
@@ -1825,7 +1825,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                     </span>
                   </div>
                   <div>
-                    <span className="block text-slate-400 font-bold uppercase tracking-wider text-[10px]">Calculated Commission</span>
+                    <span className="block text-slate-400 font-bold uppercase tracking-wider text-[10px]">Calculated Referral Fee</span>
                     <span className="text-slate-800 font-bold text-indigo-700 font-mono">₹{(selectedApproveComm.commission_amount || 0).toLocaleString('en-IN')}</span>
                   </div>
                 </div>
@@ -1833,7 +1833,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                 {!isRejectMode ? (
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Approved Commission Amount (₹) *</label>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Approved Referral Fee Amount (₹) *</label>
                       <div className="relative">
                         <DollarSign className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
                         <input
@@ -1865,7 +1865,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                         onClick={() => setIsRejectMode(true)}
                         className="px-4 py-2 border border-rose-200 text-rose-700 hover:bg-rose-50 rounded-xl text-xs font-bold transition-all focus:outline-none"
                       >
-                        Reject Commission
+                        Reject Referral Fee
                       </button>
                       <div className="flex space-x-2">
                         <button
@@ -1881,7 +1881,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                           onClick={() => handleApproveAction(parseFloat(approvedAmountInput) || 0, approvalRemarksInput)}
                           className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow transition-all disabled:opacity-50 focus:outline-none"
                         >
-                          {approvalLoading ? 'Processing...' : 'Approve Commission'}
+                          {approvalLoading ? 'Processing...' : 'Approve Referral Fee'}
                         </button>
                       </div>
                     </div>
@@ -1941,7 +1941,7 @@ export const ChannelPartnerDetails: React.FC = () => {
           
           <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-left">
             <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">Add Commission Structure</span>
+              <span className="font-bold tracking-tight">Add Referral Fee Structure</span>
               <button type="button" onClick={() => setIsStructOpen(false)} className="p-1 rounded-lg text-indigo-100 hover:text-white focus:outline-none">
                 <X className="h-5 w-5" />
               </button>
@@ -1999,7 +1999,7 @@ export const ChannelPartnerDetails: React.FC = () => {
 
                 {structType === 'PERCENTAGE' && (
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Commission Percentage (%) *</label>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Referral Fee Percentage (%) *</label>
                     <input
                       type="number"
                       required
@@ -2015,7 +2015,7 @@ export const ChannelPartnerDetails: React.FC = () => {
 
                 {structType === 'FIXED' && (
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Fixed Commission Amount (₹) *</label>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Fixed Referral Fee Amount (₹) *</label>
                     <input
                       type="number"
                       required
@@ -2053,7 +2053,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                       </div>
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Commission Rate (%) *</label>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Referral Fee Rate (%) *</label>
                       <input
                         type="number"
                         required
@@ -2130,7 +2130,7 @@ export const ChannelPartnerDetails: React.FC = () => {
           
           <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-left">
             <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">Add Commission Obligation</span>
+              <span className="font-bold tracking-tight">Add Referral Fee Obligation</span>
               <button type="button" onClick={() => setIsManualCommOpen(false)} className="p-1 rounded-lg text-indigo-100 hover:text-white focus:outline-none">
                 <X className="h-5 w-5" />
               </button>
@@ -2190,7 +2190,7 @@ export const ChannelPartnerDetails: React.FC = () => {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Commission Rate (%)</label>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Referral Fee Rate (%)</label>
                     <input
                       type="number"
                       step="0.0001"
@@ -2208,7 +2208,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Commission Amount (₹) *</label>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Referral Fee Amount (₹) *</label>
                     <input
                       type="number"
                       required
@@ -2260,7 +2260,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                   disabled={manualLoading}
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow disabled:opacity-50 transition-all focus:outline-none"
                 >
-                  {manualLoading ? 'Saving...' : 'Add Commission'}
+                  {manualLoading ? 'Saving...' : 'Add Referral Fee'}
                 </button>
               </div>
             </form>

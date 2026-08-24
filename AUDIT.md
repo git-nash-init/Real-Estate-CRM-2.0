@@ -215,7 +215,6 @@ system activation), since fixing them properly requires the same RLS pass.
 
 ## Not yet done (tracked for subsequent phases per the engagement plan)
 
-- Rename "Commission" -> "Referral Fee" in CP-facing copy.
 - Deactivate-a-channel-partner UI + referrer guard.
 - Lead dedup, 45-day claim window, first-come-first-served, verification codes.
 - WhatsApp gateway (Baileys) + Marketing bulk messaging.
@@ -225,3 +224,24 @@ system activation), since fixing them properly requires the same RLS pass.
 - Attendance + Leave UI (schema already exists, `leave_requests` still needed).
 - Reports (admin-only).
 - Turn on the permission system; remediate the 4 security advisor findings.
+
+## Phase 1.3: "Commission" -> "Referral Fee" rename (this pass)
+
+Renamed every user-facing occurrence of "Commission"/"commission" across
+`ChannelPartnerDetails.tsx`, `ChannelPartners.tsx`, `Payments.tsx`, and
+`Bookings.tsx` (103 lines changed) to "Referral Fee"/"referral fee" — labels,
+tab names, button text, notification/error messages, and JSX text nodes.
+
+Deliberately left unchanged: table names (`cp_commissions`,
+`commission_structures`, `commission_payments`), column names
+(`commission_amount`, `commission_percentage`, ...), TypeScript
+interface/type names (`Commission`, `CommissionStructure`,
+`CommissionPayment`), and JS variable/function identifiers
+(`totalCommission`, `commissionsList`, `handleCreateManualCommission`,
+etc.). Renaming those would touch live database schema and internal code
+structure for no user-visible benefit, and was explicitly out of scope per
+the engagement plan ("table names stay as-is").
+
+Verified via `tsc -b --noEmit`, `npm run build`, and `npm run lint` all
+clean, plus a manual scan confirming no remaining user-facing "Commission"
+text in the four files.

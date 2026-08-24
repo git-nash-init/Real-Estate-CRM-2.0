@@ -213,7 +213,7 @@ export const ChannelPartners: React.FC = () => {
       reportQueryError('Channel Partners: Bookings referral link', err);
     }
 
-    // 4. Fetch Commissions (independent catch)
+    // 4. Fetch Referral Fees (independent catch)
     // FIX: 'commission_obligations' does not exist in the live database —
     // this was the source of the reported 'no obligation' error on this
     // page. The real, populated table is 'cp_commissions' (see AUDIT.md).
@@ -494,7 +494,7 @@ export const ChannelPartners: React.FC = () => {
     setReraValidTo(parseNotesField(cp.notes, 'ValidTo') || cp.rera_valid_to || cp.valid_to || '');
     setPanNumber(cp.pan_number || '');
     setGstNumber(cp.gst_number || '');
-    // NOTE: per-partner/per-project commission rates live in commission_structures
+    // NOTE: per-partner/per-project referral fee rates live in commission_structures
     // (managed on the Channel Partner detail page), not on channel_partners itself.
     // Removed dead commission_type/commission_value/commission_basis/default_commission_*
     // state here — those columns don't exist on the live table and this block never
@@ -594,7 +594,7 @@ export const ChannelPartners: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div>
           <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Channel Partners</h2>
-          <p className="text-slate-500 text-xs mt-1">Manage channel partners, referrals, bookings and commissions.</p>
+          <p className="text-slate-500 text-xs mt-1">Manage channel partners, referrals, bookings and referral fees.</p>
         </div>
         <div className="flex items-center space-x-2 flex-wrap">
           <button
@@ -642,7 +642,7 @@ export const ChannelPartners: React.FC = () => {
           <span className="block text-md font-bold text-slate-950 mt-1 truncate">₹{totalSalesValue.toLocaleString('en-IN')}</span>
         </div>
         <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm">
-          <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Total Commission</span>
+          <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Total Referral Fee</span>
           <span className="block text-md font-bold text-emerald-600 mt-1 truncate">₹{totalCommission.toLocaleString('en-IN')}</span>
         </div>
         <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm">
@@ -709,7 +709,7 @@ export const ChannelPartners: React.FC = () => {
                     <th className="py-3.5 px-6">Phone</th>
                     <th className="py-3.5 px-6">Email</th>
                     <th className="py-3.5 px-6">RERA Number</th>
-                    <th className="py-3.5 px-6">Commission Structure</th>
+                    <th className="py-3.5 px-6">Referral Fee Structure</th>
                     <th className="py-3.5 px-6">Status</th>
                     <th className="py-3.5 px-6 text-right">Actions</th>
                   </tr>
