@@ -216,7 +216,6 @@ system activation), since fixing them properly requires the same RLS pass.
 
 ## Not yet done (tracked for subsequent phases per the engagement plan)
 
-- Marketing bulk messaging UI (the sending infrastructure is ready — see Phase 3 below).
 - CP Outreach form (ported from the reference CRM).
 - Telecaller call tracking.
 - Tasks UI (schema already exists).
@@ -336,3 +335,18 @@ client shows at site visit.
 
 **Not yet done:** the Marketing page itself (bulk campaign builder) — the
 sending infrastructure it needs already exists and is proven working.
+
+## Phase 4.1: Marketing — WhatsApp bulk messaging (this pass)
+
+New `src/pages/Marketing.tsx` replaces the `PlaceholderPage` at `/marketing`.
+Audience builder filters `leads` by project, status, and "CP-referred
+only"; live match count shown before sending. Message template supports a
+`{{name}}` merge field. On submit: creates a `campaigns` row
+(`platform=whatsapp`) and bulk-inserts one `whatsapp_outbox` row per
+matched lead, tagged with `campaign_id` and `lead_id`. The gateway built in
+Phase 3 picks these up and sends them, throttled.
+
+Delivery dashboard aggregates `whatsapp_outbox` status counts
+(queued/sending/sent/failed) per campaign — this reads directly from the
+outbox rather than `campaigns`' own metric columns, since those are for ad
+spend, not messaging delivery.

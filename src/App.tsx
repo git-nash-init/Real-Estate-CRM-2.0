@@ -16,6 +16,7 @@ import { Payments } from './pages/Payments';
 import { ChannelPartners } from './pages/ChannelPartners';
 import { ChannelPartnerDetails } from './pages/ChannelPartnerDetails';
 import { Employees } from './pages/Employees';
+import { Marketing } from './pages/Marketing';
 
 function App() {
   return (
@@ -48,7 +49,7 @@ function App() {
             <Route path="payments" element={<Payments />} />
             <Route path="channel-partners" element={<ChannelPartners />} />
             <Route path="channel-partners/:id" element={<ChannelPartnerDetails />} />
-            <Route path="marketing" element={<PlaceholderPage />} />
+            <Route path="marketing" element={<Marketing />} />
             <Route path="employees" element={<Employees />} />
             <Route path="attendance" element={<PlaceholderPage />} />
             <Route path="tasks" element={<PlaceholderPage />} />
