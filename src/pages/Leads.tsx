@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { reportQueryError } from '../services/queryLogger';
@@ -17,7 +17,10 @@ import {
   Phone,
   PhoneCall,
   Bookmark,
-  FileText
+  FileText,
+  Play,
+  Square,
+  MapPin
 } from 'lucide-react';
 
 interface Lead {
@@ -68,10 +71,22 @@ export const Leads: React.FC = () => {
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | null>(null);
   const [isLogCallOpen, setIsLogCallOpen] = useState(false);
   const [callOutcome, setCallOutcome] = useState('connected');
-  const [callDuration, setCallDuration] = useState('');
   const [callNotes, setCallNotes] = useState('');
   const [callSubmitting, setCallSubmitting] = useState(false);
   const [callError, setCallError] = useState<string | null>(null);
+
+  // Anti-fraud call timing: duration is measured by the app (Start Call /
+  // End Call), never hand-typed, so a telecaller can't just enter a fake
+  // number. GPS is captured best-effort when the call starts. Neither of
+  // these proves the call actually happened over the phone — only a real
+  // telephony/dialer integration can do that — but together they stop
+  // casual fabrication and make bulk fake logging visible in Reports.
+  const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
+  const [callEndedAt, setCallEndedAt] = useState<number | null>(null);
+  const [callElapsedSec, setCallElapsedSec] = useState(0);
+  const [callLocation, setCallLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [callLocationError, setCallLocationError] = useState<string | null>(null);
+  const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Create Lead modal & notification states
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -259,15 +274,55 @@ export const Leads: React.FC = () => {
 
   const openLogCall = () => {
     setCallOutcome('connected');
-    setCallDuration('');
     setCallNotes('');
     setCallError(null);
+    setCallStartedAt(null);
+    setCallEndedAt(null);
+    setCallElapsedSec(0);
+    setCallLocation(null);
+    setCallLocationError(null);
     setIsLogCallOpen(true);
+  };
+
+  // Stop the running interval (call ended, modal closed, or component unmounts).
+  useEffect(() => {
+    return () => {
+      if (callTimerRef.current) clearInterval(callTimerRef.current);
+    };
+  }, []);
+
+  const startCall = () => {
+    const startedAt = Date.now();
+    setCallStartedAt(startedAt);
+    setCallEndedAt(null);
+    setCallElapsedSec(0);
+    callTimerRef.current = setInterval(() => {
+      setCallElapsedSec(Math.round((Date.now() - startedAt) / 1000));
+    }, 1000);
+
+    // Best-effort GPS capture at call start — never blocks the call itself.
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setCallLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => setCallLocationError('Location unavailable (permission denied or not supported).'),
+        { timeout: 8000 }
+      );
+    } else {
+      setCallLocationError('Location not supported by this browser.');
+    }
+  };
+
+  const endCall = () => {
+    if (callTimerRef.current) {
+      clearInterval(callTimerRef.current);
+      callTimerRef.current = null;
+    }
+    setCallEndedAt(Date.now());
   };
 
   const handleLogCall = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedLead) return;
+    if (!selectedLead || !callStartedAt || !callEndedAt) return;
     setCallSubmitting(true);
     setCallError(null);
     try {
@@ -277,10 +332,20 @@ export const Leads: React.FC = () => {
         channel_partner_id: selectedLead.channel_partner_id || null,
         direction: 'outbound',
         outcome: callOutcome,
-        duration_seconds: callDuration ? Number(callDuration) : null,
+        duration_seconds: Math.max(0, Math.round((callEndedAt - callStartedAt) / 1000)),
         notes: callNotes.trim() || null,
+        called_at: new Date(callStartedAt).toISOString(),
+        latitude: callLocation?.lat ?? null,
+        longitude: callLocation?.lng ?? null,
+        location_captured_at: callLocation ? new Date().toISOString() : null,
       }]);
       if (error) throw error;
+
+      // Leave a corroborating trace on the lead itself, same as Followups
+      // already does — a call that never touched last_contact_at is one of
+      // the fraud signals flagged in Reports.
+      await supabase.from('leads').update({ last_contact_at: new Date().toISOString() }).eq('id', selectedLead.id);
+
       setNotification({ type: 'success', message: 'Call logged.' });
       setIsLogCallOpen(false);
     } catch (err: any) {
@@ -943,14 +1008,58 @@ export const Leads: React.FC = () => {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Duration (seconds)</label>
-                    <input
-                      type="number"
-                      min={0}
-                      value={callDuration}
-                      onChange={(e) => setCallDuration(e.target.value)}
-                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
-                    />
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Call Timer</label>
+                    <div className="rounded-lg border border-slate-200 px-3 py-3 flex items-center justify-between bg-slate-50">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-lg font-mono font-bold ${callStartedAt && !callEndedAt ? 'text-indigo-600' : 'text-slate-700'}`}>
+                          {String(Math.floor(callElapsedSec / 60)).padStart(2, '0')}:{String(callElapsedSec % 60).padStart(2, '0')}
+                        </span>
+                        {callStartedAt && !callEndedAt && (
+                          <span className="flex items-center gap-1 text-xxs font-semibold text-indigo-600">
+                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 animate-pulse" /> Live
+                          </span>
+                        )}
+                        {callEndedAt && (
+                          <span className="text-xxs font-semibold text-emerald-600">Call ended</span>
+                        )}
+                      </div>
+                      {!callStartedAt ? (
+                        <button
+                          type="button"
+                          onClick={startCall}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold"
+                        >
+                          <Play className="h-3.5 w-3.5" /> Start Call
+                        </button>
+                      ) : !callEndedAt ? (
+                        <button
+                          type="button"
+                          onClick={endCall}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold"
+                        >
+                          <Square className="h-3.5 w-3.5" /> End Call
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={startCall}
+                          className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-600 hover:bg-white rounded-lg text-xs font-semibold"
+                        >
+                          <Play className="h-3.5 w-3.5" /> Redo
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xxs text-slate-400 mt-1.5">Duration is timed automatically and can't be typed in — this keeps the call log honest.</p>
+                    <div className="flex items-center gap-1 mt-1.5 text-xxs">
+                      <MapPin className="h-3 w-3 text-slate-400 flex-shrink-0" />
+                      {callLocation ? (
+                        <span className="text-emerald-600 font-medium">Location captured</span>
+                      ) : callLocationError ? (
+                        <span className="text-amber-600">{callLocationError}</span>
+                      ) : (
+                        <span className="text-slate-400">Location will be captured when you start the call.</span>
+                      )}
+                    </div>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Notes</label>
@@ -973,7 +1082,8 @@ export const Leads: React.FC = () => {
                   </button>
                   <button
                     type="submit"
-                    disabled={callSubmitting}
+                    disabled={callSubmitting || !callStartedAt || !callEndedAt}
+                    title={!callStartedAt || !callEndedAt ? 'Start and end the call timer first' : undefined}
                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm disabled:opacity-50"
                   >
                     {callSubmitting ? 'Saving...' : 'Save Call Log'}

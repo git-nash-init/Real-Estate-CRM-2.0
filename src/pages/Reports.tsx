@@ -29,8 +29,17 @@ interface Booking {
 interface CallLog {
   id: string;
   employee_id: string | null;
+  lead_id: string | null;
   outcome: string | null;
   duration_seconds: number | null;
+  called_at: string | null;
+}
+
+interface AttendanceRow {
+  employee_id: string | null;
+  attendance_date: string | null;
+  check_in: string | null;
+  check_out: string | null;
 }
 
 const leadStatuses = [
@@ -54,6 +63,7 @@ export const Reports: React.FC = () => {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [callLogs, setCallLogs] = useState<CallLog[]>([]);
+  const [attendanceRows, setAttendanceRows] = useState<AttendanceRow[]>([]);
   const [employeesMap, setEmployeesMap] = useState<Map<string, string>>(new Map());
   const [profilesMap, setProfilesMap] = useState<Map<string, string>>(new Map());
 
@@ -84,11 +94,21 @@ export const Reports: React.FC = () => {
     try {
       const { data, error } = await supabase
         .from('call_logs')
-        .select('id, employee_id, outcome, duration_seconds');
+        .select('id, employee_id, lead_id, outcome, duration_seconds, called_at');
       if (error) reportQueryError('Reports: call logs', error);
       else setCallLogs(data || []);
     } catch (err) {
       reportQueryError('Reports: call logs', err);
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('attendance')
+        .select('employee_id, attendance_date, check_in, check_out');
+      if (error) reportQueryError('Reports: attendance', error);
+      else setAttendanceRows(data || []);
+    } catch (err) {
+      reportQueryError('Reports: attendance', err);
     }
 
     try {
@@ -186,6 +206,85 @@ export const Reports: React.FC = () => {
       }))
       .sort((a, b) => b.totalCalls - a.totalCalls);
   }, [callLogs, employeesMap]);
+
+  // ---- Telecaller anti-fraud signals ----
+  // These don't prove a call happened over the phone — only a real
+  // telephony/dialer integration can do that — but they surface the
+  // patterns a telecaller faking logs would leave behind: too many calls
+  // logged too fast, calls logged while off the clock, and "connected"
+  // calls whose lead was never actually progressed. See WALKTHROUGH.md for
+  // the honest, plain-language version of what this does and doesn't catch.
+  const fraudSignals = useMemo(() => {
+    const byEmployee = new Map<string, CallLog[]>();
+    for (const c of callLogs) {
+      if (!c.employee_id || !c.called_at) continue;
+      const arr = byEmployee.get(c.employee_id) || [];
+      arr.push(c);
+      byEmployee.set(c.employee_id, arr);
+    }
+
+    const attendanceByEmployeeDate = new Map<string, AttendanceRow>();
+    for (const a of attendanceRows) {
+      if (!a.employee_id || !a.attendance_date) continue;
+      attendanceByEmployeeDate.set(`${a.employee_id}__${a.attendance_date}`, a);
+    }
+
+    const leadStatusById = new Map(leads.map((l) => [l.id, l.status]));
+
+    // Signal 1: burst logging — 5+ calls logged within any 10-minute
+    // window by the same employee.
+    const burstFlags: { employeeId: string; count: number; windowStart: string }[] = [];
+    for (const [empId, calls] of byEmployee) {
+      const sorted = [...calls].sort((a, b) => new Date(a.called_at!).getTime() - new Date(b.called_at!).getTime());
+      for (let i = 0; i < sorted.length; i++) {
+        const windowStart = new Date(sorted[i].called_at!).getTime();
+        let count = 1;
+        for (let j = i + 1; j < sorted.length; j++) {
+          if (new Date(sorted[j].called_at!).getTime() - windowStart <= 10 * 60 * 1000) count++;
+          else break;
+        }
+        if (count >= 5) {
+          burstFlags.push({ employeeId: empId, count, windowStart: sorted[i].called_at! });
+          break; // one flag per employee is enough to surface the issue
+        }
+      }
+    }
+
+    // Signal 2: calls logged outside the employee's checked-in attendance
+    // window for that day (or with no attendance record at all that day).
+    const outsideAttendance: { employeeId: string; calledAt: string }[] = [];
+    for (const [empId, calls] of byEmployee) {
+      for (const c of calls) {
+        const date = c.called_at!.slice(0, 10);
+        const att = attendanceByEmployeeDate.get(`${empId}__${date}`);
+        if (!att || !att.check_in) {
+          outsideAttendance.push({ employeeId: empId, calledAt: c.called_at! });
+          continue;
+        }
+        const calledAtMs = new Date(c.called_at!).getTime();
+        const checkInMs = new Date(att.check_in).getTime();
+        const checkOutMs = att.check_out ? new Date(att.check_out).getTime() : Infinity;
+        if (calledAtMs < checkInMs || calledAtMs > checkOutMs) {
+          outsideAttendance.push({ employeeId: empId, calledAt: c.called_at! });
+        }
+      }
+    }
+
+    // Signal 3: marked "connected" but the lead is still sitting at "new" —
+    // i.e. the call was never actually followed through.
+    const connectedNoProgress = callLogs.filter(
+      (c) => c.outcome === 'connected' && c.lead_id && leadStatusById.get(c.lead_id) === 'new'
+    );
+
+    return {
+      burstFlags: burstFlags.map((f) => ({ ...f, name: employeesMap.get(f.employeeId) || 'Unknown' })),
+      outsideAttendanceCount: outsideAttendance.length,
+      outsideAttendanceByEmployee: Array.from(
+        outsideAttendance.reduce((map, r) => map.set(r.employeeId, (map.get(r.employeeId) || 0) + 1), new Map<string, number>())
+      ).map(([empId, count]) => ({ name: employeesMap.get(empId) || 'Unknown', count })),
+      connectedNoProgressCount: connectedNoProgress.length,
+    };
+  }, [callLogs, attendanceRows, leads, employeesMap]);
 
   if (!isAdmin) {
     return (
@@ -350,6 +449,56 @@ export const Reports: React.FC = () => {
         ) : (
           <p className="text-xs text-slate-400 italic">No calls logged yet. Log calls from the Leads page to populate this report.</p>
         )}
+      </div>
+
+      {/* Telecaller anti-fraud signals */}
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
+        <h3 className="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
+          <ShieldAlert className="h-4 w-4 text-amber-500" /> Call Log Fraud Signals
+        </h3>
+        <p className="text-xxs text-slate-400 mb-4">
+          These flag patterns worth checking, not proof of wrongdoing — a burst of real calls during a busy hour is possible too. See the Walkthrough guide for what this can and can't catch.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="border border-slate-100 rounded-xl p-4">
+            <p className="text-xs font-bold text-slate-700 mb-2">Burst Logging</p>
+            {fraudSignals.burstFlags.length > 0 ? (
+              <ul className="space-y-1.5">
+                {fraudSignals.burstFlags.map((f, i) => (
+                  <li key={i} className="text-xxs text-rose-700 bg-rose-50 border border-rose-100 rounded-lg px-2.5 py-1.5">
+                    <span className="font-semibold">{f.name}</span> logged {f.count} calls within 10 minutes starting {new Date(f.windowStart).toLocaleString('en-IN')}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xxs text-slate-400 italic">No unusually fast bursts detected.</p>
+            )}
+          </div>
+          <div className="border border-slate-100 rounded-xl p-4">
+            <p className="text-xs font-bold text-slate-700 mb-2">Outside Attendance Window</p>
+            {fraudSignals.outsideAttendanceCount > 0 ? (
+              <ul className="space-y-1.5">
+                {fraudSignals.outsideAttendanceByEmployee.map((r, i) => (
+                  <li key={i} className="text-xxs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5">
+                    <span className="font-semibold">{r.name}</span>: {r.count} call{r.count === 1 ? '' : 's'} logged with no matching check-in
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xxs text-slate-400 italic">All logged calls fall within a checked-in day.</p>
+            )}
+          </div>
+          <div className="border border-slate-100 rounded-xl p-4">
+            <p className="text-xs font-bold text-slate-700 mb-2">Connected, No Progress</p>
+            {fraudSignals.connectedNoProgressCount > 0 ? (
+              <p className="text-xxs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5">
+                {fraudSignals.connectedNoProgressCount} call{fraudSignals.connectedNoProgressCount === 1 ? '' : 's'} marked "Connected" but the lead is still sitting at "New" status.
+              </p>
+            ) : (
+              <p className="text-xxs text-slate-400 italic">Every connected call has a lead that moved forward.</p>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
