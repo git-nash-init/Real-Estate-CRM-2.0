@@ -17,7 +17,7 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | 1 | "No obligation" error on Channel Partners list | Queried non-existent `commission_obligations` table | Repointed to real `cp_commissions` table | `ChannelPartners.tsx` | Done | — | — |
 | 2 | Blank tower names on CP detail page | Queried non-existent `towers` table | Repointed to real `project_towers` table | `ChannelPartnerDetails.tsx` | Done | — | — |
 | 3 | 37 silently swallowed Supabase errors across 8 pages | Errors logged to console only, rendered as empty state | Central `reportQueryError` + visible dev overlay | 8 page files, new `queryLogger.ts`, `QueryFailureOverlay.tsx` | Done | — | — |
-| 4 | Channel Partner commission rate edit is non-functional | Reads columns that do not exist on `channel_partners` (dead-migration leftovers) | — | `ChannelPartners.tsx` | Pending | — | — |
+| 4 | Dead code cleanup: vestigial commission fields on CP list page | Leftover state/fields from dead migrations, never wired to any input or the submit payload — not a live bug, just clutter | Removed dead state, population blocks, interface fields, and the unused-var suppression hack | `ChannelPartners.tsx` | Done | — | — |
 | 5 | Booking cancellation UI misleads users about inventory release; no token refund/loss log | UI text out of sync with a real DB trigger; feature not built | — | `Bookings.tsx` | Pending | — | — |
 | 6 | Orphaned `commission_payouts` table (RLS enabled, no policies) | Leftover/duplicate table | — | DB migration | Pending | — | — |
 

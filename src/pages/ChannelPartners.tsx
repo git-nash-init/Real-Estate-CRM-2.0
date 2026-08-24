@@ -42,11 +42,6 @@ interface ChannelPartner {
   rera_valid_to: string | null;
   pan_number: string | null;
   gst_number: string | null;
-  commission_type: string | null;
-  commission_value: number | null;
-  commission_basis: string | null;
-  default_commission_rate: number | null;
-  default_commission_amount: number | null;
   status: string | null;
   notes: string | null;
   created_at: string;
@@ -143,7 +138,6 @@ export const ChannelPartners: React.FC = () => {
   const [confirmToggleCp, setConfirmToggleCp] = useState<ChannelPartner | null>(null);
 
   // Form Field states
-  const [partnerType, setPartnerType] = useState('CHANNEL PARTNER');
   const [partnerName, setPartnerName] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [contactPerson, setContactPerson] = useState('');
@@ -158,10 +152,6 @@ export const ChannelPartners: React.FC = () => {
   const [reraValidTo, setReraValidTo] = useState('');
   const [panNumber, setPanNumber] = useState('');
   const [gstNumber, setGstNumber] = useState('');
-  const [commissionType, setCommissionType] = useState('PERCENTAGE');
-  const [commissionRate, setCommissionRate] = useState('2');
-  const [fixedCommissionAmount, setFixedCommissionAmount] = useState('0');
-  const [commissionBasis, setCommissionBasis] = useState('CONSIDERATION_AMOUNT');
   const [status, setStatus] = useState('active');
   const [notes, setNotes] = useState('');
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
@@ -466,7 +456,6 @@ export const ChannelPartners: React.FC = () => {
   };
 
   const resetFormFields = () => {
-    setPartnerType('CHANNEL PARTNER');
     setPartnerName('');
     setCompanyName('');
     setContactPerson('');
@@ -481,10 +470,6 @@ export const ChannelPartners: React.FC = () => {
     setReraValidTo('');
     setPanNumber('');
     setGstNumber('');
-    setCommissionType('PERCENTAGE');
-    setCommissionRate('2');
-    setFixedCommissionAmount('0');
-    setCommissionBasis('CONSIDERATION_AMOUNT');
     setStatus('active');
     setNotes('');
     setSelectedProjects([]);
@@ -492,7 +477,6 @@ export const ChannelPartners: React.FC = () => {
 
   const openEditModal = (cp: ChannelPartner) => {
     setEditingPartner(cp);
-    setPartnerType(cp.partner_type || 'CHANNEL PARTNER');
     setPartnerName(cp.name || '');
     setCompanyName(parseNotesField(cp.notes, 'Company') || cp.company_name || '');
     setContactPerson(parseNotesField(cp.notes, 'Contact') || cp.contact_person || '');
@@ -510,17 +494,11 @@ export const ChannelPartners: React.FC = () => {
     setReraValidTo(parseNotesField(cp.notes, 'ValidTo') || cp.rera_valid_to || cp.valid_to || '');
     setPanNumber(cp.pan_number || '');
     setGstNumber(cp.gst_number || '');
-    setCommissionType(cp.commission_type || 'PERCENTAGE');
-    
-    if (cp.commission_type === 'FIXED') {
-      setFixedCommissionAmount(cp.default_commission_amount?.toString() || cp.commission_value?.toString() || '0');
-      setCommissionRate('0');
-    } else {
-      setCommissionRate(cp.default_commission_rate?.toString() || cp.commission_value?.toString() || '2');
-      setFixedCommissionAmount('0');
-    }
-
-    setCommissionBasis(cp.commission_basis || 'CONSIDERATION_AMOUNT');
+    // NOTE: per-partner/per-project commission rates live in commission_structures
+    // (managed on the Channel Partner detail page), not on channel_partners itself.
+    // Removed dead commission_type/commission_value/commission_basis/default_commission_*
+    // state here — those columns don't exist on the live table and this block never
+    // rendered an input or wrote anywhere; see AUDIT.md.
     setStatus(cp.status || 'active');
     const notesMatch = cp.notes?.match(/Notes:\s*([\s\S]*)/);
     setNotes(notesMatch ? notesMatch[1].trim() : cp.notes || '');
@@ -592,11 +570,6 @@ export const ChannelPartners: React.FC = () => {
       return s === 'pending' || s === 'approved' || s === 'payable' || s === 'partially_paid';
     })
     .reduce((sum, c) => sum + (c.commission_amount || 0), 0);
-
-  // Suppress unused compiler warnings for obsolete states
-  if (partnerType && commissionBasis && commissionType && commissionRate && fixedCommissionAmount) {
-    // Read states
-  }
 
   return (
     <div className="space-y-6">

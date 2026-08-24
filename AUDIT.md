@@ -59,29 +59,26 @@ duplicate ones already there. **Treat every `.sql` file in this repo as
 unverified until cross-checked against the live schema — several describe a
 database that does not exist.**
 
-### A newly discovered bug: Channel Partner commission editing is non-functional
+### Dead code found and removed: vestigial commission fields on the CP list page
 
-`ChannelPartners.tsx`'s `ChannelPartner` interface (lines 21-51) includes
-`commission_type`, `commission_value`, `default_commission_rate`,
-`default_commission_amount`, `partner_name`, `phone`, `partner_type`,
-`contact_person` — **none of these columns exist on the live `channel_partners`
-table.** The app already has defensive fallbacks for some (`cp.phone ||
-cp.mobile`), which shows a previous dev partially noticed this — but the
-commission fields have no fallback:
+`ChannelPartners.tsx`'s `ChannelPartner` interface previously included
+`commission_type`, `commission_value`, `commission_basis`,
+`default_commission_rate`, `default_commission_amount`, and a `partnerType`
+form state — none of these columns exist on the live `channel_partners`
+table (they're leftovers from the dead migrations, see above). On closer
+inspection **these were not a live, user-facing bug**: the state was
+populated when opening the edit modal and reset when it closed, but was never
+rendered as an input anywhere and never included in the submit payload —
+pure dead code with no UI surface, not a form that silently discards what a
+user types. The real per-partner/per-project commission rate is correctly
+read and written via the `commission_structures` table on the Channel
+Partner *detail* page's "Add Structure" control, which already works.
 
-```ts
-setCommissionType(cp.commission_type || 'PERCENTAGE');          // always 'PERCENTAGE'
-setFixedCommissionAmount(cp.default_commission_amount?.toString() || cp.commission_value?.toString() || '0'); // always '0'
-setCommissionRate(cp.default_commission_rate?.toString() || cp.commission_value?.toString() || '2');           // always '2'
-```
-
-Because those columns do not exist, `cp.commission_type` etc. are always
-`undefined` at runtime, so the edit form **always resets to the hardcoded
-defaults** regardless of what is actually configured for that partner. The
-real per-partner/per-project rate lives in the `commission_structures` table
-(already queried correctly on the *detail* page), not on `channel_partners`
-itself. **Not fixed in this pass — flagged for the next repair session**
-(rewire this form to read/write `commission_structures` instead).
+**Fixed in this pass:** removed the dead state, the dead `resetFormFields`
+and `openEditModal` population blocks, the unused interface fields, and the
+`// Suppress unused compiler warnings` hack that existed only to keep the
+compiler quiet about them. No behavior change for users — this is cleanup,
+not a functional fix.
 
 ### Type-check against the real schema surfaced ~93 further mismatches
 
@@ -179,7 +176,7 @@ system activation), since fixing them properly requires the same RLS pass.
 | Channel Partners — detail: Referral Fees (Commissions) tab | Working | `cp_commissions`, real data |
 | Channel Partners — detail: Payouts tab | Working | `cp_commission_payouts`, real data |
 | Channel Partners — detail: Towers lookup | Fixed this pass | Was broken (missing table) |
-| Channel Partners — commission rate edit (list page modal) | Broken, not yet fixed | Silently reads non-existent columns, see above |
+| Channel Partners — commission rate edit (list page modal) | Dead code removed this pass | Never had a live UI surface; real rates are set via commission_structures on the detail page |
 | Bookings — create/confirm | Working | Validated by live triggers |
 | Bookings — cancel (confirmed) | Misleading, not yet fixed | UI claims unit stays locked; DB trigger releases it anyway. No token refund or loss log yet. |
 | Marketing | Placeholder | `PlaceholderPage.tsx` |
@@ -191,7 +188,6 @@ system activation), since fixing them properly requires the same RLS pass.
 
 ## Not yet done (tracked for subsequent phases per the engagement plan)
 
-- Fix the Channel Partner commission-edit bug found above.
 - Booking cancellation: correct the false UI warning, remove the duplicate
   manual inventory release, add token refund + loss log.
 - Rename "Commission" -> "Referral Fee" in CP-facing copy.
