@@ -30,7 +30,7 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | 3 | Lead integrity: dedup, 45-day claim window, first-come-first-served, verification codes | Trigger-based dedup (existing test-data duplicates made a hard UNIQUE index unsafe to add), cp_leads claim lifecycle, daily pg_cron expiry job. Verification code generated/stored now; WhatsApp delivery lands with the gateway (Phase 3/4) | `Leads.tsx`, 2 migrations | Done (codes not yet sent) | — | — |
 | 4 | WhatsApp gateway (Baileys) | Standalone service, QR pairing (verified live against real WhatsApp servers), Supabase-persisted session, throttled outbox worker, HTTP API | New `whatsapp-gateway/` folder, 2 migrations | Done — needs client to provide Supabase service_role key + pick a host at deploy time | — | — |
 | 5 | Marketing — WhatsApp bulk messaging | Audience builder (project/status/CP-referred filters), {{name}} merge field, live match count, delivery dashboard reading real outbox status | New `Marketing.tsx`, `App.tsx` route wired | Done | — | — |
-| 6 | CP Outreach form | Ported from reference CRM | New `CPOutreach.tsx` + `cp_outreach` table | Pending | — | — |
+| 6 | CP Outreach form | Ported field-for-field from the reference CRM, adapted to this project's live channel_partners schema (company_name/name vs the reference's channel_partner_firm_name); role-driven SM selector; GPS capture | New `CPOutreach.tsx` + `cp_outreach` table, sidebar nav item, route | Done | — | — |
 | 7 | Telecaller call tracking | Call logging + admin analytics | New `call_logs` table, Leads/Follow-ups hooks, Reports | Pending | — | — |
 | 8 | Tasks (create, assign, notify, status tracking) | Uses existing `tasks` + `notifications` tables | New `Tasks.tsx` | Pending | — | — |
 | 9 | Attendance + Leave management | GPS check-in/out (existing schema), leave approval workflow | New `Attendance.tsx` + `leave_requests` table | Pending | — | — |
@@ -46,6 +46,7 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | `add_lead_phone_dedup_and_cp_claim_fields` | Trigger-based lead phone dedup (no existing data touched); added claim_expires_at/verification_code/verified_at to cp_leads. | Applied |
 | `add_cp_lead_claim_expiry_job` | pg_cron daily job expiring lapsed CP lead claims and clearing attribution. | Applied |
 | `add_whatsapp_gateway_tables` | New `whatsapp_outbox` (send queue) and `whatsapp_auth_state` (session persistence) tables. | Applied |
+| `add_cp_outreach_table` | New `cp_outreach` table for field-visit logging. | Applied |
 
 ## 6. Infrastructure
 

@@ -23,6 +23,7 @@ import {
   Menu,
   X,
   Building,
+  Handshake,
   ChevronDown,
   Search,
   Bell
@@ -45,6 +46,7 @@ export const AppLayout: React.FC = () => {
     { name: 'Bookings', path: '/bookings', icon: CalendarCheck },
     { name: 'Payments', path: '/payments', icon: CreditCard },
     { name: 'Channel Partners', path: '/channel-partners', icon: Users },
+    { name: 'CP Outreach', path: '/cp-outreach', icon: Handshake },
     { name: 'Marketing', path: '/marketing', icon: Megaphone },
     { name: 'Employees', path: '/employees', icon: Briefcase },
     { name: 'Attendance', path: '/attendance', icon: ClipboardCheck },

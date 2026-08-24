@@ -216,7 +216,6 @@ system activation), since fixing them properly requires the same RLS pass.
 
 ## Not yet done (tracked for subsequent phases per the engagement plan)
 
-- CP Outreach form (ported from the reference CRM).
 - Telecaller call tracking.
 - Tasks UI (schema already exists).
 - Attendance + Leave UI (schema already exists, `leave_requests` still needed).
@@ -350,3 +349,31 @@ Delivery dashboard aggregates `whatsapp_outbox` status counts
 (queued/sending/sent/failed) per campaign — this reads directly from the
 outbox rather than `campaigns`' own metric columns, since those are for ad
 spend, not messaging delivery.
+
+## Phase 4.2: CP Outreach form (this pass)
+
+New `src/pages/CPOutreach.tsx` + `cp_outreach` table, ported field-for-field
+from the reference CRM (`CRM/src/pages/CPOutreach.jsx`) and rewritten in
+TS/Tailwind to match this project's conventions. Adapted to the live
+schema: the reference table used `channel_partner_firm_name`; this
+project's `channel_partners` uses `company_name`/`name`, so the autosuggest
+and exact-match auto-fill match against both.
+
+Sourcing Manager selector is role-driven (employees joined through
+`user_roles` -> `roles.name = 'sourcing_manager'`), not free-text, with an
+"Other" fallback for people not yet in the system as a real employee
+record — same pattern the reference used for its equivalent field.
+Preserved two behaviours from the reference's own code comments: the
+"Other" value is a UI sentinel that never reaches the `sourcing_manager_id`
+foreign key, and `cp_outreach` is deliberately exempt from the Phase 2 lead
+phone-dedup trigger (it only applies to `leads`, not this table) since
+Fresh/Re-visit means repeat contact with the same CP is expected, not a
+duplicate.
+
+GPS location capture on submit (separate from the free-text Location
+field) confirms the logger was actually on-site. New sidebar nav item
+"CP Outreach" added under Channel Partners.
+
+Verified with a rolled-back SQL dry run confirming the insert shape
+(including the `leads_source_active_in` array column) matches the live
+schema exactly.

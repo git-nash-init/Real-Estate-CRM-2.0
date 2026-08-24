@@ -897,6 +897,88 @@ export type Database = {
           },
         ]
       }
+      cp_outreach: {
+        Row: {
+          channel_partner_id: string | null
+          cp_contact_number: string
+          cp_firm_name: string
+          cp_name: string
+          cp_type: string
+          created_at: string
+          id: string
+          leads_source_active_in: string[]
+          live_location: string | null
+          location: string
+          logged_by: string | null
+          meet_date: string
+          meeting_done: string
+          meeting_remarks: string | null
+          sourcing_manager_id: string | null
+          sourcing_manager_other: string | null
+          updated_at: string
+        }
+        Insert: {
+          channel_partner_id?: string | null
+          cp_contact_number: string
+          cp_firm_name: string
+          cp_name: string
+          cp_type: string
+          created_at?: string
+          id?: string
+          leads_source_active_in?: string[]
+          live_location?: string | null
+          location: string
+          logged_by?: string | null
+          meet_date: string
+          meeting_done: string
+          meeting_remarks?: string | null
+          sourcing_manager_id?: string | null
+          sourcing_manager_other?: string | null
+          updated_at?: string
+        }
+        Update: {
+          channel_partner_id?: string | null
+          cp_contact_number?: string
+          cp_firm_name?: string
+          cp_name?: string
+          cp_type?: string
+          created_at?: string
+          id?: string
+          leads_source_active_in?: string[]
+          live_location?: string | null
+          location?: string
+          logged_by?: string | null
+          meet_date?: string
+          meeting_done?: string
+          meeting_remarks?: string | null
+          sourcing_manager_id?: string | null
+          sourcing_manager_other?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cp_outreach_channel_partner_id_fkey"
+            columns: ["channel_partner_id"]
+            isOneToOne: false
+            referencedRelation: "channel_partners"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cp_outreach_logged_by_fkey"
+            columns: ["logged_by"]
+            isOneToOne: false
+            referencedRelation: "employees"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cp_outreach_sourcing_manager_id_fkey"
+            columns: ["sourcing_manager_id"]
+            isOneToOne: false
+            referencedRelation: "employees"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       documents: {
         Row: {
           created_at: string
