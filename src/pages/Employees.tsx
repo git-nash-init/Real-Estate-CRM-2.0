@@ -81,6 +81,20 @@ const ROLES: UserRole[] = [
   'receptionist'
 ];
 
+// Cryptographically random password for newly auto-created accounts.
+// Replaces the previous hardcoded 'TempPassword123!' used for every
+// account, which was visible in source control and, combined with the
+// predictable {employee_code}@estatecrm.internal fallback email, meant
+// anyone who knew or guessed an employee code could log in as them.
+// Shown once to the admin on screen; never logged or stored — the account
+// is also flagged must_change_password so it can't be used long-term.
+function generateRandomPassword(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%';
+  const bytes = new Uint32Array(14);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => chars[b % chars.length]).join('');
+}
+
 export const Employees: React.FC = () => {
   // Query & state filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -113,6 +127,9 @@ export const Employees: React.FC = () => {
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  // One-time credential reveal after creating a new account — shown once,
+  // never persisted or logged, so the admin must copy it now to hand off.
+  const [newAccountCredentials, setNewAccountCredentials] = useState<{ email: string; password: string; syntheticEmail: boolean } | null>(null);
 
   // Employee details sub-resources states
   const [assignedLeads, setAssignedLeads] = useState<any[]>([]);
@@ -365,10 +382,12 @@ export const Employees: React.FC = () => {
 
     let finalUserId = selectedUserId;
     let tempCreatedProfileId = null;
+    let createdCredentials: { email: string; password: string; syntheticEmail: boolean } | null = null;
 
     try {
       // 1. Transaction-safe check/insert for user_profiles if no profile is linked
       if (!finalUserId) {
+        const isSyntheticEmail = !personalEmail && !officialEmail;
         const targetEmail = personalEmail || officialEmail || `${employeeIdVal.toLowerCase()}@estatecrm.internal`;
 
         // Check if profile already exists with this email
@@ -395,11 +414,15 @@ export const Employees: React.FC = () => {
             }
           });
 
-          // Register user in auth.users
-          const tempPassword = 'TempPassword123!';
+          // Register user in auth.users. A random password per employee,
+          // not a hardcoded constant — the previous version gave every
+          // auto-created account the literal string 'TempPassword123!',
+          // visible in source control, meaning anyone who knew (or
+          // guessed) an employee code could log in as that employee.
+          const generatedPassword = generateRandomPassword();
           const { data: authData, error: authError } = await tempSupabase.auth.signUp({
             email: targetEmail,
-            password: tempPassword,
+            password: generatedPassword,
             options: {
               data: {
                 full_name: `${firstName} ${lastName || ''}`.trim()
@@ -416,7 +439,14 @@ export const Employees: React.FC = () => {
             throw new Error('Auth User registration did not return a valid user ID.');
           }
 
-          // Check if profile exists (in case trigger created it), otherwise insert
+          // The handle_new_user DB trigger fires on the auth.users insert
+          // above and immediately creates a bare-bones user_profiles row
+          // (id, email, full_name guessed from the email, no
+          // must_change_password) — confirmed live: without this check,
+          // the row this branch's own insert tries to create already
+          // exists, the insert is skipped entirely, and the account never
+          // gets flagged for a forced password change. Update the
+          // trigger's row instead of assuming we need to create one.
           const { data: profileCheck } = await supabase
             .from('user_profiles')
             .select('id')
@@ -431,6 +461,7 @@ export const Employees: React.FC = () => {
                 email: targetEmail,
                 full_name: `${firstName} ${lastName || ''}`.trim(),
                 status: 'active',
+                must_change_password: true,
                 created_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
               }]);
@@ -440,9 +471,24 @@ export const Employees: React.FC = () => {
             }
 
             tempCreatedProfileId = newUserId;
+          } else {
+            const { error: updateProfileError } = await supabase
+              .from('user_profiles')
+              .update({
+                full_name: `${firstName} ${lastName || ''}`.trim(),
+                status: 'active',
+                must_change_password: true,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', newUserId);
+
+            if (updateProfileError) {
+              throw new Error(`Failed to finish setting up the user profile: ${updateProfileError.message}`);
+            }
           }
 
           finalUserId = newUserId;
+          createdCredentials = { email: targetEmail, password: generatedPassword, syntheticEmail: isSyntheticEmail };
         }
       }
 
@@ -498,11 +544,19 @@ export const Employees: React.FC = () => {
       // Sync Role with user_roles RBAC mapping
       if (finalUserId && selectedRole) {
         const matchedRole = rolesList.find(r => r.name === selectedRole);
-        if (matchedRole) {
-          await supabase.from('user_roles').upsert({
-            user_id: finalUserId,
-            role_id: matchedRole.id
-          });
+        if (!matchedRole) {
+          // Previously silently skipped if the name didn't match — the
+          // dropdown is now sourced from this same rolesList, so this
+          // should be unreachable, but surface it loudly rather than
+          // silently leave someone with no access if it ever isn't.
+          throw new Error(`Role "${selectedRole}" was not found in the roles table. The employee record was saved, but no access role was assigned — please assign one manually.`);
+        }
+        const { error: roleError } = await supabase.from('user_roles').upsert({
+          user_id: finalUserId,
+          role_id: matchedRole.id
+        });
+        if (roleError) {
+          throw new Error(`Employee saved, but assigning the role failed: ${roleError.message}`);
         }
       }
 
@@ -511,10 +565,16 @@ export const Employees: React.FC = () => {
       await fetchEmployees();
       await fetchLookups();
 
-      setNotification({
-        type: 'success',
-        message: isEditMode ? 'Employee profile updated successfully!' : 'New employee registered successfully!'
-      });
+      if (createdCredentials) {
+        // Show the one-time password reveal instead of the plain success
+        // toast — this is the only moment the admin can see it.
+        setNewAccountCredentials(createdCredentials);
+      } else {
+        setNotification({
+          type: 'success',
+          message: isEditMode ? 'Employee profile updated successfully!' : 'New employee registered successfully!'
+        });
+      }
     } catch (err: any) {
       console.error('Error saving employee:', err);
       // Rollback profile creation if employee creation failed
@@ -1416,8 +1476,12 @@ export const Employees: React.FC = () => {
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
                         <option value="">No Role Assigned...</option>
-                        {ROLES.map(r => (
-                          <option key={r} value={r}>{r.replace('_', ' ').toUpperCase()}</option>
+                        {/* Sourced from the live `roles` table (rolesList), not the
+                            hardcoded ROLES constant — that array has to be manually
+                            kept in sync with the database and silently drops the role
+                            assignment if a name here doesn't exist there. */}
+                        {rolesList.map(r => (
+                          <option key={r.id} value={r.name}>{r.name.replace(/_/g, ' ').toUpperCase()}</option>
                         ))}
                       </select>
                     </div>
@@ -1520,6 +1584,59 @@ export const Employees: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {newAccountCredentials && (
+        <div className="fixed inset-0 z-[60] overflow-y-auto flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm" />
+          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-emerald-600 text-white px-6 py-4">
+              <span className="font-bold tracking-tight">Account Created — Save This Now</span>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-xs">
+                This password is shown <strong>once</strong> and cannot be retrieved again. Copy it and hand it to the
+                employee now (WhatsApp, in person, etc). They'll be required to set their own password on first login.
+              </div>
+              {newAccountCredentials.syntheticEmail && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-xl p-3 text-xs">
+                  No real email was provided, so a placeholder login (<code>{newAccountCredentials.email}</code>) was used.
+                  <strong> Forgot-password / email reset will not work for this account</strong> since it isn't a real
+                  inbox. Add a real email to the employee record if they'll need self-service password reset.
+                </div>
+              )}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Login Email</label>
+                <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-800 break-all">
+                  {newAccountCredentials.email}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Temporary Password</label>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-800">
+                    {newAccountCredentials.password}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard.writeText(`Email: ${newAccountCredentials.email}\nPassword: ${newAccountCredentials.password}`)}
+                    className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex-shrink-0"
+                  >
+                    Copy Both
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="bg-slate-50 px-6 py-4 flex justify-end border-t border-slate-100">
+              <button
+                onClick={() => setNewAccountCredentials(null)}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-sm"
+              >
+                I've Saved This — Close
+              </button>
+            </div>
           </div>
         </div>
       )}

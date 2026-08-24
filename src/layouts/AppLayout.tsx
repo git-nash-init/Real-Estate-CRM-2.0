@@ -51,7 +51,7 @@ export const AppLayout: React.FC = () => {
     { name: 'Channel Partners', path: '/channel-partners', icon: Users },
     { name: 'CP Outreach', path: '/cp-outreach', icon: Handshake },
     { name: 'Marketing', path: '/marketing', icon: Megaphone },
-    { name: 'Employees', path: '/employees', icon: Briefcase },
+    { name: 'Employees', path: '/employees', icon: Briefcase, allowedRoles: ['super_admin', 'project_admin'] },
     { name: 'Attendance', path: '/attendance', icon: ClipboardCheck },
     { name: 'Tasks', path: '/tasks', icon: CheckSquare },
     { name: 'Reports', path: '/reports', icon: BarChart3, allowedRoles: ['super_admin', 'project_admin'] },

@@ -4,6 +4,8 @@ import { ProtectedRoute } from './components/ProtectedRoute';
 import { AppLayout } from './layouts/AppLayout';
 import { Login } from './pages/Login';
 import { ForgotPassword } from './pages/ForgotPassword';
+import { ResetPassword } from './pages/ResetPassword';
+import { SetPassword } from './pages/SetPassword';
 import { Dashboard } from './pages/Dashboard';
 import { Leads } from './pages/Leads';
 import { Followups } from './pages/Followups';
@@ -30,6 +32,19 @@ function App() {
           {/* Public Authentication Routes */}
           <Route path="/login" element={<Login />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
+
+          {/* Forced first-login password change — protected (must be
+              logged in) but deliberately outside AppLayout/the must-change
+              redirect below, so it's reachable without a chicken-and-egg loop. */}
+          <Route
+            path="/set-password"
+            element={
+              <ProtectedRoute>
+                <SetPassword />
+              </ProtectedRoute>
+            }
+          />
 
           {/* Secure Admin Workspace Routes */}
           <Route
@@ -55,7 +70,14 @@ function App() {
             <Route path="channel-partners/:id" element={<ChannelPartnerDetails />} />
             <Route path="cp-outreach" element={<CPOutreach />} />
             <Route path="marketing" element={<Marketing />} />
-            <Route path="employees" element={<Employees />} />
+            <Route
+              path="employees"
+              element={
+                <ProtectedRoute allowedRoles={['super_admin', 'project_admin']}>
+                  <Employees />
+                </ProtectedRoute>
+              }
+            />
             <Route path="attendance" element={<Attendance />} />
             <Route path="tasks" element={<Tasks />} />
             <Route

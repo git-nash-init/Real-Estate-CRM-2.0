@@ -1,5 +1,5 @@
 import React from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 
 interface ProtectedRouteProps {
@@ -8,7 +8,8 @@ interface ProtectedRouteProps {
 }
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowedRoles }) => {
-  const { user, role, loading } = useAuth();
+  const { user, profile, role, loading } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -25,8 +26,20 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowe
     return <Navigate to="/login" replace />;
   }
 
-  // Role based access control (if specified)
-  if (allowedRoles && role && !allowedRoles.includes(role)) {
+  // Accounts created with an admin-generated one-time password
+  // (Employees.tsx onboarding) must set a real password before doing
+  // anything else. Guarded against redirecting /set-password to itself.
+  if (profile?.must_change_password && location.pathname !== '/set-password') {
+    return <Navigate to="/set-password" replace />;
+  }
+
+  // Role based access control (if specified).
+  // Deliberately deny when role is null/unresolved, not just when it fails
+  // to match — the previous `allowedRoles && role && !...includes(role)`
+  // short-circuited to "allow" for any user whose role lookup came back
+  // empty (no user_roles row, an RLS hiccup, etc.), letting them straight
+  // through every role-gated route including Reports and Settings.
+  if (allowedRoles && !(role && allowedRoles.includes(role))) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="max-w-md w-full bg-white p-8 rounded-xl shadow-lg text-center border border-slate-100">
@@ -36,7 +49,10 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowe
             </svg>
           </div>
           <h2 className="text-xl font-bold text-slate-800 mb-2">Access Denied</h2>
-          <p className="text-slate-600 mb-6">You do not have the required permissions to access this panel. Your role: <span className="font-semibold text-slate-700">{role}</span></p>
+          <p className="text-slate-600 mb-6">
+            You do not have the required permissions to access this panel.
+            {role ? <> Your role: <span className="font-semibold text-slate-700">{role}</span></> : ' No role is assigned to your account — contact an admin.'}
+          </p>
         </div>
       </div>
     );

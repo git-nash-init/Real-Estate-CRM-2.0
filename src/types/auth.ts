@@ -22,6 +22,7 @@ export interface UserProfile {
   status: string | null;
   created_at: string;
   updated_at: string;
+  must_change_password?: boolean;
 }
 
 export interface UserSession {
