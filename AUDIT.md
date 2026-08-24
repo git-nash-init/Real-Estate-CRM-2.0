@@ -216,7 +216,6 @@ system activation), since fixing them properly requires the same RLS pass.
 
 ## Not yet done (tracked for subsequent phases per the engagement plan)
 
-- Reports (admin-only).
 - Turn on the permission system; remediate the 4 security advisor findings.
 
 ## Phase 1.3: "Commission" -> "Referral Fee" rename (this pass)
@@ -446,3 +445,22 @@ Verified both insert shapes (`attendance`, `leave_requests`) against the
 live schema with a rolled-back SQL dry run — since `employees` has no real
 rows yet, the dry run created a throwaway test employee inside the same
 transaction to exercise the foreign keys, then rolled everything back.
+
+## Phase 4.7: Reports, admin-only (this pass)
+
+New `src/pages/Reports.tsx` replaces the `PlaceholderPage` at `/reports`,
+using `recharts` (newly added dependency). Gated to `super_admin` /
+`project_admin` roles via a soft in-page check (`useAuth().role`) — full
+route-level enforcement lands in Phase 5 once RLS + `ProtectedRoute` are
+wired together; until then this is a UI-level gate only, not a security
+boundary.
+
+Sections, all computed client-side from existing tables (no new tables or
+sales-target scaffolding added — deliberately narrower than the reference
+CRM's equivalent, which included a targets-vs-achieved feature the client
+did not ask for): lead funnel across all 12 `lead_status` values (bar
+chart), bookings + revenue by sales owner, Channel-Partner-referred vs
+direct split for both leads and bookings (pie charts), and telecaller call
+performance (total calls, connect rate, average duration) — sourced from
+the `call_logs` table added in Phase 4.4, closing the loop on the client's
+request to see "how many calls are being made by the telecallers."

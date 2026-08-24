@@ -20,6 +20,7 @@ import { Employees } from './pages/Employees';
 import { Marketing } from './pages/Marketing';
 import { Tasks } from './pages/Tasks';
 import { Attendance } from './pages/Attendance';
+import { Reports } from './pages/Reports';
 
 function App() {
   return (
@@ -57,7 +58,7 @@ function App() {
             <Route path="employees" element={<Employees />} />
             <Route path="attendance" element={<Attendance />} />
             <Route path="tasks" element={<Tasks />} />
-            <Route path="reports" element={<PlaceholderPage />} />
+            <Route path="reports" element={<Reports />} />
             <Route path="settings" element={<PlaceholderPage />} />
 
             {/* Catch-all redirected back to dashboard */}
