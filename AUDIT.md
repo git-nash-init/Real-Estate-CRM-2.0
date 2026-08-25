@@ -614,3 +614,230 @@ create them faster themselves via Supabase Dashboard → Authentication →
 Users → Add User (with "Auto Confirm User" checked), which doesn't go
 through the rate-limited public endpoint; hand me the resulting user IDs
 and I'll wire up the correct role for each.
+
+## Phase 6: post-launch fixes, real onboarding, search, anti-fraud
+
+The client began hands-on testing after Phase 5 and reported a batch of
+issues plus three new requirements. Every root cause below was verified
+against the live database and the actual running code before being fixed,
+same discipline as every phase before it.
+
+### 6.1 Auth deadlock — "Verifying secure session…" forever
+
+`useAuth.tsx`'s `onAuthStateChange` callback was `async` and awaited a
+Supabase query (`fetchProfileAndRole`) inside itself. supabase-js v2 holds
+a `navigator.locks` lock for the duration of that callback; the query
+inside it calls `getSession()` internally, which needs that same lock.
+Callback waits on the query, the query waits on the lock, the lock waits on
+the callback — a deadlock. `INITIAL_SESSION` fires on every page load, so
+this reproduced on every single load, exactly as reported.
+
+**Fix:** made the callback synchronous — it now only stores the raw
+session in state. Profile/role resolution moved into a separate `useEffect`
+keyed on the user id, outside the locked callback. Verified live with
+repeated hard-refreshes across several routes and a second-tab test; the
+spinner never persisted.
+
+### 6.2 Invisible Confirm button
+
+`bg-indigo-650` in `ChannelPartners.tsx` (and 74 other non-standard shade
+classes elsewhere in the codebase) referenced Tailwind v4 shades that don't
+exist in this project's config-free setup — no CSS rule was emitted, so
+the button rendered transparent. `hover:bg-indigo-700` *is* a real shade,
+which is why the button only appeared on hover.
+
+**Fix:** added an `@theme` block in `index.css` defining all 75 shades
+found in use, rather than patching the one that broke — this restores
+every one of those intended (but previously silently-dead) styles at once.
+
+### 6.3 `$` vs `₹`
+
+There was no literal `$` character anywhere in the source — every rupee
+amount already used `₹`. What looked like a stray `$` was the lucide
+`DollarSign` icon, used 16 times across 4 files, including as a prefix
+inside 10 rupee-amount input fields. Fixed by swapping the icon import
+(`DollarSign` → `IndianRupee`), not by any string replacement — confirmed
+first that no genuine `$`-as-currency text existed, so there was nothing
+else to touch.
+
+### 6.4 Attendance page appeared to only have Leave
+
+`employees` has 0 rows (see Phase 5 risk note, still true). With no
+matching employee record, the check-in/out UI rendered nothing (a bare
+`null`), while "Request Leave" sat outside that condition and always
+rendered — so the page looked leave-only. The explanation for *why*
+existed, but 200 rows down the page.
+
+**Fix:** moved a clear explanation to the top of the page as a banner, and
+added the missing null-guard on leave submission (it was inserting `null`
+into a `NOT NULL` column when no employee record existed).
+
+### 6.5 Leave approval restricted to Super Admin
+
+Client requirement, not a bug fix. Previously `handleReviewLeave` had no
+role check at all — any logged-in user could open the approval table and
+approve/reject anyone's leave, including their own.
+
+**Fix — UI:** approval table and buttons now render only when
+`role === 'super_admin'`.
+**Fix — DB:** added an `UPDATE` policy on `leave_requests` requiring
+`is_super_admin()`, and blocking self-approval (`employee_id` of the
+request must not match the approver's own employee record). Verified with
+3 separate rolled-back SQL transactions: (1) a non-super-admin attempting
+to approve is blocked, (2) a super_admin approving someone else's request
+succeeds, (3) a super_admin attempting to approve their own request is
+blocked. Then verified the resulting UI behavior live for both roles.
+
+### 6.6 Real per-employee onboarding credentials
+
+`Employees.tsx` previously used `const tempPassword = 'TempPassword123!'`
+— every account created through the admin UI got the exact same password,
+visible in the source code, and the admin was never shown it (so there was
+no legitimate way to hand it to the employee either). The `ForgotPassword`
+page already existed and pointed to `/reset-password`, but that route
+didn't exist in `App.tsx` — the reset email went nowhere.
+
+**Fix:**
+- `generateRandomPassword()` — a 14-character password built from
+  `crypto.getRandomValues()` over a 60-character set, generated fresh per
+  employee.
+- One-time credential reveal modal after creation (email + password, copy
+  button, explicit "won't be shown again" warning).
+- New `must_change_password` column on `user_profiles`, set `true` on
+  creation. `ProtectedRoute.tsx` now redirects to a new `/set-password`
+  page until it's cleared.
+- New `ResetPassword.tsx` + `/reset-password` route, completing the
+  existing forgot-password email flow end-to-end via
+  `supabase.auth.updateUser()`.
+- `ProtectedRoute.tsx` also had a real security bug fixed alongside this:
+  `if (allowedRoles && role && !allowedRoles.includes(role))` allowed
+  through any user whose role was `null`/unresolved (an RLS hiccup, a
+  missing `user_roles` row, a timing gap) — the check only blocked a
+  *mismatched* role, not a *missing* one. Changed to deny by default when
+  role is null.
+
+**Two real RLS bugs found via live testing, not code review:** attempting
+the onboarding flow live as `project_admin` (who the app now gates into
+`/employees` alongside `super_admin`) surfaced
+`"new row violates row-level security policy for table 'user_roles'"` —
+caught only because a previous fix in this same pass (making role-
+assignment failures throw instead of fail silently) let it surface at all.
+Root cause: `user_roles_manage` and `user_profiles_insert`/`update` were
+all scoped to `is_super_admin()` only, never updated when `project_admin`
+was granted equal admin standing on this page. Fixed via two migrations
+widening both policies to also allow `project_admin`.
+
+**One application bug found from the same live test:** after the RLS fix,
+the created profile still showed `must_change_password: false` despite the
+code setting `true`. Root cause: a `handle_new_user()` DB trigger
+(SECURITY DEFINER, fires on `auth.users` INSERT) creates a bare
+`user_profiles` row via `insert ... on conflict (id) do nothing` — and it
+wins the race against the app's own insert, so the app's `if (!profileCheck)`
+branch found the row already existed and skipped its insert (and the
+`must_change_password: true` on it) entirely. Fixed by adding an `else`
+branch that `UPDATE`s the trigger-created row instead of assuming it needs
+to be inserted.
+
+**Verification, working around the platform's signup rate limit:** live
+end-to-end testing of the full onboarding flow hit Supabase's free-tier
+`auth.signUp()` email rate limit again partway through (same limit noted
+in the Phase 5 section above) — expected, not caused by any of these
+fixes. To verify without depending on that rate-limited call, ran a
+rolled-back SQL transaction that inserted a real `auth.users` row (to
+trigger `handle_new_user()`), then impersonated `project_admin` via
+`SET LOCAL ROLE authenticated` + `request.jwt.claims`, and ran the profile-
+update, employee-insert, and role-assignment steps exactly as the app
+does. Result: profile update succeeded with `must_change_password: true`,
+employee record created, role assigned — all three previously-broken steps
+now work for `project_admin`, and the transaction was rolled back
+afterward so nothing was actually written.
+
+**Known, deliberately untouched issue found in passing:** `employees` has
+both a narrow `employees_insert` policy (`is_super_admin()` only) *and* a
+leftover blanket `policy_employees_all` (`FOR ALL TO authenticated
+USING(true) WITH CHECK(true))`) that makes the narrow one moot — any
+authenticated user can currently write any employee row. Not fixed in this
+pass (out of critical path, and RLS changes deserve their own verified
+pass rather than a drive-by edit); flagged here and in SUBMISSION.md as a
+known risk for the next RLS cleanup.
+
+### 6.7 Global search with per-user data scoping
+
+The header search bar had no handler at all — pure decoration.
+
+**Built:** `GlobalSearch.tsx`, debounced 300ms, two result groups:
+matching feature/page suggestions (filtered by the same `allowedRoles`
+gates as the sidebar, so a role is never offered a page it can't open),
+and matching records across leads, bookings, channel partners, projects,
+and inventory.
+
+**Scoping (`dataScope.ts`):** `super_admin`/`project_admin` see
+everything; every other role is scoped to records where they appear as
+`owner_id` / `sourcing_manager_id` / `telecaller_id` / `sales_owner` /
+`closing_manager` / `channel_partner_id`, or via their rows in
+`user_project_assignments` — all real, pre-existing ownership columns,
+verified against the live schema before use. This directly satisfies the
+client's explicit requirement that one sourcing manager must not be able
+to see another's data.
+
+**Honest limitation, stated here and in WALKTHROUGH.md:** this is
+application-layer scoping only. It controls what the search UI's own
+queries return — it does not stop a user's own valid session from querying
+Supabase directly, because most tables (same as the Phase 5 finding) still
+carry a permissive `USING(true)` policy. Written as a single reusable
+helper specifically so the same logic can be promoted into real RLS
+policies later without a redesign.
+
+Verified live: typing a partial page name (`"attend"`) surfaced only the
+Attendance suggestion; typing a partial record name surfaced matching
+channel-partner records and navigated to the correct detail page on click.
+
+### 6.8 Telecaller call-log anti-fraud hardening
+
+Prior state: three self-reported fields (outcome, hand-typed duration,
+notes), no corroborating trace anywhere else in the data (`handleLogCall`
+never touched `leads.last_contact_at`), and `call_logs` had a single
+blanket `FOR ALL TO authenticated USING(true) WITH CHECK(true)` policy —
+so `employee_id` was whatever the client-side state said it was, with
+nothing binding it to the actual caller. The client asked specifically for
+the "harden + flag, no cost" approach rather than a paid telephony
+integration.
+
+**Fix:**
+- Duration is now measured by the browser via a Start Call / End Call
+  timer — the input is gone entirely, so it cannot be hand-typed. Save is
+  disabled until a call has both started and ended.
+- Best-effort GPS capture (`navigator.geolocation`) at call start.
+- `called_at` is now the real call-start timestamp, not insert time.
+- Logging a call now also stamps `leads.last_contact_at`, giving every
+  call a corroborating trace elsewhere in the schema, matching what
+  `Followups.tsx` already does.
+- DB migration `call_logs_antifraud_hardening`: added nullable
+  `latitude`, `longitude`, `location_captured_at` columns (used now), plus
+  `provider_call_id`, `answered_at`, `recording_url` (unused today, so a
+  real telephony/dialer provider can be wired in later without another
+  schema migration). Replaced the blanket policy with `employee_id`-bound
+  insert/select policies (admin roles keep full access; everyone else is
+  restricted to their own employee record) and admin-only update/delete.
+- **Verified via a rolled-back SQL simulation**, not just written and
+  trusted: temporarily stripped a test account's admin role inside the
+  transaction, then confirmed it could insert a call log under its own
+  employee_id but was rejected inserting one under a different employee's
+  id — exactly the fraud vector (logging calls as a colleague) this was
+  meant to close.
+- New "Call Log Fraud Signals" panel in `Reports.tsx`: burst logging (5+
+  calls by one employee within any 10-minute window), calls logged with no
+  matching attendance check-in for that day, and "connected" calls whose
+  lead is still sitting at "New" status (i.e. never actually followed
+  through). Verified live with the empty-state rendering correctly (no
+  data yet, no false positives).
+
+**Honest limitation, stated in both this document and WALKTHROUGH.md:**
+none of this proves a call happened over the phone. It stops casual
+fabrication (can't type a fake duration), bulk fake logging (burst
+detection), and logging-as-someone-else (RLS), and it makes the remaining
+gap visible rather than invisible. A telecaller who deliberately lets the
+Start/End Call timer run without dialing anyone is not caught by this —
+only a real telephony/dialer integration can close that gap, and that
+isn't zero-cost. This tradeoff was discussed with the client directly, who
+chose the zero-cost hardening path.

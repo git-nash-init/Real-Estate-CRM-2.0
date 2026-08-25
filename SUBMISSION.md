@@ -5,7 +5,26 @@ _Scaffolded at the start of the engagement; filled in as each phase lands. Hours
 ## 1. Executive summary
 
 All six planned phases are complete, with one deliberate exception flagged
-below rather than shipped unverified.
+below rather than shipped unverified. A follow-up round (**Phase 6**) then
+fixed the blockers the client hit during their own hands-on testing and
+added three new capabilities: a working global search with per-user data
+scoping, real per-employee onboarding credentials (replacing a hardcoded
+shared password), and anti-fraud hardening on telecaller call logging.
+
+**Phase 6 (post-launch fixes + onboarding + search + anti-fraud):** fixed
+an auth deadlock that made every page load hang on "Verifying secure
+session…" forever; an invisible Confirm button (undefined Tailwind color);
+10 rupee-amount inputs showing a `$` icon instead of `₹`; Attendance
+showing only the leave feature when no employee record exists; leave
+approval now restricted to `super_admin` at both the UI and database
+level. Replaced the shared hardcoded onboarding password with a real
+per-employee random password shown once to the admin, forced first-login
+password change, and a working forgot-password email flow (the route
+didn't exist before). Built a working global search that scopes results
+per user (a sourcing manager cannot see another's leads/channel
+partners). Hardened telecaller call logging so duration is timed by the
+app instead of hand-typed, GPS is captured at call time, and Reports now
+has a fraud-signals panel. Full detail in section 4a and AUDIT.md.
 
 **Phase 0-1 (audit + repair):** the two Channel Partner bugs and the
 booking-cancellation issue all traced back to the app querying tables that
@@ -69,6 +88,20 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | 12 | In-app WhatsApp connection status, QR pairing, and logout | New Settings → WhatsApp Connection page (admin-only): live status, QR code as an auto-refreshing image, connected phone number, Log Out button. Gateway heartbeats status into a Supabase table every ~3s and polls for a logout command — no direct browser-to-gateway HTTP calls, so the gateway's API key never reaches the browser and no CORS setup is needed | New `Settings.tsx`, `whatsapp_session` table, gateway `src/index.js` updated (heartbeat + command polling + logout handling), `whatsapp-gateway/README.md` updated | Done | — | — |
 | 13 | Test accounts for every role | Requested by the client to self-test each feature. 2 of 14 created (`super_admin`, `project_admin` — both give full access to every page) before hitting Supabase's free-tier email-sending rate limit on the signup flow. See section 9 (Handover) for credentials and how to get the remaining 12 | — | Partial — 2/14, blocked by a platform rate limit, not a code or permission issue | — | — |
 
+## 4a. Phase 6 — post-launch fixes, onboarding, search, anti-fraud
+
+| # | Item | Root cause / scope | Fix | Files | Status |
+|---|---|---|---|---|---|
+| 1 | App hangs forever on "Verifying secure session…" | `onAuthStateChange` callback awaited a Supabase query inside itself while holding the browser's auth lock — the query needed the same lock to complete, so it deadlocked, every page load (`INITIAL_SESSION` fires every time) | Made the callback synchronous; moved profile/role fetch to a separate effect keyed on the session | `useAuth.tsx` | Done |
+| 2 | Confirm button invisible until hovered | `bg-indigo-650` — not a real Tailwind shade in this v4/no-config setup, so no CSS was emitted at all | Added a `@theme` block defining all 75 non-standard shades found in the codebase, not just the one that broke | `index.css` | Done |
+| 3 | `$` instead of `₹` on money inputs | Not a text issue — the lucide `DollarSign` icon was used as a prefix adornment on 10 rupee-amount inputs | Swapped to `IndianRupee` icon (16 usages across 4 files) | `Bookings.tsx`, `ChannelPartnerDetails.tsx`, `Payments.tsx`, `Inventory.tsx` | Done |
+| 4 | Attendance only shows Leave feature | With `employees` at 0 rows, check-in/out silently rendered nothing while Leave sat outside that condition; the explanation banner was at the bottom of a 200-row page | Clear banner moved to the top of the page; added the missing null-guard on leave submission | `Attendance.tsx` | Done |
+| 5 | Leave approval restricted to Super Admin | Client requirement — previously any logged-in user could approve any leave request, including their own | UI hides the approval table for non-super-admins; DB `UPDATE` policy on `leave_requests` requires `is_super_admin()` and blocks self-approval, verified via 3 rolled-back RLS dry runs | `Attendance.tsx`, DB policy | Done |
+| 6 | Real per-employee onboarding credentials | Every new hire got the same hardcoded `TempPassword123!`, visible in source, never shown to the admin | Cryptographically random per-employee password, shown once in a copy-once reveal modal; forced first-login password change (`must_change_password` + new `/set-password` route); found and fixed 2 previously-unnoticed RLS bugs blocking `project_admin` from completing onboarding, and 1 app bug where a DB trigger race silently skipped setting the force-change flag | `Employees.tsx`, `ProtectedRoute.tsx`, 2 DB policies | Done, verified via rolled-back SQL simulation of the full flow (signup itself is rate-limited on the free tier, same as noted in section 4/13 below) |
+| 7 | Working forgot-password flow | `ForgotPassword.tsx` linked to `/reset-password`, which didn't exist — the email went nowhere | New `ResetPassword.tsx` + route, completes the existing email-link flow | `ResetPassword.tsx`, `App.tsx` | Done |
+| 8 | Global search with per-user data scoping | Header search bar was decorative (no handler at all) | Debounced (300ms) search over leads/bookings/channel partners/projects/inventory plus matching feature pages, scoped per role so e.g. sourcing manager X cannot see sourcing manager Y's records. Documented as application-layer scoping only (not full RLS) — same honest caveat as the Phase 5 permissions item above | New `GlobalSearch.tsx`, `dataScope.ts` | Done — verified live |
+| 9 | Telecaller call-log anti-fraud | No corroboration that a logged call ever happened; duration was hand-typed; any user could log a call under a colleague's `employee_id` (blanket RLS policy) | App-timed Start Call/End Call (duration can't be typed), best-effort GPS capture at call start, call now stamps `leads.last_contact_at`, RLS binds `employee_id` to the caller's own record (verified via rolled-back simulation), new Reports panel flags burst logging, calls outside attendance hours, and "connected" calls whose lead never progressed | `Leads.tsx`, `Reports.tsx`, DB migration + policies | Done — stated honestly in WALKTHROUGH.md: this stops casual/bulk fabrication and logging-as-someone-else, but a patient telecaller who lets the timer run for a call that didn't happen is only caught by a real telephony provider, which isn't zero-cost |
+
 ## 5. Database changes
 
 | Migration | Purpose | Status |
@@ -86,6 +119,10 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 | `fix_security_advisor_findings` | Pinned `search_path` on 8 functions; revoked `anon`/`PUBLIC` execute on 6 `SECURITY DEFINER` RLS-helper functions. | Applied |
 | `revoke_handle_new_user_authenticated_execute` | Closed the remaining `authenticated` execute grant on the `handle_new_user` trigger function (confirmed trigger-only, no legitimate direct-call use). | Applied |
 | `add_whatsapp_session_status_table` | New `whatsapp_session` table so the CRM can show live gateway status/QR and issue a logout command through Supabase (no direct browser-to-gateway calls). | Applied |
+| `add_leave_requests_super_admin_approval` | `leave_requests` UPDATE policy restricted to `is_super_admin()`, self-approval blocked. | Applied |
+| `allow_project_admin_manage_user_roles` | Widened `user_roles` RLS (was `super_admin`-only) so `project_admin` can complete employee onboarding, which the app now gates them into. | Applied |
+| `allow_project_admin_manage_user_profiles` | Same widening for `user_profiles` insert/update — found via live testing right after the `user_roles` fix, same root cause. | Applied |
+| `call_logs_antifraud_hardening` | Added GPS + future-telephony columns; replaced `call_logs`' blanket `USING(true)` policy with one binding `employee_id` to the caller's own employee record (insert/select), admin-only for update/delete. | Applied |
 
 ## 6. Infrastructure
 
@@ -109,6 +146,9 @@ See [AUDIT.md](./AUDIT.md) for the full report. Summary: the app's Channel Partn
 - **Free-tier hosting sleep:** the WhatsApp gateway may sleep on an inactive free tier; session is persisted to Supabase so a restart does not require re-scanning the QR code, but there may be a short reconnect delay.
 - **Every table is still readable/writable by every logged-in user regardless of role.** `role_permissions` is populated but not yet wired into RLS policies — see item 11 above and AUDIT.md's Phase 5 section. This was a deliberate scope decision (the alternative was applying 30+ untested policy changes to a live production database with no way to verify each of the 14 roles' access afterward) and should be treated as the top-priority item for the next phase of work, alongside enabling leaked-password protection in the Supabase Auth dashboard (also not yet done — requires manual action in the dashboard, not reachable via SQL/API).
 - **`employees` table has 0 rows.** Attendance check-in/out and any feature that resolves the logged-in user to an employee record won't work until the client populates real employee records.
+- **Global search's data scoping is application-layer only** (Phase 6, item 8 above) — same class of limitation as the Phase 5 RLS item: it controls what the search UI queries, not what a valid, logged-in user's own Supabase session could query directly, since most tables still carry the permissive `USING(true)` policy. Stated plainly in WALKTHROUGH.md.
+- **Telecaller anti-fraud is a deterrent, not a guarantee.** App-timed calls and GPS stop casual and bulk fabrication and logging-as-someone-else, and surface suspicious patterns in Reports — but a telecaller who lets the Start/End Call timer run without actually calling anyone won't be caught by this alone. Only a real telephony/dialer provider closes that gap, and that isn't zero-cost. New nullable columns (`provider_call_id`, `answered_at`, `recording_url`) are already in place for that future integration.
+- **The `employees` table's RLS has a leftover blanket-permissive policy** (`policy_employees_all`, `USING(true)`) alongside its newer, narrower per-action policies — found during Phase 6 onboarding work but deliberately not touched, since it wasn't in that task's critical path and RLS changes on a live table warrant their own verified pass. Flagged here for the next RLS cleanup, same category as the Phase 5 item above.
 
 ## 9. Handover & runbook
 
@@ -146,6 +186,25 @@ work for any user — see the risk noted above.
 **Before the next phase of work (RLS):** enable leaked-password protection
 in the Supabase Auth dashboard (Authentication → Policies) — the one
 remaining security-advisor item that needs manual action, not code.
+
+**Adding a new employee (Phase 6 onboarding flow):** Employees page
+(admin roles only) → Add Employee → fill in details including a **real
+email** the person actually checks (a synthetic `@estatecrm.internal`
+address works for login but can never receive a password-reset email) →
+Save. A one-time credential reveal modal shows the generated password —
+copy it and hand it to the employee through a private channel (chat,
+call, in person); it is never shown again and never stored in plaintext.
+They log in once, are forced to set their own password immediately, and
+from then on can use **Forgot Password** on the login page like anyone
+else if they lose it.
+
+**Full plain-language walkthrough of every feature:** see
+[WALKTHROUGH.md](./WALKTHROUGH.md) — written for a non-technical read,
+covers every feature old and new with what it does, who uses it, and
+what its limits are, plus a suggested demo flow for the client's own
+client meetings. Also published as a private, shareable web page (usable
+on a phone during a client meeting):
+https://claude.ai/code/artifact/cc285ca2-143c-4927-a8a4-86bbc4679b1f
 
 ### Test accounts (for self-testing every feature/role)
 
@@ -197,4 +256,5 @@ caveat as the `employees` table being empty generally (see risks above).
 | 3 | WhatsApp gateway | — | — | — |
 | 4 | New features (Marketing, CP Outreach, Telecaller tracking, Tasks, Attendance, Reports) | — | — | — |
 | 5 | Role-based access | — | — | — |
+| 6 | Post-launch fixes (auth deadlock, invisible button, rupee icons, attendance visibility, leave approval), real onboarding credentials, global search with data scoping, telecaller anti-fraud, full walkthrough documentation | — | — | — |
 | **Total** | | | | |
