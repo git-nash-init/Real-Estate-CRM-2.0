@@ -4,6 +4,12 @@ import { useAuth } from '../hooks/useAuth';
 import { reportQueryError } from '../services/queryLogger';
 import { supabase } from '../services/supabaseClient';
 import {
+  uploadWhatsAppAttachment,
+  removeWhatsAppAttachment,
+  formatBytes,
+  type UploadedAttachment,
+} from '../services/whatsappAttachments';
+import {
   Search,
   RefreshCw,
   ChevronLeft,
@@ -22,7 +28,8 @@ import {
   Square,
   MapPin,
   MessageCircle,
-  Send
+  Send,
+  Paperclip
 } from 'lucide-react';
 
 interface Lead {
@@ -88,6 +95,9 @@ export const Leads: React.FC = () => {
   const [waError, setWaError] = useState<string | null>(null);
   const [waSuccess, setWaSuccess] = useState(false);
   const [waGatewayOnline, setWaGatewayOnline] = useState<boolean | null>(null);
+  const [waAttachment, setWaAttachment] = useState<UploadedAttachment | null>(null);
+  const [waUploading, setWaUploading] = useState(false);
+  const waFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Anti-fraud call timing: duration is measured by the app (Start Call /
   // End Call), never hand-typed, so a telecaller can't just enter a fake
@@ -304,6 +314,8 @@ export const Leads: React.FC = () => {
     setWaError(null);
     setWaSuccess(false);
     setWaGatewayOnline(null);
+    setWaAttachment(null);
+    setWaUploading(false);
 
     // Surface up front whether the gateway is actually running, rather
     // than silently queueing a message that will sit unsent. The gateway
@@ -321,6 +333,35 @@ export const Leads: React.FC = () => {
     setWaGatewayOnline(fresh && data?.status === 'open');
   };
 
+  const handleWaFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Reset the input so re-picking the same file still fires onChange.
+    e.target.value = '';
+    if (!file) return;
+
+    setWaUploading(true);
+    setWaError(null);
+    try {
+      // Replace rather than accumulate: WhatsApp sends one media item per
+      // message, so a second pick supersedes the first. Clean up the
+      // orphaned upload so it doesn't linger in storage unreferenced.
+      const previous = waAttachment;
+      const uploaded = await uploadWhatsAppAttachment(file);
+      setWaAttachment(uploaded);
+      if (previous) removeWhatsAppAttachment(previous.path);
+    } catch (err: any) {
+      setWaError(err.message || 'Failed to upload the attachment.');
+    } finally {
+      setWaUploading(false);
+    }
+  };
+
+  const handleWaRemoveAttachment = async () => {
+    const current = waAttachment;
+    setWaAttachment(null);
+    if (current) removeWhatsAppAttachment(current.path);
+  };
+
   const handleWhatsAppSend = async () => {
     // Guard against a double-fire (fast double-click, or Enter landing on
     // an already-pressed button) queueing the same message twice. The
@@ -336,8 +377,10 @@ export const Leads: React.FC = () => {
       setWaError('This lead has no mobile number on record.');
       return;
     }
-    if (!waMessage.trim()) {
-      setWaError('Please type a message to send.');
+    // With an attachment the text becomes the caption and is optional —
+    // sending a brochure with no covering note is legitimate.
+    if (!waMessage.trim() && !waAttachment) {
+      setWaError('Please type a message or attach a file to send.');
       return;
     }
 
@@ -350,6 +393,9 @@ export const Leads: React.FC = () => {
         lead_id: waLead.id,
         status: 'queued',
         created_by: user?.id || null,
+        media_path: waAttachment?.path || null,
+        media_type: waAttachment?.type || null,
+        media_filename: waAttachment?.filename || null,
       }]);
       if (error) throw error;
 
@@ -360,6 +406,9 @@ export const Leads: React.FC = () => {
 
       setWaSuccess(true);
       setWaMessage('');
+      // Deliberately NOT deleting the uploaded file here — the queued row
+      // still points at it and the gateway needs it at send time.
+      setWaAttachment(null);
     } catch (err: any) {
       reportQueryError('Leads: WhatsApp send', err);
       setWaError(err.message || 'Failed to queue the WhatsApp message.');
@@ -1125,6 +1174,43 @@ export const Leads: React.FC = () => {
                       className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 resize-none"
                     />
                     <p className="text-[10px] text-slate-400 mt-1">{waMessage.trim().length} characters</p>
+
+                    {/* Attachment */}
+                    <div className="mt-3">
+                      <input
+                        ref={waFileInputRef}
+                        type="file"
+                        className="hidden"
+                        onChange={handleWaFilePick}
+                      />
+                      {waAttachment ? (
+                        <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                          <Paperclip className="h-3.5 w-3.5 text-slate-400 flex-shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs font-semibold text-slate-700 truncate">{waAttachment.filename}</div>
+                            <div className="text-[10px] text-slate-400 capitalize">
+                              {waAttachment.type} · {formatBytes(waAttachment.sizeBytes)}
+                            </div>
+                          </div>
+                          <button
+                            onClick={handleWaRemoveAttachment}
+                            className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex-shrink-0"
+                            title="Remove attachment"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => waFileInputRef.current?.click()}
+                          disabled={waUploading}
+                          className="flex items-center gap-1.5 px-3 py-2 border border-dashed border-slate-300 rounded-lg text-xs font-semibold text-slate-500 hover:border-emerald-400 hover:text-emerald-600 transition-colors disabled:opacity-50 w-full justify-center"
+                        >
+                          <Paperclip className="h-3.5 w-3.5" />
+                          {waUploading ? 'Uploading...' : 'Attach a file (image, PDF, video…)'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -1144,7 +1230,7 @@ export const Leads: React.FC = () => {
                 {!waSuccess && (
                   <button
                     onClick={handleWhatsAppSend}
-                    disabled={waSubmitting || !waMessage.trim()}
+                    disabled={waSubmitting || waUploading || (!waMessage.trim() && !waAttachment)}
                     className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Send className="h-3.5 w-3.5" /> {waSubmitting ? 'Sending...' : 'Send Message'}

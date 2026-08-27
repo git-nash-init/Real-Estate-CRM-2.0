@@ -162,6 +162,61 @@ function toJid(phone) {
   return `${digits}@s.whatsapp.net`;
 }
 
+const ATTACHMENT_BUCKET = 'whatsapp-attachments';
+
+// Builds the Baileys message payload(s) for an outbox row. Returns an
+// ARRAY because one logical message can need two WhatsApp sends (see the
+// audio case below). Text-only rows behave exactly as before; rows with a
+// media_path get the file attached with the message as its caption.
+//
+// The attachments bucket is private, so the file is fetched through a
+// short-lived signed URL rather than a public link — otherwise every file
+// ever sent to a lead would be readable by anyone who guessed the URL.
+// Baileys accepts { url } and streams it itself, so the gateway never has
+// to buffer the whole file in memory.
+//
+// If the attachment can't be resolved we deliberately throw rather than
+// silently downgrading to a text-only send: a message whose whole point
+// was the attached brochure/price list is worse than a visible failure,
+// because the row would be marked 'sent' and nobody would know the file
+// never arrived.
+async function buildMessagePayloads(row) {
+  if (!row.media_path) {
+    return [{ text: row.message }];
+  }
+
+  const { data, error } = await supabase
+    .storage
+    .from(ATTACHMENT_BUCKET)
+    .createSignedUrl(row.media_path, 600);
+
+  if (error || !data?.signedUrl) {
+    throw new Error(`Could not resolve attachment "${row.media_path}": ${error?.message || 'no signed URL returned'}`);
+  }
+
+  const url = data.signedUrl;
+  const caption = row.message || undefined;
+  const filename = row.media_filename || 'attachment';
+
+  switch (row.media_type) {
+    case 'image':
+      return [{ image: { url }, caption }];
+    case 'video':
+      return [{ video: { url }, caption }];
+    case 'audio': {
+      // WhatsApp audio messages cannot carry a caption. Send the text as
+      // its own message rather than dropping it — otherwise the recipient
+      // gets a bare voice note with no context, and the sender has no way
+      // to know their text was discarded.
+      const payloads = [{ audio: { url }, mimetype: 'audio/mp4' }];
+      if (caption) payloads.unshift({ text: caption });
+      return payloads;
+    }
+    default:
+      return [{ document: { url }, fileName: filename, caption }];
+  }
+}
+
 async function sentToday() {
   const startOfDay = new Date();
   startOfDay.setUTCHours(0, 0, 0, 0);
@@ -215,7 +270,10 @@ async function processOutboxOnce() {
   if (claimErr || !claimed) return;
 
   try {
-    await sock.sendMessage(toJid(claimed.to_phone), { text: claimed.message });
+    const jid = toJid(claimed.to_phone);
+    for (const payload of await buildMessagePayloads(claimed)) {
+      await sock.sendMessage(jid, payload);
+    }
     await supabase
       .from('whatsapp_outbox')
       .update({ status: 'sent', sent_at: new Date().toISOString(), error: null })

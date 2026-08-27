@@ -1,6 +1,12 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
+import {
+  uploadWhatsAppAttachment,
+  removeWhatsAppAttachment,
+  formatBytes,
+  type UploadedAttachment,
+} from '../services/whatsappAttachments';
 import {
   Megaphone,
   Send,
@@ -12,6 +18,7 @@ import {
   XCircle,
   RefreshCw,
   MessageSquare,
+  Paperclip,
 } from 'lucide-react';
 
 interface Campaign {
@@ -65,6 +72,36 @@ export const Marketing: React.FC = () => {
   const [messageTemplate, setMessageTemplate] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
+  const [attachment, setAttachment] = useState<UploadedAttachment | null>(null);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-picking the same file
+    if (!file) return;
+
+    setUploadingAttachment(true);
+    setCreateError(null);
+    try {
+      // One media item per WhatsApp message, so a new pick replaces the
+      // old one; clean up the superseded upload.
+      const previous = attachment;
+      const uploaded = await uploadWhatsAppAttachment(file);
+      setAttachment(uploaded);
+      if (previous) removeWhatsAppAttachment(previous.path);
+    } catch (err: any) {
+      setCreateError(err.message || 'Failed to upload the attachment.');
+    } finally {
+      setUploadingAttachment(false);
+    }
+  };
+
+  const handleRemoveAttachment = async () => {
+    const current = attachment;
+    setAttachment(null);
+    if (current) removeWhatsAppAttachment(current.path);
+  };
 
   const fetchData = useCallback(async () => {
     try {
@@ -170,6 +207,10 @@ export const Marketing: React.FC = () => {
     setFilterCpOnly(false);
     setMessageTemplate('');
     setCreateError(null);
+    // Not deleting the uploaded object here — if a campaign was just
+    // created, its queued rows still reference it.
+    setAttachment(null);
+    setUploadingAttachment(false);
   };
 
   const handleCreateCampaign = async (e: React.FormEvent) => {
@@ -178,8 +219,10 @@ export const Marketing: React.FC = () => {
       setCreateError('Campaign name is required.');
       return;
     }
-    if (!messageTemplate.trim()) {
-      setCreateError('Message template is required.');
+    // With an attachment the template becomes the caption and is optional —
+    // blasting a brochure with no covering note is legitimate.
+    if (!messageTemplate.trim() && !attachment) {
+      setCreateError('Add a message template or an attachment.');
       return;
     }
     if (matchedAudience.length === 0) {
@@ -202,6 +245,9 @@ export const Marketing: React.FC = () => {
           status: 'active',
           project_id: filterProjectId || null,
           created_by: userData?.user?.id || null,
+          media_path: attachment?.path || null,
+          media_type: attachment?.type || null,
+          media_filename: attachment?.filename || null,
         }])
         .select('id')
         .single();
@@ -217,6 +263,11 @@ export const Marketing: React.FC = () => {
         lead_id: lead.id,
         status: 'queued',
         created_by: userData?.user?.id || null,
+        // Every recipient references the same uploaded object — the file
+        // is stored once, not once per lead.
+        media_path: attachment?.path || null,
+        media_type: attachment?.type || null,
+        media_filename: attachment?.filename || null,
       }));
 
       const { error: outboxErr } = await supabase.from('whatsapp_outbox').insert(outboxRows);
@@ -414,6 +465,42 @@ export const Marketing: React.FC = () => {
                   />
                 </div>
 
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Attachment <span className="text-slate-400 normal-case font-normal">— optional, sent to every recipient</span>
+                  </label>
+                  <input ref={fileInputRef} type="file" className="hidden" onChange={handleFilePick} />
+                  {attachment ? (
+                    <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                      <Paperclip className="h-4 w-4 text-slate-400 flex-shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold text-slate-700 truncate">{attachment.filename}</div>
+                        <div className="text-[10px] text-slate-400 capitalize">
+                          {attachment.type} · {formatBytes(attachment.sizeBytes)}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleRemoveAttachment}
+                        className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex-shrink-0"
+                        title="Remove attachment"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploadingAttachment}
+                      className="flex items-center justify-center gap-1.5 w-full px-3 py-2.5 border border-dashed border-slate-300 rounded-lg text-xs font-semibold text-slate-500 hover:border-indigo-400 hover:text-indigo-600 transition-colors disabled:opacity-50"
+                    >
+                      <Paperclip className="h-3.5 w-3.5" />
+                      {uploadingAttachment ? 'Uploading...' : 'Attach a file (image, PDF, video…)'}
+                    </button>
+                  )}
+                </div>
+
                 <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 flex items-center gap-2.5 text-sm text-indigo-800">
                   <Users className="h-4 w-4 flex-shrink-0" />
                   <span><strong>{matchedAudience.length}</strong> lead{matchedAudience.length === 1 ? '' : 's'} match{matchedAudience.length === 1 ? 'es' : ''} these filters and will receive this message.</span>
@@ -435,7 +522,7 @@ export const Marketing: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={createLoading}
+                  disabled={createLoading || uploadingAttachment}
                   className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm disabled:opacity-50"
                 >
                   <Send className="h-3.5 w-3.5" />
