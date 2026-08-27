@@ -10,6 +10,8 @@ import {
   RefreshCw,
   AlertTriangle,
   ShieldAlert,
+  KeyRound,
+  CheckCircle,
 } from 'lucide-react';
 
 interface WhatsAppSession {
@@ -148,6 +150,99 @@ const WhatsAppPanel: React.FC = () => {
   );
 };
 
+// Lets an already-logged-in user set a new password without going through
+// the email-based Forgot Password flow — the only way to change a
+// password before this existed. Doesn't ask for the current password:
+// supabase-js's updateUser() re-uses the already-authenticated session,
+// which is the standard pattern for a self-service change (as opposed to
+// a password *reset* for someone who's locked out, which is what the
+// email flow is for).
+const ChangePasswordPanel: React.FC = () => {
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccess(false);
+
+    if (newPassword.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
+      if (updateError) throw updateError;
+      setSuccess(true);
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err: any) {
+      setError(err.message || 'Failed to update password.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
+      <h3 className="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
+        <KeyRound className="h-4 w-4 text-indigo-600" /> Change Password
+      </h3>
+      <p className="text-xs text-slate-500 mb-4">Set a new password for your own account.</p>
+
+      {success && (
+        <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-3 text-xs mb-4">
+          <CheckCircle className="h-4 w-4 flex-shrink-0" /> Password updated. Use it next time you log in.
+        </div>
+      )}
+      {error && (
+        <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg px-3 py-2 mb-4">{error}</div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-3 max-w-sm">
+        <div>
+          <label className="block text-xxs font-bold text-slate-400 uppercase tracking-wider mb-1">New Password</label>
+          <input
+            type="password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            required
+            minLength={6}
+            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
+        </div>
+        <div>
+          <label className="block text-xxs font-bold text-slate-400 uppercase tracking-wider mb-1">Confirm New Password</label>
+          <input
+            type="password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            required
+            minLength={6}
+            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={submitting}
+          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold disabled:opacity-50"
+        >
+          {submitting ? 'Updating...' : 'Update Password'}
+        </button>
+      </form>
+    </div>
+  );
+};
+
 export const Settings: React.FC = () => {
   const { role } = useAuth();
   const isAdmin = role === 'super_admin' || role === 'project_admin';
@@ -171,6 +266,7 @@ export const Settings: React.FC = () => {
         <p className="text-slate-500 text-xs mt-1">System configuration.</p>
       </div>
 
+      <ChangePasswordPanel />
       <WhatsAppPanel />
     </div>
   );
