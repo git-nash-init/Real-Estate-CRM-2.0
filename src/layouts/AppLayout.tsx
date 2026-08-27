@@ -24,7 +24,6 @@ import {
   User,
   Menu,
   X,
-  Building,
   Handshake,
   ChevronDown,
   Bell,
@@ -92,12 +91,10 @@ export const AppLayout: React.FC = () => {
         {/* Sidebar Header */}
         <div className="h-16 flex items-center justify-between px-4 bg-slate-950 border-b border-slate-800">
           <div className="flex items-center space-x-3 overflow-hidden">
-            <div className="bg-indigo-600 p-2 rounded-lg text-white flex-shrink-0">
-              <Building className="h-5 w-5" />
-            </div>
+            <img src="/logo-icon.png" alt="Opal Properties" className="h-8 w-8 flex-shrink-0 object-contain" />
             {sidebarOpen && (
               <span className="font-bold text-lg text-white tracking-wider truncate">
-                EstateCRM
+                Opal Properties
               </span>
             )}
           </div>

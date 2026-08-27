@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { Building, Lock, Mail, AlertCircle, ArrowRight, Eye, EyeOff } from 'lucide-react';
+import { Lock, Mail, AlertCircle, ArrowRight, Eye, EyeOff } from 'lucide-react';
 
 export const Login: React.FC = () => {
   const { login, user } = useAuth();
@@ -62,10 +62,8 @@ export const Login: React.FC = () => {
 
         {/* Brand Name */}
         <div className="flex items-center space-x-3 z-10">
-          <div className="bg-indigo-600 p-2.5 rounded-xl text-white">
-            <Building className="h-6 w-6" />
-          </div>
-          <span className="font-bold text-xl tracking-wider">EstateCRM</span>
+          <img src="/logo-icon.png" alt="Opal Properties" className="h-10 w-10 object-contain" />
+          <span className="font-bold text-xl tracking-wider">Opal Properties</span>
         </div>
 
         {/* Content */}
@@ -90,7 +88,7 @@ export const Login: React.FC = () => {
 
         {/* Footer */}
         <div className="z-10 text-xs text-slate-500">
-          &copy; {new Date().getFullYear()} EstateCRM Inc. All rights reserved.
+          &copy; {new Date().getFullYear()} Opal Properties. All rights reserved.
         </div>
       </div>
 
@@ -99,9 +97,7 @@ export const Login: React.FC = () => {
         <div className="w-full max-w-md space-y-8 bg-white p-8 sm:p-10 rounded-2xl shadow-xl border border-slate-100">
           <div className="text-center lg:text-left">
             <div className="lg:hidden flex justify-center mb-6">
-              <div className="bg-indigo-600 p-2.5 rounded-xl text-white">
-                <Building className="h-6 w-6" />
-              </div>
+              <img src="/logo-icon.png" alt="Opal Properties" className="h-12 w-12 object-contain" />
             </div>
             <h3 className="text-2xl font-bold text-slate-900">Welcome Back</h3>
             <p className="text-slate-500 mt-2 text-sm">

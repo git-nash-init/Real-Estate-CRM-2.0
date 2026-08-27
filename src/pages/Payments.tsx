@@ -1629,9 +1629,12 @@ export const Payments: React.FC = () => {
                 return (
                   <div className="border border-slate-300 p-6 rounded-2xl space-y-6">
                     <div className="flex justify-between items-start border-b border-slate-200 pb-4">
-                      <div>
-                        <h3 className="text-xl font-bold text-slate-955 uppercase tracking-wide">EstateCRM</h3>
-                        <p className="text-xxs text-slate-500 font-semibold uppercase mt-0.5">Real Estate Operations Client Receipt</p>
+                      <div className="flex items-center gap-2.5">
+                        <img src="/logo-icon.png" alt="Opal Properties" className="h-8 w-8 object-contain" />
+                        <div>
+                          <h3 className="text-xl font-bold text-slate-955 uppercase tracking-wide">Opal Properties</h3>
+                          <p className="text-xxs text-slate-500 font-semibold uppercase mt-0.5">Real Estate Operations Client Receipt</p>
+                        </div>
                       </div>
                       <div className="text-right">
                         <span className="inline-block px-3 py-1 bg-slate-900 text-white font-bold text-xxs tracking-wider uppercase rounded-md mb-2">OFFICIAL RECEIPT</span>
