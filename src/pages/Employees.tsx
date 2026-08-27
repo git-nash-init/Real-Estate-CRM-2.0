@@ -421,12 +421,33 @@ export const Employees: React.FC = () => {
           // meaning anyone who knew (or guessed) an employee code could
           // log in as that employee.
           const generatedPassword = generateRandomPassword();
+
+          // Resolve a *live* access token rather than relying on
+          // functions.invoke's implicit auth. When the stored session has
+          // expired (or its background refresh failed — e.g. the
+          // navigator.locks contention this app has hit before),
+          // functions.invoke silently falls back to sending the anon
+          // publishable key as the Bearer token. The Edge Function gateway
+          // accepts that key as valid, so the request gets through, but
+          // the function then can't resolve a *user* from it and fails
+          // with "Could not resolve caller identity" — a confusing 401
+          // when the UI still shows you as logged in (React state is
+          // stale, held in memory from before the token expired).
+          // getSession() refreshes an expired token if it can; if it
+          // can't, we say so plainly instead of emitting that 401.
+          const { data: sessionData } = await supabase.auth.getSession();
+          const accessToken = sessionData.session?.access_token;
+          if (!accessToken) {
+            throw new Error('Your login session has expired. Please sign out and sign back in, then try again.');
+          }
+
           const { data: fnData, error: fnError } = await supabase.functions.invoke('create-employee-account', {
             body: {
               email: targetEmail,
               password: generatedPassword,
               full_name: `${firstName} ${lastName || ''}`.trim(),
             },
+            headers: { Authorization: `Bearer ${accessToken}` },
           });
 
           if (fnError) {
