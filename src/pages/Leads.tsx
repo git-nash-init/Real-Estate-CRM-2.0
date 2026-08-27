@@ -29,7 +29,8 @@ import {
   MapPin,
   MessageCircle,
   Send,
-  Paperclip
+  Paperclip,
+  Pencil
 } from 'lucide-react';
 
 interface Lead {
@@ -75,7 +76,7 @@ export const Leads: React.FC = () => {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
 
   // Auth and Routing hooks
-  const { user } = useAuth();
+  const { user, role } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | null>(null);
   const [isLogCallOpen, setIsLogCallOpen] = useState(false);
@@ -117,6 +118,16 @@ export const Leads: React.FC = () => {
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Same modal doubles as the Edit form — editingLead is null while
+  // creating, set to the lead being edited otherwise. There was previously
+  // NO way to edit a lead's info at all after creation (confirmed: no
+  // update call anywhere in this file touched anything but
+  // last_contact_at). Source is the one field locked down once a lead
+  // exists — enforced for real by enforce_lead_source_change_trigger on
+  // the database, not just this UI check.
+  const [editingLead, setEditingLead] = useState<Lead | null>(null);
+  const canEditSource = role === 'super_admin' || role === 'site_head';
 
   // Creation form fields
   const [customerName, setCustomerName] = useState('');
@@ -537,7 +548,39 @@ export const Leads: React.FC = () => {
     return `LD-${Date.now()}`;
   };
 
-  // Form submission logic to insert lead into Supabase
+  // Populates the shared create/edit form's state from an existing lead
+  // and opens it in edit mode.
+  const openEditLead = (lead: Lead) => {
+    setEditingLead(lead);
+    setCustomerName(lead.customer_name || '');
+    setMobile(lead.mobile || '');
+    setEmail((lead as any).email || '');
+    setSelectedProjectId(lead.project_id || '');
+    setSelectedOwnerId(lead.owner_id || '');
+    setSelectedSource(lead.source || 'walk_in');
+    setSelectedStatus(lead.status || 'new');
+    setSelectedChannelPartnerId(lead.channel_partner_id || '');
+    setNotes(lead.notes || '');
+    setVisitType((lead as any).visit_type || 'Fresh');
+    setVisitDate((lead as any).visit_date || new Date().toISOString().split('T')[0]);
+    setResidenceAddress((lead as any).residence_address || '');
+    setProfession((lead as any).occupation || '');
+    setRequirementDetails((lead as any).configuration || '');
+    setBudget((lead as any).budget || '');
+    setSourcingManagerId((lead as any).sourcing_manager_id || '');
+    setTelecallerId((lead as any).telecaller_id || '');
+    setNextFollowupAt((lead as any).next_followup_at ? (lead as any).next_followup_at.slice(0, 16) : '');
+    setCreateError(null);
+    setIsCreateOpen(true);
+  };
+
+  // Form submission logic — inserts a new lead, or updates the one being
+  // edited. Source is included in the update payload regardless of
+  // canEditSource: if it's unchanged the DB trigger never fires (it only
+  // checks when NEW.source IS DISTINCT FROM OLD.source), and if a
+  // non-privileged user's control was disabled it will already equal the
+  // original value, so this can't be used to sneak a change through — the
+  // trigger is the real enforcement either way.
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customerName.trim()) {
@@ -557,69 +600,74 @@ export const Leads: React.FC = () => {
     setCreateLoading(true);
 
     try {
-      // 1. Fetch the current highest lead_number from Supabase
-      const { data: maxLeadData, error: maxLeadError } = await supabase
-        .from('leads')
-        .select('lead_number')
-        .order('lead_number', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const sharedFields = {
+        customer_name: customerName.trim(),
+        mobile: mobile.trim(),
+        email: email.trim() || null,
+        project_id: selectedProjectId || null,
+        // Included even when the source control is disabled for this
+        // user — it's just their unchanged original value in that case,
+        // so it triggers no actual change and the DB trigger stays quiet.
+        // A non-privileged user attempting to bypass the disabled control
+        // via devtools would still be rejected by
+        // enforce_lead_source_change_trigger regardless of what this sends.
+        source: selectedSource || null,
+        owner_id: selectedOwnerId || null,
+        status: selectedStatus || 'new',
+        notes: notes.trim() || null,
+        channel_partner_id: selectedChannelPartnerId || null,
+        visit_type: visitType,
+        visit_date: visitDate || null,
+        residence_address: residenceAddress.trim() || null,
+        occupation: profession || null,
+        configuration: requirementDetails || null,
+        budget: budget.trim() || null,
+        sourcing_manager_id: sourcingManagerId || null,
+        telecaller_id: telecallerId || null,
+        next_followup_at: nextFollowupAt ? new Date(nextFollowupAt).toISOString() : null,
+      };
 
-      if (maxLeadError) {
-        reportQueryError('Leads: next lead number', maxLeadError);
-      }
+      let insertedLead: { id: string } | null = null;
 
-      // 2. Generate the next lead number
-      const nextLeadNumber = generateLeadNumber(maxLeadData?.lead_number || null);
+      if (editingLead) {
+        const { error: updateError } = await supabase
+          .from('leads')
+          .update(sharedFields)
+          .eq('id', editingLead.id);
+        if (updateError) throw new Error(updateError.message);
+      } else {
+        // 1. Fetch the current highest lead_number from Supabase
+        const { data: maxLeadData, error: maxLeadError } = await supabase
+          .from('leads')
+          .select('lead_number')
+          .order('lead_number', { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-      // Debugging logs to verify UUID configurations and values before database submission
-      console.log('--- Submitting Lead Insert ---');
-      console.log('project_id (selectedProjectId):', selectedProjectId);
-      console.log('project_name:', projectMap.get(selectedProjectId) || 'None');
-      console.log('owner_id (sourcing manager):', selectedOwnerId || 'None');
-      console.log('owner_name:', profileMap.get(selectedOwnerId) || 'None');
-      console.log('created_by:', user?.id || 'None');
-      console.log('lead_number:', nextLeadNumber);
-      console.log('------------------------------');
+        if (maxLeadError) {
+          reportQueryError('Leads: next lead number', maxLeadError);
+        }
 
-      // 3. Insert record supplying generated lead_number and selected project UUID
-      const { data: insertedLead, error: insertError } = await supabase
-        .from('leads')
-        .insert([
-          {
-            lead_number: nextLeadNumber,
-            customer_name: customerName.trim(),
-            mobile: mobile.trim(),
-            email: email.trim() || null,
-            project_id: selectedProjectId || null,
-            source: selectedSource || null,
-            owner_id: selectedOwnerId || null,
-            status: selectedStatus || 'new',
-            notes: notes.trim() || null,
-            channel_partner_id: selectedChannelPartnerId || null,
-            created_by: user?.id || null,
-            visit_type: visitType,
-            visit_date: visitDate || null,
-            residence_address: residenceAddress.trim() || null,
-            occupation: profession || null,
-            configuration: requirementDetails || null,
-            budget: budget.trim() || null,
-            sourcing_manager_id: sourcingManagerId || null,
-            telecaller_id: telecallerId || null,
-            next_followup_at: nextFollowupAt ? new Date(nextFollowupAt).toISOString() : null
-          }
-        ])
-        .select('id')
-        .single();
+        // 2. Generate the next lead number
+        const nextLeadNumber = generateLeadNumber(maxLeadData?.lead_number || null);
 
-      if (insertError) {
-        throw new Error(insertError.message);
+        // 3. Insert record supplying generated lead_number and selected project UUID
+        const { data, error: insertError } = await supabase
+          .from('leads')
+          .insert([{ ...sharedFields, lead_number: nextLeadNumber, created_by: user?.id || null }])
+          .select('id')
+          .single();
+
+        if (insertError) throw new Error(insertError.message);
+        insertedLead = data;
       }
 
       // Channel Partner lead claim: 45-day window + verification code.
       // Non-fatal if this fails — the lead itself is already saved; the CP
-      // attribution/commission tracking is a secondary record.
-      if (selectedChannelPartnerId && insertedLead?.id) {
+      // attribution/commission tracking is a secondary record. Only on
+      // creation — editing an existing lead's CP attribution afterward
+      // doesn't re-trigger a new claim/verification code.
+      if (!editingLead && selectedChannelPartnerId && insertedLead?.id) {
         const verificationCode = Math.random().toString(36).slice(2, 8).toUpperCase();
         const claimExpiresAt = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString();
         const { data: claimRow, error: claimErr } = await supabase
@@ -657,25 +705,8 @@ export const Leads: React.FC = () => {
       }
 
       // Close modal & clear input fields
-      setIsCreateOpen(false);
-      setCustomerName('');
-      setMobile('');
-      setEmail('');
-      setSelectedProjectId('');
-      setSelectedOwnerId('');
-      setSelectedSource('walk_in');
-      setSelectedStatus('new');
-      setSelectedChannelPartnerId('');
-      setNotes('');
-      setVisitType('Fresh');
-      setVisitDate(new Date().toISOString().split('T')[0]);
-      setResidenceAddress('');
-      setProfession('');
-      setRequirementDetails('');
-      setBudget('');
-      setSourcingManagerId('');
-      setTelecallerId('');
-      setNextFollowupAt('');
+      const wasEditing = !!editingLead;
+      closeCreateModal();
 
       // Refresh list
       setPage(0);
@@ -683,17 +714,21 @@ export const Leads: React.FC = () => {
 
       setNotification({
         type: 'success',
-        message: 'New lead record created successfully!'
+        message: wasEditing ? 'Lead updated successfully!' : 'New lead record created successfully!'
       });
     } catch (err: any) {
       console.error('Detailed Supabase Lead creation error:', err);
       // Clean up PostgreSQL constraint errors for the user
       if (err.message && err.message.toLowerCase().includes('violates not-null constraint')) {
         setCreateError('Database Insertion Denied: Please make sure a valid Project is selected and all other required fields are filled out.');
-      } else if (err.message && err.message.toLowerCase().includes('already exists in the system')) {
-        // Raised by the prevent_duplicate_lead_phone_trigger DB trigger —
-        // strip the internal lead id before showing it to the user.
-        setCreateError('A lead with this mobile number already exists in the system. Duplicate submissions are not allowed.');
+      } else if (err.message && err.message.toLowerCase().includes('already exists for this project')) {
+        // Raised by prevent_duplicate_lead_phone_trigger — dedup is
+        // project-scoped, so the same number is fine on a different
+        // project. Strip the internal lead id before showing it.
+        setCreateError('A lead with this mobile number already exists for this project. The same number can still be added under a different project.');
+      } else if (err.message && err.message.toLowerCase().includes('only super admin or site head can change')) {
+        // Raised by enforce_lead_source_change_trigger.
+        setCreateError('Only Super Admin or Site Head can change a lead\'s source once it has been added.');
       } else {
         setCreateError(err.message || 'Database connection error occurred while inserting lead.');
       }
@@ -704,6 +739,8 @@ export const Leads: React.FC = () => {
 
   const closeCreateModal = () => {
     setIsCreateOpen(false);
+    setEditingLead(null);
+    setCreateError(null);
     setCustomerName('');
     setMobile('');
     setEmail('');
@@ -924,6 +961,13 @@ export const Leads: React.FC = () => {
                               <MessageCircle className="h-3.5 w-3.5" />
                             </button>
                             <button
+                              onClick={() => openEditLead(lead)}
+                              title="Edit lead"
+                              className="inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-indigo-600 transition-colors focus:outline-none"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
                               onClick={() => setSelectedLead(lead)}
                               className="inline-flex items-center space-x-1 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition-colors focus:outline-none"
                             >
@@ -1103,6 +1147,12 @@ export const Leads: React.FC = () => {
 
             {/* Modal Footer */}
             <div className="bg-slate-50 px-6 py-4 flex justify-end gap-2 border-t border-slate-100">
+              <button
+                onClick={() => { openEditLead(selectedLead); setSelectedLead(null); }}
+                className="flex items-center gap-1.5 px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
+              >
+                <Pencil className="h-3.5 w-3.5" /> Edit
+              </button>
               <button
                 onClick={() => openWhatsApp(selectedLead)}
                 disabled={!selectedLead.mobile}
@@ -1366,7 +1416,7 @@ export const Leads: React.FC = () => {
           <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-5xl w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             {/* Modal Header */}
             <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">Create New Lead</span>
+              <span className="font-bold tracking-tight">{editingLead ? 'Edit Lead' : 'Create New Lead'}</span>
               <button
                 type="button"
                 onClick={closeCreateModal}
@@ -1548,14 +1598,20 @@ export const Leads: React.FC = () => {
                       />
                     </div>
 
-                    {/* Source Of Inquiry */}
+                    {/* Source Of Inquiry — free to set at creation; once
+                        the lead exists, only Super Admin / Site Head can
+                        change it (enforced for real by
+                        enforce_lead_source_change_trigger on the DB —
+                        disabling the control here is just UX, not the
+                        actual boundary). */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Source Of Inquiry *</label>
                       <select
                         required
+                        disabled={!!editingLead && !canEditSource}
                         value={selectedSource}
                         onChange={(e) => setSelectedSource(e.target.value)}
-                        className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
+                        className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all disabled:opacity-60 disabled:cursor-not-allowed"
                       >
                         <option value="">Select Source...</option>
                         <option value="digital">Digital Marketing</option>
@@ -1567,6 +1623,9 @@ export const Leads: React.FC = () => {
                         <option value="hoarding">Banner/Hoarding</option>
                         <option value="calling">Calling</option>
                       </select>
+                      {editingLead && !canEditSource && (
+                        <p className="text-[10px] text-amber-600 mt-1">Only Super Admin or Site Head can change the source of an existing lead.</p>
+                      )}
                     </div>
                   </div>
 
@@ -1694,7 +1753,7 @@ export const Leads: React.FC = () => {
                   disabled={createLoading}
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
                 >
-                  {createLoading ? 'Inserting...' : 'Create Lead'}
+                  {createLoading ? (editingLead ? 'Saving...' : 'Inserting...') : (editingLead ? 'Save Changes' : 'Create Lead')}
                 </button>
               </div>
             </form>
