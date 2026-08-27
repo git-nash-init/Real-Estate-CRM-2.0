@@ -114,6 +114,13 @@ export const Employees: React.FC = () => {
   const [managersLookup, setManagersLookup] = useState<ManagerLookup[]>([]);
   const [userRolesMap, setUserRolesMap] = useState<Map<string, string>>(new Map()); // user_id -> role_name
 
+  // Project assignment. Super admin has access to every project already
+  // (has_project_access() short-circuits true for is_super_admin()), so
+  // this only matters — and only shows — for every other role, per the
+  // client's explicit requirement.
+  const [projectsList, setProjectsList] = useState<{ id: string; project_name: string }[]>([]);
+  const [assignedProjectIds, setAssignedProjectIds] = useState<string[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -169,15 +176,17 @@ export const Employees: React.FC = () => {
   // Fetch Lookups (Profiles, Roles, User Roles map, Managers Lookup)
   const fetchLookups = useCallback(async () => {
     try {
-      const [profilesRes, rolesRes, userRolesRes, employeesLookupRes] = await Promise.all([
+      const [profilesRes, rolesRes, userRolesRes, employeesLookupRes, projectsRes] = await Promise.all([
         supabase.from('user_profiles').select('id, full_name, email'),
         supabase.from('roles').select('id, name'),
         supabase.from('user_roles').select('user_id, role_id'),
-        supabase.from('employees').select('id, first_name, last_name, designation')
+        supabase.from('employees').select('id, first_name, last_name, designation'),
+        supabase.from('projects').select('id, project_name').order('project_name')
       ]);
 
       if (profilesRes.data) setProfiles(profilesRes.data);
       if (rolesRes.data) setRolesList(rolesRes.data);
+      if (projectsRes.data) setProjectsList(projectsRes.data);
 
       if (rolesRes.data && userRolesRes.data) {
         const roleMap = new Map(rolesRes.data.map(r => [r.id, r.name]));
@@ -320,6 +329,7 @@ export const Employees: React.FC = () => {
     setEmergencyContactPhone('');
     setNotes('');
     setSelectedUserId('');
+    setAssignedProjectIds([]);
     setFormError(null);
   };
 
@@ -364,6 +374,14 @@ export const Employees: React.FC = () => {
 
     const rName = emp.user_id ? userRolesMap.get(emp.user_id) : '';
     setSelectedRole((rName as UserRole) || '');
+
+    if (emp.user_id) {
+      supabase.from('user_project_assignments').select('project_id').eq('user_id', emp.user_id).eq('is_active', true)
+        .then(({ data, error }) => {
+          if (error) reportQueryError('Employees: existing project assignments', error);
+          else setAssignedProjectIds((data || []).map(r => r.project_id));
+        });
+    }
 
     setIsFormOpen(true);
   };
@@ -581,6 +599,47 @@ export const Employees: React.FC = () => {
         });
         if (roleError) {
           throw new Error(`Employee saved, but assigning the role failed: ${roleError.message}`);
+        }
+
+        // Project assignment — skipped for super_admin, who already has
+        // access to every project's data (has_project_access() returns
+        // true for them unconditionally). For every other role, this is
+        // the actual access-control mechanism: has_project_access() reads
+        // this table, so leads/bookings/inventory RLS across the app
+        // start reflecting whatever is selected here as soon as this
+        // save completes. Re-editable later — reopening Edit on this same
+        // employee loads their current assignments and any change here
+        // takes effect immediately for their NEXT query; a tab they
+        // already have open still shows what it last fetched until they
+        // reload or navigate, same as any other live data in this app.
+        //
+        // Delete-then-insert rather than upsert: user_project_assignments
+        // has no single-column unique key .upsert() could target cleanly,
+        // and this also correctly handles a project being unchecked
+        // (removed) — upsert alone can only add/update rows, never remove
+        // ones no longer selected.
+        if (selectedRole !== 'super_admin') {
+          const { error: deleteAssignErr } = await supabase
+            .from('user_project_assignments')
+            .delete()
+            .eq('user_id', finalUserId);
+          if (deleteAssignErr) {
+            throw new Error(`Employee and role saved, but clearing old project assignments failed: ${deleteAssignErr.message}`);
+          }
+
+          if (assignedProjectIds.length > 0) {
+            const { error: insertAssignErr } = await supabase
+              .from('user_project_assignments')
+              .insert(assignedProjectIds.map(projectId => ({
+                user_id: finalUserId,
+                project_id: projectId,
+                role_id: matchedRole.id,
+                is_active: true,
+              })));
+            if (insertAssignErr) {
+              throw new Error(`Employee and role saved, but assigning projects failed: ${insertAssignErr.message}`);
+            }
+          }
         }
       }
 
@@ -1509,6 +1568,43 @@ export const Employees: React.FC = () => {
                         ))}
                       </select>
                     </div>
+
+                    {/* Project Assignment — super_admin already has access
+                        to every project's data (has_project_access() short
+                        -circuits true for them), so this only appears, and
+                        only matters, for every other role. Whichever
+                        projects are checked here become the only project
+                        data this employee's account can see. */}
+                    {selectedRole && selectedRole !== 'super_admin' && (
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                          Assigned Project(s) <span className="text-slate-400 normal-case font-normal">— data access is limited to these</span>
+                        </label>
+                        <div className="border border-slate-200 rounded-xl bg-slate-50 p-3 space-y-1.5 max-h-40 overflow-y-auto">
+                          {projectsList.length === 0 ? (
+                            <p className="text-xs text-slate-400 italic">No projects found.</p>
+                          ) : (
+                            projectsList.map(p => (
+                              <label key={p.id} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={assignedProjectIds.includes(p.id)}
+                                  onChange={(e) => {
+                                    setAssignedProjectIds(prev =>
+                                      e.target.checked ? [...prev, p.id] : prev.filter(id => id !== p.id)
+                                    );
+                                  }}
+                                />
+                                {p.project_name}
+                              </label>
+                            ))
+                          )}
+                        </div>
+                        {assignedProjectIds.length === 0 && (
+                          <p className="text-[10px] text-amber-600 mt-1">No project selected — this employee won't see any project-scoped data until at least one is assigned.</p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
