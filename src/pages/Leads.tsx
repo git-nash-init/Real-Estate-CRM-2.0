@@ -20,7 +20,9 @@ import {
   FileText,
   Play,
   Square,
-  MapPin
+  MapPin,
+  MessageCircle,
+  Send
 } from 'lucide-react';
 
 interface Lead {
@@ -74,6 +76,18 @@ export const Leads: React.FC = () => {
   const [callNotes, setCallNotes] = useState('');
   const [callSubmitting, setCallSubmitting] = useState(false);
   const [callError, setCallError] = useState<string | null>(null);
+
+  // WhatsApp compose. Messages aren't sent from the browser — they're
+  // queued into whatsapp_outbox, and the standalone Baileys gateway
+  // (whatsapp-gateway/) picks them up and sends them from the connected
+  // WhatsApp account, throttled. Same path the CP verification codes
+  // already use, so there's one send pipeline, not two.
+  const [waLead, setWaLead] = useState<Lead | null>(null);
+  const [waMessage, setWaMessage] = useState('');
+  const [waSubmitting, setWaSubmitting] = useState(false);
+  const [waError, setWaError] = useState<string | null>(null);
+  const [waSuccess, setWaSuccess] = useState(false);
+  const [waGatewayOnline, setWaGatewayOnline] = useState<boolean | null>(null);
 
   // Anti-fraud call timing: duration is measured by the app (Start Call /
   // End Call), never hand-typed, so a telecaller can't just enter a fake
@@ -282,6 +296,76 @@ export const Leads: React.FC = () => {
     setCallLocation(null);
     setCallLocationError(null);
     setIsLogCallOpen(true);
+  };
+
+  const openWhatsApp = async (lead: Lead) => {
+    setWaLead(lead);
+    setWaMessage(`Hi ${lead.customer_name || 'there'}, `);
+    setWaError(null);
+    setWaSuccess(false);
+    setWaGatewayOnline(null);
+
+    // Surface up front whether the gateway is actually running, rather
+    // than silently queueing a message that will sit unsent. The gateway
+    // heartbeats into whatsapp_session every few seconds; a stale
+    // heartbeat means the process isn't up. Same 20s staleness threshold
+    // Settings.tsx uses.
+    const { data } = await supabase
+      .from('whatsapp_session')
+      .select('status, last_heartbeat_at')
+      .eq('id', 'default')
+      .maybeSingle();
+    const fresh = data?.last_heartbeat_at
+      ? Date.now() - new Date(data.last_heartbeat_at).getTime() < 20000
+      : false;
+    setWaGatewayOnline(fresh && data?.status === 'open');
+  };
+
+  const handleWhatsAppSend = async () => {
+    // Guard against a double-fire (fast double-click, or Enter landing on
+    // an already-pressed button) queueing the same message twice. The
+    // disabled attribute alone isn't enough — React sets it on the next
+    // render, so a second click landing in the same tick still gets
+    // through. Confirmed live: a rapid double-click produced two
+    // whatsapp_outbox rows, i.e. the lead would have received the message
+    // twice.
+    if (waSubmitting || waSuccess) return;
+    if (!waLead) return;
+    const phone = (waLead.mobile || '').trim();
+    if (!phone) {
+      setWaError('This lead has no mobile number on record.');
+      return;
+    }
+    if (!waMessage.trim()) {
+      setWaError('Please type a message to send.');
+      return;
+    }
+
+    setWaSubmitting(true);
+    setWaError(null);
+    try {
+      const { error } = await supabase.from('whatsapp_outbox').insert([{
+        to_phone: phone,
+        message: waMessage.trim(),
+        lead_id: waLead.id,
+        status: 'queued',
+        created_by: user?.id || null,
+      }]);
+      if (error) throw error;
+
+      // Sending a WhatsApp message is a real touchpoint — reflect it on
+      // the lead the same way logging a call does, so follow-up ordering
+      // and the stale-lead views stay accurate.
+      await supabase.from('leads').update({ last_contact_at: new Date().toISOString() }).eq('id', waLead.id);
+
+      setWaSuccess(true);
+      setWaMessage('');
+    } catch (err: any) {
+      reportQueryError('Leads: WhatsApp send', err);
+      setWaError(err.message || 'Failed to queue the WhatsApp message.');
+    } finally {
+      setWaSubmitting(false);
+    }
   };
 
   // Stop the running interval (call ended, modal closed, or component unmounts).
@@ -781,13 +865,23 @@ export const Leads: React.FC = () => {
                           {new Date(lead.created_at).toLocaleDateString('en-IN')}
                         </td>
                         <td className="py-4 px-6 text-right">
-                          <button
-                            onClick={() => setSelectedLead(lead)}
-                            className="inline-flex items-center space-x-1 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition-colors focus:outline-none"
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                            <span>View</span>
-                          </button>
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              onClick={() => openWhatsApp(lead)}
+                              disabled={!lead.mobile}
+                              title={lead.mobile ? 'Send WhatsApp message' : 'No mobile number on record'}
+                              className="inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg text-emerald-600 hover:bg-emerald-50 hover:border-emerald-200 transition-colors focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                            >
+                              <MessageCircle className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              onClick={() => setSelectedLead(lead)}
+                              className="inline-flex items-center space-x-1 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition-colors focus:outline-none"
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                              <span>View</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -961,6 +1055,14 @@ export const Leads: React.FC = () => {
             {/* Modal Footer */}
             <div className="bg-slate-50 px-6 py-4 flex justify-end gap-2 border-t border-slate-100">
               <button
+                onClick={() => openWhatsApp(selectedLead)}
+                disabled={!selectedLead.mobile}
+                title={selectedLead.mobile ? 'Send WhatsApp message' : 'No mobile number on record'}
+                className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
+              </button>
+              <button
                 onClick={openLogCall}
                 className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
               >
@@ -976,6 +1078,82 @@ export const Leads: React.FC = () => {
           </div>
         </div>
       )}
+
+        {waLead && (
+          <div className="fixed inset-0 z-[70] overflow-y-auto flex items-center justify-center p-4">
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => !waSubmitting && setWaLead(null)} />
+            <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+              <div className="bg-emerald-600 text-white px-6 py-4 flex items-center justify-between">
+                <span className="font-bold tracking-tight flex items-center gap-2">
+                  <MessageCircle className="h-4 w-4" /> Send WhatsApp Message
+                </span>
+                <button onClick={() => !waSubmitting && setWaLead(null)} className="p-1 rounded-lg text-emerald-200 hover:text-white">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <div className="bg-slate-50 border border-slate-100 rounded-xl px-4 py-3">
+                  <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Sending To</span>
+                  <span className="text-sm font-semibold text-slate-800">
+                    {waLead.customer_name || 'Unnamed Client'} — {waLead.mobile || 'No number'}
+                  </span>
+                </div>
+
+                {waGatewayOnline === false && (
+                  <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-xs">
+                    <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                    <span>
+                      WhatsApp isn't connected right now, so this message will sit in the queue until it is.
+                      Connect it under <strong>Settings → WhatsApp Connection</strong>.
+                    </span>
+                  </div>
+                )}
+
+                {waSuccess ? (
+                  <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-4 text-sm">
+                    Message queued. It will be delivered from the connected WhatsApp account shortly.
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-xxs font-bold text-slate-400 uppercase tracking-wider mb-1.5">Message</label>
+                    <textarea
+                      value={waMessage}
+                      onChange={(e) => setWaMessage(e.target.value)}
+                      rows={5}
+                      placeholder="Type the message you want to send..."
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 resize-none"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">{waMessage.trim().length} characters</p>
+                  </div>
+                )}
+
+                {waError && (
+                  <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg px-3 py-2">{waError}</div>
+                )}
+              </div>
+
+              <div className="bg-slate-50 px-6 py-4 flex justify-end gap-2 border-t border-slate-100">
+                <button
+                  onClick={() => setWaLead(null)}
+                  disabled={waSubmitting}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl disabled:opacity-50"
+                >
+                  {waSuccess ? 'Close' : 'Cancel'}
+                </button>
+                {!waSuccess && (
+                  <button
+                    onClick={handleWhatsAppSend}
+                    disabled={waSubmitting || !waMessage.trim()}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Send className="h-3.5 w-3.5" /> {waSubmitting ? 'Sending...' : 'Send Message'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {isLogCallOpen && (
           <div className="fixed inset-0 z-[70] overflow-y-auto flex items-center justify-center p-4">
