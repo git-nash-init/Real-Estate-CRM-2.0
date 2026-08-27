@@ -28,6 +28,9 @@ interface OutreachEntry {
   meeting_remarks: string | null;
   live_location: string | null;
   logged_by: string | null;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewed_by: string | null;
+  reviewed_at: string | null;
   created_at: string;
 }
 
@@ -66,7 +69,13 @@ const emptyForm = {
 };
 
 export const CPOutreach: React.FC = () => {
-  const { user } = useAuth();
+  const { user, role } = useAuth();
+  // "Accepted" (approved/rejected) only by Super Admin or Site Head — the
+  // real boundary is the enforce_cp_outreach_status_change_trigger DB
+  // trigger, which independently rejects the update regardless of what
+  // this check does. This just decides whether to show the buttons.
+  const canReview = role === 'super_admin' || role === 'site_head';
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [entries, setEntries] = useState<OutreachEntry[]>([]);
   const [sourcingManagers, setSourcingManagers] = useState<SourcingManagerOption[]>([]);
   const [channelPartners, setChannelPartners] = useState<ChannelPartnerOption[]>([]);
@@ -226,6 +235,24 @@ export const CPOutreach: React.FC = () => {
     );
   };
 
+  const handleReview = async (entry: OutreachEntry, nextStatus: 'approved' | 'rejected') => {
+    setReviewingId(entry.id);
+    try {
+      // reviewed_by / reviewed_at are stamped server-side by the trigger,
+      // not sent from here — the trigger overwrites whatever the client
+      // sends for those two columns anyway.
+      const { error } = await supabase.from('cp_outreach').update({ status: nextStatus }).eq('id', entry.id);
+      if (error) throw error;
+      setEntries(prev => prev.map(e => e.id === entry.id ? { ...e, status: nextStatus } : e));
+      setNotification({ type: 'success', message: `Outreach entry ${nextStatus}.` });
+    } catch (err: any) {
+      reportQueryError('CP Outreach: review', err);
+      setNotification({ type: 'error', message: err.message || 'Failed to update status.' });
+    } finally {
+      setReviewingId(null);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.meetDate || (!form.sourcingManagerId && !form.sourcingManagerOther.trim()) ||
@@ -350,6 +377,8 @@ export const CPOutreach: React.FC = () => {
                 <th className="py-3 px-6">Type</th>
                 <th className="py-3 px-6">Visit</th>
                 <th className="py-3 px-6">Active In</th>
+                <th className="py-3 px-6">Status</th>
+                {canReview && <th className="py-3 px-6 text-right">Review</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -369,11 +398,44 @@ export const CPOutreach: React.FC = () => {
                       </span>
                     </td>
                     <td className="py-3 px-6 text-slate-500 text-xs">{en.leads_source_active_in.join(', ')}</td>
+                    <td className="py-3 px-6">
+                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xxs font-semibold capitalize ${
+                        en.status === 'approved' ? 'bg-emerald-50 text-emerald-700'
+                        : en.status === 'rejected' ? 'bg-rose-50 text-rose-700'
+                        : 'bg-amber-50 text-amber-700'
+                      }`}>
+                        {en.status || 'pending'}
+                      </span>
+                    </td>
+                    {canReview && (
+                      <td className="py-3 px-6 text-right">
+                        {en.status === 'pending' ? (
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              onClick={() => handleReview(en, 'approved')}
+                              disabled={reviewingId === en.id}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xxs font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                            >
+                              <CheckCircle className="h-3 w-3" /> Approve
+                            </button>
+                            <button
+                              onClick={() => handleReview(en, 'rejected')}
+                              disabled={reviewingId === en.id}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xxs font-semibold bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                            >
+                              <XCircle className="h-3 w-3" /> Reject
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-xxs text-slate-400 italic">Reviewed</span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={7} className="py-10 text-center text-slate-400 italic">No outreach visits logged yet.</td>
+                  <td colSpan={canReview ? 9 : 8} className="py-10 text-center text-slate-400 italic">No outreach visits logged yet.</td>
                 </tr>
               )}
             </tbody>

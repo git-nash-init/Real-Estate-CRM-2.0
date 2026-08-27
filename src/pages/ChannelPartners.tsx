@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
+import { useAuth } from '../hooks/useAuth';
 import {
   Search,
   RefreshCw,
@@ -105,6 +106,13 @@ const parseCityField = (cityVal: string | null) => {
 
 export const ChannelPartners: React.FC = () => {
   const navigate = useNavigate();
+  const { role } = useAuth();
+  // "sourcing, sourcing TL, site head, super admin these are the users who
+  // can add channel partners only" — the real boundary is the
+  // channel_partners_insert RLS policy; this only hides the button for a
+  // role that would get rejected by the database anyway (e.g.
+  // project_admin, who can still view/manage existing partners).
+  const canCreatePartner = role === 'super_admin' || role === 'site_head' || role === 'sourcing_manager_tl' || role === 'sourcing_manager';
 
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState('');
@@ -351,9 +359,14 @@ export const ChannelPartners: React.FC = () => {
       let partnerId = editingPartner?.id;
 
 
-      // Check duplicates
+      // Quick client-side check for instant feedback before the round
+      // trip — but the real enforcement is the prevent_duplicate_cp_
+      // mobile_trigger DB trigger below, which also catches races between
+      // two people submitting at once and doesn't depend on `partners`
+      // being freshly loaded. `p.phone` was dead code: channel_partners
+      // has no `phone` column, only `mobile`.
       const dupeCheck = partners.filter(p => p.id !== partnerId);
-      if (dupeCheck.some(p => p.phone === phone.trim() || p.mobile === phone.trim())) {
+      if (dupeCheck.some(p => p.mobile === phone.trim())) {
         throw new Error('A partner with this phone number is already registered.');
       }
       if (email.trim() && dupeCheck.some(p => p.email?.toLowerCase() === email.trim().toLowerCase())) {
@@ -395,16 +408,25 @@ export const ChannelPartners: React.FC = () => {
           .eq('id', partnerId);
         if (editErr) throw editErr;
       } else {
-        // Create Partner
+        // Create Partner. `cp_code` is NOT NULL on this table but this
+        // insert never set it — confirmed live: any new Channel Partner
+        // creation through this form failed outright with a "null value
+        // in column cp_code violates not-null constraint" error. The 6
+        // existing partners all have a real cp_code (CP-0001..CP-0006),
+        // so it clearly used to be set somewhere; this restores that,
+        // using the same generated code for both columns since the
+        // comment below already treats partner_code as the legacy twin
+        // of cp_code.
         const { data: maxCP } = await supabase
           .from('channel_partners')
-          .select('partner_code')
-          .order('partner_code', { ascending: false })
+          .select('cp_code')
+          .order('cp_code', { ascending: false })
           .limit(1)
           .maybeSingle();
 
-        const generatedCode = generateCPCode(maxCP?.partner_code || null);
-        payload.partner_code = generatedCode; // Legacy code
+        const generatedCode = generateCPCode(maxCP?.cp_code || null);
+        payload.cp_code = generatedCode;
+        payload.partner_code = generatedCode; // Legacy code, kept in sync
         payload.created_at = new Date().toISOString();
 
         const { data: newCP, error: createErr } = await supabase
@@ -449,7 +471,15 @@ export const ChannelPartners: React.FC = () => {
       await fetchData();
     } catch (err: any) {
       console.error('Channel Partner form error:', err);
-      setFormError(err.message || 'An error occurred while saving.');
+      // Raised by prevent_duplicate_cp_mobile_trigger — a real DB-level
+      // check now, not just the client-side comparison against whatever
+      // was already loaded into `partners` above. Strip the internal id
+      // before showing it to the user.
+      if (err.message && /already registered to channel partner/i.test(err.message)) {
+        setFormError(err.message.replace(/\s*\(id [0-9a-f-]+\)/i, ''));
+      } else {
+        setFormError(err.message || 'An error occurred while saving.');
+      }
     } finally {
       setFormLoading(false);
     }
@@ -605,13 +635,15 @@ export const ChannelPartners: React.FC = () => {
             <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
-          <button
-            onClick={() => { resetFormFields(); setEditingPartner(null); setIsCreateOpen(true); }}
-            className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            <span>New Channel Partner</span>
-          </button>
+          {canCreatePartner && (
+            <button
+              onClick={() => { resetFormFields(); setEditingPartner(null); setIsCreateOpen(true); }}
+              className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>New Channel Partner</span>
+            </button>
+          )}
         </div>
       </div>
 
