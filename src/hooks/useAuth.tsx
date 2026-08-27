@@ -5,6 +5,8 @@ import type { UserProfile, UserRole, UserSession } from '../types/auth';
 interface AuthContextType extends UserSession {
   login: (email: string, password: string) => Promise<{ error: any }>;
   logout: () => Promise<{ error: any }>;
+  /** True once `loading` has been stuck for too long — see the timeout effect below. */
+  timedOut: boolean;
 }
 
 interface AuthUser {
@@ -84,6 +86,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     role: null,
     loading: true,
   });
+  const [timedOut, setTimedOut] = useState(false);
+
+  // Safety net for the exact failure mode that once caused a permanent
+  // "Verifying secure session..." hang (see the comment on the auth-event
+  // listener below): if `loading` is ever stuck for more than 10s — a
+  // held navigator.locks lock from a stale tab, a network call that never
+  // resolves, anything — stop pretending the app is about to recover on
+  // its own and tell ProtectedRoute to offer a reload instead. A full page
+  // reload starts a fresh browsing context, which releases any
+  // origin-scoped lock the previous context was holding, so this always
+  // has a real chance of fixing it, not just a spinner that lies.
+  useEffect(() => {
+    if (!sessionState.loading) {
+      setTimedOut(false);
+      return;
+    }
+    const timer = setTimeout(() => setTimedOut(true), 10000);
+    return () => clearTimeout(timer);
+  }, [sessionState.loading]);
 
   // Auth-event listener: intentionally does NOTHING but synchronous state
   // updates. supabase-js holds a navigator.locks lock for the entire
@@ -153,7 +174,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ ...sessionState, login, logout }}>
+    <AuthContext.Provider value={{ ...sessionState, login, logout, timedOut }}>
       {children}
     </AuthContext.Provider>
   );
