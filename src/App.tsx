@@ -23,6 +23,7 @@ import { Tasks } from './pages/Tasks';
 import { Attendance } from './pages/Attendance';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
+import { Expenses } from './pages/Expenses';
 
 function App() {
   return (
@@ -70,11 +71,26 @@ function App() {
             <Route path="channel-partners/:id" element={<ChannelPartnerDetails />} />
             <Route path="cp-outreach" element={<CPOutreach />} />
             <Route path="marketing" element={<Marketing />} />
+            {/* Account/credential management — restricted to super_admin
+                only per the client's explicit request: creating logins,
+                sharing credentials, and activating/deactivating accounts
+                should not be a project_admin capability. */}
             <Route
               path="employees"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'project_admin']}>
+                <ProtectedRoute allowedRoles={['super_admin']}>
                   <Employees />
+                </ProtectedRoute>
+              }
+            />
+            {/* Personal expense ledger — super_admin only at the route level;
+                the real boundary is the personal_expenses RLS policy, which
+                additionally scopes each super_admin to their own rows only. */}
+            <Route
+              path="expenses"
+              element={
+                <ProtectedRoute allowedRoles={['super_admin']}>
+                  <Expenses />
                 </ProtectedRoute>
               }
             />
