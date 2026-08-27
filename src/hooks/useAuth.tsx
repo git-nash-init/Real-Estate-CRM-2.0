@@ -121,9 +121,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     let mounted = true;
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
-      setAuthUser(session?.user ? { id: session.user.id, email: session.user.email } : null);
+
+      // supabase-js silently re-validates the session every time the tab
+      // regains focus/visibility (and on token refresh), firing another
+      // auth event for the SAME user. Previously that was treated as a
+      // fresh login: a brand new {id,email} object triggered the
+      // profile/role effect below, which flipped `loading` back to true
+      // and re-showed "Verifying secure session..." on every tab switch.
+      // Skip re-verification entirely for events that can't represent an
+      // actual identity change, and for the rest, only update state (and
+      // therefore re-render/re-fetch) when the user id actually changed —
+      // returning the same object reference from a functional update lets
+      // React bail out of re-rendering for an unchanged id.
+      if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') return;
+
+      const nextId = session?.user?.id ?? null;
+      setAuthUser((prev) => {
+        if ((prev?.id ?? null) === nextId) return prev;
+        return session?.user ? { id: session.user.id, email: session.user.email } : null;
+      });
     });
 
     return () => {

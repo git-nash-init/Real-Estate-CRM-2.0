@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
-import { createClient } from '@supabase/supabase-js';
 import {
   Search,
   RefreshCw,
@@ -402,39 +401,43 @@ export const Employees: React.FC = () => {
         if (existingProfile) {
           finalUserId = existingProfile.id;
         } else {
-          // Create a secondary, non-persisting client so we don't log out the Super Admin
-          const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://umuctbiofbyjwnqavxus.supabase.co';
-          const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_IZAoq75Yde0sBwTeRo92pg_8wD26bmY';
-
-          const tempSupabase = createClient(supabaseUrl, supabaseAnonKey, {
-            auth: {
-              persistSession: false,
-              autoRefreshToken: false,
-              detectSessionInUrl: false
-            }
-          });
-
-          // Register user in auth.users. A random password per employee,
-          // not a hardcoded constant — the previous version gave every
-          // auto-created account the literal string 'TempPassword123!',
-          // visible in source control, meaning anyone who knew (or
-          // guessed) an employee code could log in as that employee.
+          // Register user in auth.users via an admin Edge Function rather
+          // than the public supabase.auth.signUp() endpoint. signUp()
+          // sends a confirmation email even though nothing here uses it,
+          // and Supabase's built-in email sender caps out at a handful of
+          // sends per hour on the free tier — confirmed live, onboarding
+          // the 3rd+ employee in a short span failed with "email rate
+          // limit exceeded". The Edge Function uses the service_role key
+          // (never exposed to the browser) to call admin.createUser()
+          // with email_confirm:true, which creates the account without
+          // sending any email at all, so it has no rate-limit exposure.
+          // It independently re-checks that the caller is a super_admin
+          // server-side — this route restriction alone is not the real
+          // security boundary.
+          //
+          // A random password per employee, not a hardcoded constant —
+          // the previous version gave every auto-created account the
+          // literal string 'TempPassword123!', visible in source control,
+          // meaning anyone who knew (or guessed) an employee code could
+          // log in as that employee.
           const generatedPassword = generateRandomPassword();
-          const { data: authData, error: authError } = await tempSupabase.auth.signUp({
-            email: targetEmail,
-            password: generatedPassword,
-            options: {
-              data: {
-                full_name: `${firstName} ${lastName || ''}`.trim()
-              }
-            }
+          const { data: fnData, error: fnError } = await supabase.functions.invoke('create-employee-account', {
+            body: {
+              email: targetEmail,
+              password: generatedPassword,
+              full_name: `${firstName} ${lastName || ''}`.trim(),
+            },
           });
 
-          if (authError) {
-            throw new Error(`Failed to create Auth User: ${authError.message}`);
+          if (fnError) {
+            const detail = (fnError as any)?.context?.body ? await (fnError as any).context.text().catch(() => null) : null;
+            throw new Error(`Failed to create Auth User: ${detail || fnError.message}`);
+          }
+          if (fnData?.error) {
+            throw new Error(`Failed to create Auth User: ${fnData.error}`);
           }
 
-          const newUserId = authData.user?.id;
+          const newUserId = fnData?.id;
           if (!newUserId) {
             throw new Error('Auth User registration did not return a valid user ID.');
           }
