@@ -61,19 +61,24 @@ export function scopeFilter(table: ScopedTable, ctx: ScopeContext): string | 'AL
     : null;
 
   switch (table) {
+    // NOTE: leads.owner_id / sourcing_manager_id / telecaller_id and
+    // bookings.sales_owner / closing_manager all hold **user_profiles.id**
+    // (= the auth user id), NOT employees.id — confirmed against the live
+    // database: all 10 populated owner_id values join to user_profiles and
+    // none join to employees. These previously compared against
+    // ctx.employeeId, which could never match, so a sourcing manager saw
+    // none of their own leads in global search. Use ctx.userId.
     case 'leads':
-      if (ctx.employeeId) {
-        clauses.push(
-          `owner_id.eq.${ctx.employeeId}`,
-          `sourcing_manager_id.eq.${ctx.employeeId}`,
-          `telecaller_id.eq.${ctx.employeeId}`
-        );
-      }
+      clauses.push(
+        `owner_id.eq.${ctx.userId}`,
+        `sourcing_manager_id.eq.${ctx.userId}`,
+        `telecaller_id.eq.${ctx.userId}`
+      );
       if (ctx.channelPartnerId) clauses.push(`channel_partner_id.eq.${ctx.channelPartnerId}`);
       if (projectIn) clauses.push(projectIn);
       break;
     case 'bookings':
-      if (ctx.employeeId) clauses.push(`sales_owner.eq.${ctx.employeeId}`, `closing_manager.eq.${ctx.employeeId}`);
+      clauses.push(`sales_owner.eq.${ctx.userId}`, `closing_manager.eq.${ctx.userId}`);
       if (ctx.channelPartnerId) clauses.push(`channel_partner_id.eq.${ctx.channelPartnerId}`);
       if (projectIn) clauses.push(projectIn);
       break;

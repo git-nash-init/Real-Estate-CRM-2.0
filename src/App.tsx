@@ -96,13 +96,13 @@ function App() {
             />
             <Route path="attendance" element={<Attendance />} />
             <Route path="tasks" element={<Tasks />} />
+            {/* Open to every role now — Reports.tsx itself decides what a
+                given user sees (full business view for admins, a
+                bifurcated team view for site_head/TLs, a personal view for
+                everyone else, a referral view for channel partners). */}
             <Route
               path="reports"
-              element={
-                <ProtectedRoute allowedRoles={['super_admin', 'project_admin']}>
-                  <Reports />
-                </ProtectedRoute>
-              }
+              element={<Reports />}
             />
             <Route
               path="settings"
