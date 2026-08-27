@@ -17,6 +17,20 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 // do is check *who* the caller is, so the super_admin check below is the
 // real authorization boundary -- without it, any logged-in user could
 // call this function to mint arbitrary new accounts.
+//
+// v2 fix: the first version tried to identify the caller via
+// auth.getUser() on a client built with the service_role key and the
+// caller's JWT stuffed into `global.headers.Authorization`. That header
+// override is only honoured by PostgREST/Storage/Functions requests --
+// auth.getUser() ignores it entirely unless the token is passed as an
+// explicit argument, so it always failed with "Could not resolve caller
+// identity". Separately, even if identity resolution had worked, calling
+// the existing is_super_admin() RPC through a service-role-keyed client
+// would evaluate auth.uid() as null (service role has no user context),
+// so that check would always have returned false. Fixed by extracting the
+// JWT explicitly and checking the caller's role via a direct table query
+// with the admin client (safe: identity was already verified first).
+// Verified live end-to-end after this fix.
 Deno.serve(async (req: Request) => {
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -35,19 +49,19 @@ Deno.serve(async (req: Request) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    const callerJwt = authHeader.replace(/^Bearer\s+/i, "");
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    // Client scoped to the caller's own JWT -- used only to resolve who is
-    // calling and check their role via the existing is_super_admin() RLS
-    // helper, never to touch privileged tables directly.
-    const callerClient = createClient(supabaseUrl, serviceRoleKey, {
-      global: { headers: { Authorization: authHeader } },
+    const adminClient = createClient(supabaseUrl, serviceRoleKey, {
       auth: { persistSession: false },
     });
 
-    const { data: { user: caller }, error: callerError } = await callerClient.auth.getUser();
+    // Explicitly verify the caller's own JWT against the Auth server --
+    // this does NOT use the admin client's own identity, it validates
+    // whichever token is passed as the argument.
+    const { data: { user: caller }, error: callerError } = await adminClient.auth.getUser(callerJwt);
     if (callerError || !caller) {
       return new Response(JSON.stringify({ error: "Could not resolve caller identity" }), {
         status: 401,
@@ -55,8 +69,18 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const { data: isSuperAdmin, error: roleCheckError } = await callerClient.rpc("is_super_admin");
-    if (roleCheckError || !isSuperAdmin) {
+    // Role check via direct table query (RLS-bypassing service client, but
+    // identity is already pinned above) rather than the is_super_admin()
+    // RPC, which relies on auth.uid() and would be null under a
+    // service-role-authenticated call.
+    const { data: roleRow, error: roleCheckError } = await adminClient
+      .from("user_roles")
+      .select("roles(name)")
+      .eq("user_id", caller.id)
+      .maybeSingle();
+
+    const roleName = (roleRow as any)?.roles?.name;
+    if (roleCheckError || roleName !== "super_admin") {
       return new Response(JSON.stringify({ error: "Only super_admin can create accounts" }), {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -70,12 +94,6 @@ Deno.serve(async (req: Request) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-
-    // Plain service-role client (no caller JWT forwarded) to actually
-    // perform the privileged admin action.
-    const adminClient = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { persistSession: false },
-    });
 
     const { data: created, error: createError } = await adminClient.auth.admin.createUser({
       email,
