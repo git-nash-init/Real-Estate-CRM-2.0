@@ -121,7 +121,7 @@ const WhatsAppPanel: React.FC = () => {
         </div>
       )}
 
-      {!isStale && effectiveStatus === 'qr_pending' && session?.qr_data_url && (
+      {!isStale && effectiveStatus !== 'open' && session?.qr_data_url && (
         <div className="flex flex-col items-center gap-3 border border-slate-200 rounded-xl p-6 bg-slate-50 max-w-xs">
           <img src={session.qr_data_url} alt="WhatsApp QR code" className="w-52 h-52 rounded-lg border border-slate-200" />
           <p className="text-xs text-slate-500 text-center flex items-center gap-1.5">
@@ -143,8 +143,8 @@ const WhatsAppPanel: React.FC = () => {
         </button>
       )}
 
-      {!isStale && effectiveStatus === 'logged_out' && (
-        <p className="text-xs text-slate-500">Logged out. The gateway will generate a fresh QR code shortly — this panel updates automatically.</p>
+      {!isStale && (effectiveStatus === 'logged_out' || effectiveStatus === 'connecting') && !session?.qr_data_url && (
+        <p className="text-xs text-slate-500">Generating a fresh QR code — this panel updates automatically.</p>
       )}
     </div>
   );

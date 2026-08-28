@@ -80,8 +80,9 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     const roleName = (roleRow as any)?.roles?.name;
-    if (roleCheckError || roleName !== "super_admin") {
-      return new Response(JSON.stringify({ error: "Only super_admin can create accounts" }), {
+    const allowedRoles = ["super_admin", "site_head", "sourcing_manager_tl", "sourcing_manager"];
+    if (roleCheckError || !allowedRoles.includes(roleName)) {
+      return new Response(JSON.stringify({ error: "Unauthorized: only administrators and managers can create accounts" }), {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });

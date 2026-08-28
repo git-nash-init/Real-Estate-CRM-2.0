@@ -27,6 +27,7 @@ interface Employee {
   date_of_birth: string | null;
   mobile: string | null;
   alternate_mobile: string | null;
+  whatsapp_number?: string | null;
   personal_email: string | null;
   department: string | null;
   designation: string | null;
@@ -137,9 +138,7 @@ export const Employees: React.FC = () => {
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  // One-time credential reveal after creating a new account — shown once,
-  // never persisted or logged, so the admin must copy it now to hand off.
-  const [newAccountCredentials, setNewAccountCredentials] = useState<{ email: string; password: string; syntheticEmail: boolean } | null>(null);
+  const [newAccountCredentials, setNewAccountCredentials] = useState<{ email: string; password: string; syntheticEmail: boolean; whatsappSentTo?: string | null } | null>(null);
 
   // Employee details sub-resources states
   const [assignedLeads, setAssignedLeads] = useState<any[]>([]);
@@ -156,6 +155,8 @@ export const Employees: React.FC = () => {
   const [dob, setDob] = useState('');
   const [mobile, setMobile] = useState('');
   const [alternateMobile, setAlternateMobile] = useState('');
+  const [whatsappNumber, setWhatsappNumber] = useState('');
+  const [sameAsMobile, setSameAsMobile] = useState(true);
   const [personalEmail, setPersonalEmail] = useState('');
   const [employeeIdVal, setEmployeeIdVal] = useState('');
   const [joiningDate, setJoiningDate] = useState('');
@@ -330,6 +331,8 @@ export const Employees: React.FC = () => {
     setDob('');
     setMobile('');
     setAlternateMobile('');
+    setWhatsappNumber('');
+    setSameAsMobile(true);
     setPersonalEmail('');
     setEmployeeIdVal('');
     setJoiningDate('');
@@ -373,6 +376,9 @@ export const Employees: React.FC = () => {
     setDob(emp.date_of_birth || '');
     setMobile(emp.mobile || '');
     setAlternateMobile(emp.alternate_mobile || '');
+    const wa = emp.whatsapp_number || '';
+    setWhatsappNumber(wa);
+    setSameAsMobile(!wa || wa === emp.mobile);
     setPersonalEmail(emp.personal_email || '');
     setEmployeeIdVal(emp.employee_id || '');
     setJoiningDate(emp.joining_date || '');
@@ -578,6 +584,7 @@ export const Employees: React.FC = () => {
         date_of_birth: dob || null,
         mobile: mobile,
         alternate_mobile: alternateMobile || null,
+        whatsapp_number: sameAsMobile ? mobile : (whatsappNumber || mobile),
         personal_email: personalEmail || null,
         employment_type: employmentType,
         branch: branch || null,
@@ -608,10 +615,6 @@ export const Employees: React.FC = () => {
       if (finalUserId && selectedRole) {
         const matchedRole = rolesList.find(r => r.name === selectedRole);
         if (!matchedRole) {
-          // Previously silently skipped if the name didn't match — the
-          // dropdown is now sourced from this same rolesList, so this
-          // should be unreachable, but surface it loudly rather than
-          // silently leave someone with no access if it ever isn't.
           throw new Error(`Role "${selectedRole}" was not found in the roles table. The employee record was saved, but no access role was assigned — please assign one manually.`);
         }
         const { error: roleError } = await supabase.from('user_roles').upsert({
@@ -622,23 +625,6 @@ export const Employees: React.FC = () => {
           throw new Error(`Employee saved, but assigning the role failed: ${roleError.message}`);
         }
 
-        // Project assignment — skipped for super_admin, who already has
-        // access to every project's data (has_project_access() returns
-        // true for them unconditionally). For every other role, this is
-        // the actual access-control mechanism: has_project_access() reads
-        // this table, so leads/bookings/inventory RLS across the app
-        // start reflecting whatever is selected here as soon as this
-        // save completes. Re-editable later — reopening Edit on this same
-        // employee loads their current assignments and any change here
-        // takes effect immediately for their NEXT query; a tab they
-        // already have open still shows what it last fetched until they
-        // reload or navigate, same as any other live data in this app.
-        //
-        // Delete-then-insert rather than upsert: user_project_assignments
-        // has no single-column unique key .upsert() could target cleanly,
-        // and this also correctly handles a project being unchecked
-        // (removed) — upsert alone can only add/update rows, never remove
-        // ones no longer selected.
         if (selectedRole !== 'super_admin') {
           const { error: deleteAssignErr } = await supabase
             .from('user_project_assignments')
@@ -664,15 +650,41 @@ export const Employees: React.FC = () => {
         }
       }
 
+      // Automatically dispatch credentials via WhatsApp if a new account was provisioned
+      const effectiveWa = sameAsMobile ? mobile : (whatsappNumber || mobile);
+      if (createdCredentials && effectiveWa) {
+        try {
+          const cleanDigits = effectiveWa.replace(/[^0-9]/g, '');
+          const waPhone = cleanDigits.length === 10 ? `91${cleanDigits}` : cleanDigits;
+          const roleLabel = selectedRole ? selectedRole.replace(/_/g, ' ').toUpperCase() : (designation || 'Staff');
+          const portalUrl = `${window.location.origin}/login`;
+          
+          const welcomeMsg = `🏢 *Welcome to Opal Properties!*\n\nDear ${firstName} ${lastName || ''},\nWelcome to the team! Your employee CRM account has been created successfully.\n\n🆔 *Employee ID:* ${employeeIdVal}\n💼 *Role / Designation:* ${designation} (${roleLabel})\n\n🔑 *Login Credentials:*\n• Username / Email: ${createdCredentials.email}\n• Temporary Password: ${createdCredentials.password}\n🌐 *CRM Portal:* ${portalUrl}\n\nPlease log in and update your password on your first sign-in. If you need any assistance, reach out to your administrator.`;
+
+          const { error: waErr } = await supabase.from('whatsapp_outbox').insert([{
+            to_phone: waPhone,
+            message: welcomeMsg,
+            status: 'queued'
+          }]);
+          if (waErr) {
+            reportQueryError('Employees: send WhatsApp credentials', waErr);
+          }
+        } catch (waErr) {
+          console.error('Failed to queue employee credentials WhatsApp message:', waErr);
+        }
+      }
+
       setIsFormOpen(false);
       resetForm();
       await fetchEmployees();
       await fetchLookups();
 
       if (createdCredentials) {
-        // Show the one-time password reveal instead of the plain success
-        // toast — this is the only moment the admin can see it.
-        setNewAccountCredentials(createdCredentials);
+        // Show the one-time password reveal
+        setNewAccountCredentials({
+          ...createdCredentials,
+          whatsappSentTo: effectiveWa || null
+        });
       } else {
         setNotification({
           type: 'success',
@@ -1401,6 +1413,41 @@ export const Employees: React.FC = () => {
                         className="block w-full px-4 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-indigo-650 focus:outline-none transition-all"
                       />
                     </div>
+                    <div className="sm:col-span-2 bg-indigo-50/40 p-3.5 rounded-xl border border-indigo-100">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 mb-2">
+                        <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
+                          WhatsApp Number
+                        </label>
+                        <label className="flex items-center space-x-2 text-xs text-indigo-700 font-semibold cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={sameAsMobile}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setSameAsMobile(checked);
+                              if (checked) setWhatsappNumber(mobile);
+                            }}
+                            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4"
+                          />
+                          <span>Same as Mobile Number for WhatsApp</span>
+                        </label>
+                      </div>
+                      <input
+                        type="tel"
+                        disabled={sameAsMobile}
+                        placeholder={sameAsMobile ? (mobile || 'Matches Mobile Number') : 'Enter separate 10-digit WhatsApp number'}
+                        value={sameAsMobile ? mobile : whatsappNumber}
+                        onChange={(e) => setWhatsappNumber(e.target.value)}
+                        className={`block w-full px-4 py-2 border rounded-xl text-sm transition-all ${
+                          sameAsMobile 
+                            ? 'bg-slate-100/80 border-slate-200 text-slate-500 cursor-not-allowed' 
+                            : 'bg-white border-indigo-300 text-slate-800 focus:border-indigo-650 focus:outline-none shadow-sm'
+                        }`}
+                      />
+                      <p className="text-[11px] text-slate-500 mt-1.5">
+                        New account login credentials and onboarding greetings will be automatically dispatched to this WhatsApp number.
+                      </p>
+                    </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Gender</label>
                       <select
@@ -1757,6 +1804,14 @@ export const Employees: React.FC = () => {
               <span className="font-bold tracking-tight">Account Created — Save This Now</span>
             </div>
             <div className="p-6 space-y-4">
+              {newAccountCredentials.whatsappSentTo && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-3 text-xs flex items-center space-x-2">
+                  <span className="text-base">📲</span>
+                  <div>
+                    <strong>WhatsApp Dispatched:</strong> Welcome message with login credentials was automatically queued to <strong>{newAccountCredentials.whatsappSentTo}</strong>.
+                  </div>
+                </div>
+              )}
               <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-xs">
                 This password is shown <strong>once</strong> and cannot be retrieved again. Copy it and hand it to the
                 employee now (WhatsApp, in person, etc). They'll be required to set their own password on first login.

@@ -44,12 +44,12 @@ let manualLogoutRequested = false;
 // API key or a CORS-open endpoint. ---------------------------------------
 
 async function pushStatusHeartbeat() {
-  const status = loggedOut
-    ? 'logged_out'
-    : connectionState === 'open'
-      ? 'open'
-      : currentQr
-        ? 'qr_pending'
+  const status = connectionState === 'open'
+    ? 'open'
+    : currentQr
+      ? 'qr_pending'
+      : loggedOut
+        ? 'logged_out'
         : 'connecting';
 
   const qrDataUrl = currentQr ? await QRCode.toDataURL(currentQr) : null;
@@ -100,6 +100,9 @@ async function heartbeatLoop() {
 }
 
 async function connectToWhatsApp() {
+  loggedOut = false;
+  connectionState = 'connecting';
+
   const { state, saveCreds } = await useSupabaseAuthState(supabase);
 
   sock = makeWASocket({
@@ -115,6 +118,7 @@ async function connectToWhatsApp() {
 
     if (qr) {
       currentQr = qr;
+      loggedOut = false;
       logger.info('New QR code generated — visible live on the CRM Settings > WhatsApp page.');
     }
 

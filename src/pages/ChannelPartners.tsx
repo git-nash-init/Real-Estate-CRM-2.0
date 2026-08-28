@@ -70,6 +70,14 @@ interface Commission {
 
 
 
+// Cryptographically secure random password generator for newly provisioned accounts
+function generateRandomPassword(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%';
+  const bytes = new Uint32Array(14);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => chars[b % chars.length]).join('');
+}
+
 // Helper functions to parse values stored in notes/city fields
 const parseNotesField = (notes: string | null, label: string) => {
   if (!notes) return '';
@@ -141,6 +149,13 @@ export const ChannelPartners: React.FC = () => {
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [newCPCredentials, setNewCPCredentials] = useState<{
+    name: string;
+    email: string;
+    password: string;
+    cpCode: string;
+    whatsappSentTo: string | null;
+  } | null>(null);
 
   // Deactivation confirmation modal states
   const [confirmToggleCp, setConfirmToggleCp] = useState<ChannelPartner | null>(null);
@@ -408,15 +423,7 @@ export const ChannelPartners: React.FC = () => {
           .eq('id', partnerId);
         if (editErr) throw editErr;
       } else {
-        // Create Partner. `cp_code` is NOT NULL on this table but this
-        // insert never set it — confirmed live: any new Channel Partner
-        // creation through this form failed outright with a "null value
-        // in column cp_code violates not-null constraint" error. The 6
-        // existing partners all have a real cp_code (CP-0001..CP-0006),
-        // so it clearly used to be set somewhere; this restores that,
-        // using the same generated code for both columns since the
-        // comment below already treats partner_code as the legacy twin
-        // of cp_code.
+        // Create Partner. Auto-generate CP code and provision credentials
         const { data: maxCP } = await supabase
           .from('channel_partners')
           .select('cp_code')
@@ -429,6 +436,55 @@ export const ChannelPartners: React.FC = () => {
         payload.partner_code = generatedCode; // Legacy code, kept in sync
         payload.created_at = new Date().toISOString();
 
+        // 1. Provision user account for the Channel Partner
+        let cpCredentials: { name: string; email: string; password: string; cpCode: string; whatsappSentTo: string | null } | null = null;
+        const targetEmail = email.trim() || `${generatedCode.toLowerCase()}@partner.opalproperties.com`;
+        const generatedPassword = generateRandomPassword();
+
+        try {
+          const { data: sessionData } = await supabase.auth.getSession();
+          const accessToken = sessionData.session?.access_token;
+          if (accessToken) {
+            const { data: fnData, error: fnError } = await supabase.functions.invoke('create-employee-account', {
+              body: {
+                email: targetEmail,
+                password: generatedPassword,
+                full_name: partnerName.trim(),
+              },
+              headers: { Authorization: `Bearer ${accessToken}` },
+            });
+
+            if (!fnError && fnData?.id) {
+              const newUserId = fnData.id;
+              payload.user_id = newUserId;
+
+              // Assign channel_partner role in user_roles
+              const { data: cpRole } = await supabase
+                .from('roles')
+                .select('id')
+                .eq('name', 'channel_partner')
+                .maybeSingle();
+
+              if (cpRole?.id) {
+                await supabase.from('user_roles').insert({
+                  user_id: newUserId,
+                  role_id: cpRole.id,
+                });
+              }
+
+              cpCredentials = {
+                name: partnerName.trim(),
+                email: targetEmail,
+                password: generatedPassword,
+                cpCode: generatedCode,
+                whatsappSentTo: phone.trim() || null,
+              };
+            }
+          }
+        } catch (authErr) {
+          console.warn('Channel partner auth creation failed/skipped:', authErr);
+        }
+
         const { data: newCP, error: createErr } = await supabase
           .from('channel_partners')
           .insert([payload])
@@ -437,6 +493,38 @@ export const ChannelPartners: React.FC = () => {
 
         if (createErr) throw createErr;
         partnerId = newCP.id;
+
+        // 2. Automatically dispatch credentials & welcome message via WhatsApp
+        if (phone.trim()) {
+          try {
+            const cleanDigits = phone.trim().replace(/[^0-9]/g, '');
+            const waPhone = cleanDigits.length === 10 ? `91${cleanDigits}` : cleanDigits;
+            const portalUrl = `${window.location.origin}/login`;
+
+            let welcomeMsg = `🎉 *Welcome to Opal Properties Channel Partner Network!*\n\nDear ${partnerName.trim()},\nYou have been successfully registered as an authorized Channel Partner with Opal Properties.\n\n📋 *Partner Code:* ${generatedCode}\n👤 *Role:* Channel Partner`;
+
+            if (cpCredentials) {
+              welcomeMsg += `\n\n🔑 *Portal Login Credentials:*\n• Username / Email: ${cpCredentials.email}\n• Temporary Password: ${cpCredentials.password}\n🌐 *Login Portal:* ${portalUrl}\n\nPlease log in and update your password upon your first access.`;
+            } else {
+              welcomeMsg += `\n\nWe look forward to a successful and rewarding partnership with you!`;
+            }
+
+            const { error: waErr } = await supabase.from('whatsapp_outbox').insert([{
+              to_phone: waPhone,
+              message: welcomeMsg,
+              status: 'queued'
+            }]);
+            if (waErr) {
+              reportQueryError('ChannelPartners: send WhatsApp credentials', waErr);
+            }
+          } catch (waErr) {
+            console.error('Failed to queue Channel Partner credentials WhatsApp message:', waErr);
+          }
+        }
+
+        if (cpCredentials) {
+          setNewCPCredentials(cpCredentials);
+        }
       }
 
       // Sync overrides mapping status
@@ -460,10 +548,17 @@ export const ChannelPartners: React.FC = () => {
         }
       }
 
-      setNotification({
-        type: 'success',
-        message: editingPartner ? 'Channel Partner details updated successfully!' : 'New Channel Partner registered successfully!'
-      });
+      if (editingPartner) {
+        setNotification({
+          type: 'success',
+          message: 'Channel Partner details updated successfully!'
+        });
+      } else if (!newCPCredentials) {
+        setNotification({
+          type: 'success',
+          message: 'New Channel Partner registered successfully!'
+        });
+      }
 
       setIsCreateOpen(false);
       setEditingPartner(null);
@@ -1133,6 +1228,67 @@ export const ChannelPartners: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* CHANNEL PARTNER CREDENTIALS MODAL */}
+      {newCPCredentials && (
+        <div className="fixed inset-0 z-[60] overflow-y-auto flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm" />
+          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-emerald-600 text-white px-6 py-4 flex items-center justify-between">
+              <span className="font-bold tracking-tight">Channel Partner Registered & Account Created</span>
+            </div>
+            <div className="p-6 space-y-4">
+              {newCPCredentials.whatsappSentTo && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-3 text-xs flex items-center space-x-2">
+                  <span className="text-base">📲</span>
+                  <div>
+                    <strong>WhatsApp Dispatched:</strong> Welcome message with login credentials was automatically queued to <strong>{newCPCredentials.whatsappSentTo}</strong>.
+                  </div>
+                </div>
+              )}
+              <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-xs">
+                These login credentials were automatically generated for <strong>{newCPCredentials.name}</strong> ({newCPCredentials.cpCode}).
+                Please save them now.
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Partner Code</label>
+                <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono font-bold text-indigo-700">
+                  {newCPCredentials.cpCode}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Login Username / Email</label>
+                <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-800 break-all">
+                  {newCPCredentials.email}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Temporary Password</label>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-800">
+                    {newCPCredentials.password}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard.writeText(`Partner Code: ${newCPCredentials.cpCode}\nEmail: ${newCPCredentials.email}\nPassword: ${newCPCredentials.password}`)}
+                    className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex-shrink-0"
+                  >
+                    Copy Both
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="bg-slate-50 px-6 py-4 flex justify-end border-t border-slate-100">
+              <button
+                onClick={() => setNewCPCredentials(null)}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-sm"
+              >
+                I've Saved This — Close
+              </button>
+            </div>
           </div>
         </div>
       )}
