@@ -40,9 +40,28 @@ const WhatsAppPanel: React.FC = () => {
 
   const fetchSession = useCallback(async () => {
     if (!user?.id) return;
-    const { data, error } = await supabase.from('whatsapp_session').select('*').eq('id', user.id).maybeSingle();
-    if (error) reportQueryError('Settings: WhatsApp session', error);
-    else setSession(data);
+    let { data, error } = await supabase.from('whatsapp_session').select('*').eq('id', user.id).maybeSingle();
+    
+    if (error) {
+      reportQueryError('Settings: WhatsApp session fetch', error);
+    } else if (!data) {
+      // Auto-initialize row for new users so the gateway picks it up.
+      // Set last_heartbeat_at to now so it says "Connecting..." instead of "Offline" 
+      // for the first 20 seconds while waiting for the gateway to pick it up.
+      const { data: newData, error: insertError } = await supabase
+        .from('whatsapp_session')
+        .insert([{ id: user.id, status: 'connecting', last_heartbeat_at: new Date().toISOString() }])
+        .select()
+        .single();
+      
+      if (insertError) {
+        reportQueryError('Settings: WhatsApp session init', insertError);
+      } else {
+        data = newData;
+      }
+    }
+    
+    setSession(data);
     setLoading(false);
   }, [user?.id]);
 
