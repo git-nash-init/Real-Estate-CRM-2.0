@@ -534,9 +534,23 @@ export const Bookings: React.FC = () => {
       if (statusFilter) {
         query = query.eq('status', statusFilter);
       }
-      // Filter by Project
-      if (projectFilter) {
-        query = query.eq('project_id', projectFilter);
+      
+      // Filter by Project / Role enforcement
+      if (role === 'site_head') {
+        if (assignedProjects && assignedProjects.length > 0) {
+          if (projectFilter && assignedProjects.includes(projectFilter)) {
+            query = query.eq('project_id', projectFilter);
+          } else {
+            query = query.in('project_id', assignedProjects);
+          }
+        } else {
+          // A site_head with no assigned projects should see nothing
+          query = query.eq('project_id', '00000000-0000-0000-0000-000000000000');
+        }
+      } else {
+        if (projectFilter) {
+          query = query.eq('project_id', projectFilter);
+        }
       }
 
       // Pagination
@@ -559,7 +573,7 @@ export const Bookings: React.FC = () => {
       setLoading(false);
       setSyncing(false);
     }
-  }, [statusFilter, projectFilter, page, pageSize]);
+  }, [statusFilter, projectFilter, page, pageSize, role, assignedProjects]);
 
   useEffect(() => {
     fetchLookups();
