@@ -124,7 +124,6 @@ export const Inventory: React.FC = () => {
   const [towerFilter, setTowerFilter] = useState('');
   const [floorFilter, setFloorFilter] = useState('');
   const [configFilter, setConfigFilter] = useState('');
-  const [unitTypeFilter, setUnitTypeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
 
   // Page Loaders & Alerts
@@ -198,8 +197,11 @@ export const Inventory: React.FC = () => {
   const [bulkToFloor, setBulkToFloor] = useState('10');
   const [bulkUnitsPerFloor, setBulkUnitsPerFloor] = useState('4');
   const [bulkConfig, setBulkConfig] = useState('1 BHK');
-  const [bulkUnitType, setBulkUnitType] = useState('Standard');
-  const [bulkPrice, setBulkPrice] = useState('');
+  // Unit Type and Base Price were removed from the bulk-add form — these
+  // stay as plain constants (not state) since nothing sets them anymore,
+  // but the insert payload below still needs a value for each column.
+  const bulkUnitType = 'Standard';
+  const bulkPrice = '';
   const [bulkCarpet, setBulkCarpet] = useState('');
   const [bulkBuiltUp, setBulkBuiltUp] = useState('');
   const [bulkStatus, setBulkStatus] = useState('available');
@@ -636,15 +638,11 @@ export const Inventory: React.FC = () => {
         ? item.configuration === configFilter
         : true;
 
-      const matchesUnitType = unitTypeFilter
-        ? parseNotes(item.notes).unit_type?.toLowerCase() === unitTypeFilter.toLowerCase()
-        : true;
-
       const matchesStatus = statusFilter
         ? item.status.toLowerCase() === statusFilter.toLowerCase()
         : true;
 
-      return matchesSearch && matchesProject && matchesTower && matchesFloor && matchesConfig && matchesUnitType && matchesStatus;
+      return matchesSearch && matchesProject && matchesTower && matchesFloor && matchesConfig && matchesStatus;
     });
   };
 
@@ -797,7 +795,6 @@ export const Inventory: React.FC = () => {
   const filteredFloorsForDropdown = floors.filter(f => f.tower_id === towerFilter);
   
   const uniqueConfigs = Array.from(new Set(inventoryList.map(item => item.configuration).filter((c): c is string => !!c)));
-  const uniqueUnitTypes = Array.from(new Set(inventoryList.map(item => parseNotes(item.notes).unit_type).filter((ut): ut is string => !!ut)));
 
   // Available list maps for modal dropdown cascading
   const formAvailableTowers = towers.filter(t => t.project_id === selectedProjectId);
@@ -1155,19 +1152,6 @@ export const Inventory: React.FC = () => {
               </select>
             </div>
 
-            {/* Unit Type Filter */}
-            <div>
-              <select
-                value={unitTypeFilter}
-                onChange={(e) => setUnitTypeFilter(e.target.value)}
-                className="border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all w-full"
-              >
-                <option value="">All Unit Types</option>
-                {uniqueUnitTypes.map(ut => (
-                  <option key={ut} value={ut}>{ut}</option>
-                ))}
-              </select>
-            </div>
           </div>
 
           {/* Directory Table Listing */}
@@ -1187,9 +1171,7 @@ export const Inventory: React.FC = () => {
                       <th className="py-3.5 px-6">Tower</th>
                       <th className="py-3.5 px-6">Floor</th>
                       <th className="py-3.5 px-6">Configuration</th>
-                      <th className="py-3.5 px-6">Unit Type</th>
                       <th className="py-3.5 px-6">Carpet Area</th>
-                      <th className="py-3.5 px-6">Price</th>
                       <th className="py-3.5 px-6">Status</th>
                       <th className="py-3.5 px-6 text-right">Actions</th>
                     </tr>
@@ -1197,7 +1179,6 @@ export const Inventory: React.FC = () => {
                   <tbody className="divide-y divide-slate-100">
                     {filteredInventory.length > 0 ? (
                       filteredInventory.map((item) => {
-                        const parsed = parseNotes(item.notes);
                         return (
                           <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
                             <td className="py-4 px-6 font-bold text-slate-900">{item.unit_number}</td>
@@ -1205,12 +1186,8 @@ export const Inventory: React.FC = () => {
                             <td className="py-4 px-6 text-sm text-slate-600">{getTowerName(item.tower_id)}</td>
                             <td className="py-4 px-6 text-sm text-slate-850 font-semibold">{getFloorName(item.floor_id)}</td>
                             <td className="py-4 px-6 text-sm text-slate-700 font-medium">{item.configuration || 'N/A'}</td>
-                            <td className="py-4 px-6 text-sm text-slate-500">{parsed.unit_type || 'Standard'}</td>
                             <td className="py-4 px-6 text-sm text-slate-600">
                               {item.carpet_area ? `${item.carpet_area} sq.ft` : 'N/A'}
-                            </td>
-                            <td className="py-4 px-6 text-sm text-slate-900 font-extrabold">
-                              {item.base_price ? `₹${item.base_price.toLocaleString('en-IN')}` : 'N/A'}
                             </td>
                             <td className="py-4 px-6">
                               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider ${
@@ -1256,7 +1233,7 @@ export const Inventory: React.FC = () => {
                       })
                     ) : (
                       <tr>
-                        <td colSpan={10} className="py-24 text-center text-slate-400">
+                        <td colSpan={8} className="py-24 text-center text-slate-400">
                           <div className="flex flex-col items-center justify-center space-y-3">
                             <div className="bg-slate-50 p-4 rounded-full text-slate-300">
                               <Home className="h-8 w-8" />
@@ -1388,12 +1365,6 @@ export const Inventory: React.FC = () => {
                               <div className="flex justify-between items-start">
                                 <span className="text-sm font-bold">{unit.unit_number}</span>
                                 <span className="text-xxs font-semibold uppercase">{unit.configuration || 'N/A'}</span>
-                              </div>
-                              <div className="mt-4 flex flex-col justify-end">
-                                <span className="text-xxs text-slate-400 block uppercase font-bold tracking-tight">Price</span>
-                                <span className="text-xs font-extrabold">
-                                  {unit.base_price ? `₹${unit.base_price.toLocaleString('en-IN')}` : 'N/A'}
-                                </span>
                               </div>
                             </button>
                           );
@@ -1531,18 +1502,8 @@ export const Inventory: React.FC = () => {
                       />
                     </div>
 
-                    {/* Unit type & Config */}
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Unit Type</label>
-                        <input
-                          type="text"
-                          placeholder="e.g. Standard, Premium"
-                          value={unitType}
-                          onChange={(e) => setUnitType(e.target.value)}
-                          className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
-                        />
-                      </div>
+                    {/* Config */}
+                    <div className="grid grid-cols-1 gap-4">
                       <div>
                         <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Configuration</label>
                         <select
@@ -1562,7 +1523,7 @@ export const Inventory: React.FC = () => {
                     </div>
 
                     {/* Areas */}
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 gap-2">
                       <div>
                         <label className="block text-xxs font-bold text-slate-700 uppercase tracking-wider mb-1">Carpet (sq.ft)</label>
                         <input
@@ -1585,77 +1546,10 @@ export const Inventory: React.FC = () => {
                           className="block w-full px-2.5 py-1.5 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-xs focus:bg-white focus:outline-none"
                         />
                       </div>
-                      <div>
-                        <label className="block text-xxs font-bold text-slate-700 uppercase tracking-wider mb-1">Saleable (sq.ft)</label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          placeholder="1050"
-                          value={unitSaleableArea}
-                          onChange={(e) => setUnitSaleableArea(e.target.value)}
-                          className="block w-full px-2.5 py-1.5 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-xs focus:bg-white focus:outline-none"
-                        />
-                      </div>
                     </div>
 
-                    {/* Orientation & Extra notes */}
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Facing</label>
-                        <input
-                          type="text"
-                          placeholder="e.g. East, West"
-                          value={unitFacing}
-                          onChange={(e) => setUnitFacing(e.target.value)}
-                          className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Possession Date</label>
-                        <input
-                          type="date"
-                          value={unitPossessionDate}
-                          onChange={(e) => setUnitPossessionDate(e.target.value)}
-                          className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">View</label>
-                        <input
-                          type="text"
-                          placeholder="e.g. Garden View"
-                          value={unitView}
-                          onChange={(e) => setUnitView(e.target.value)}
-                          className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Parking</label>
-                        <input
-                          type="text"
-                          placeholder="e.g. 1 Covered"
-                          value={unitParking}
-                          onChange={(e) => setUnitParking(e.target.value)}
-                          className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Base price & Status */}
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Base Price (₹)</label>
-                        <input
-                          type="number"
-                          placeholder="2000000"
-                          value={unitPrice}
-                          onChange={(e) => setUnitPrice(e.target.value)}
-                          className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
-                        />
-                      </div>
+                    {/* Status */}
+                    <div className="grid grid-cols-1 gap-4">
                       <div>
                         <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Status *</label>
                         <select
@@ -2062,16 +1956,7 @@ export const Inventory: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase mb-2">Unit Type</label>
-                    <input
-                      type="text"
-                      value={bulkUnitType}
-                      onChange={(e) => setBulkUnitType(e.target.value)}
-                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm"
-                    />
-                  </div>
+                <div className="grid grid-cols-1 gap-4">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase mb-2">Configuration</label>
                     <select
@@ -2090,7 +1975,7 @@ export const Inventory: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <div>
                     <label className="block text-xxs font-bold text-slate-700 uppercase mb-1">Carpet (sq.ft)</label>
                     <input
@@ -2108,15 +1993,6 @@ export const Inventory: React.FC = () => {
                       step="0.01"
                       value={bulkBuiltUp}
                       onChange={(e) => setBulkBuiltUp(e.target.value)}
-                      className="block w-full px-2.5 py-1.5 border border-slate-200 rounded-xl bg-slate-50 text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xxs font-bold text-slate-700 uppercase mb-1">Base Price (₹)</label>
-                    <input
-                      type="number"
-                      value={bulkPrice}
-                      onChange={(e) => setBulkPrice(e.target.value)}
                       className="block w-full px-2.5 py-1.5 border border-slate-200 rounded-xl bg-slate-50 text-xs"
                     />
                   </div>
@@ -2246,10 +2122,6 @@ export const Inventory: React.FC = () => {
                         <span className="text-sm font-semibold text-slate-800">{getFloorName(selectedUnit.floor_id)}</span>
                       </div>
                       <div className="space-y-1">
-                        <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Unit Type Spec</span>
-                        <span className="text-sm font-semibold text-slate-800">{parsed.unit_type || 'Standard'}</span>
-                      </div>
-                      <div className="space-y-1">
                         <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">BHK Configuration</span>
                         <span className="text-sm font-semibold text-slate-800">{selectedUnit.configuration || 'N/A'}</span>
                       </div>
@@ -2286,12 +2158,6 @@ export const Inventory: React.FC = () => {
                       <div className="space-y-1">
                         <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Possession Date</span>
                         <span className="text-sm font-semibold text-slate-800">{parsed.possession_date || 'N/A'}</span>
-                      </div>
-                      <div className="space-y-1">
-                        <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Base Consideration Price</span>
-                        <span className="text-sm font-bold text-indigo-700">
-                          {selectedUnit.base_price ? `₹${selectedUnit.base_price.toLocaleString('en-IN')}` : 'N/A'}
-                        </span>
                       </div>
                     </div>
 

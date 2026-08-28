@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
+import { useAuth } from '../hooks/useAuth';
 import {
   Search,
   RefreshCw,
@@ -14,7 +15,8 @@ import {
   Bookmark,
   CheckCircle,
   MapPin,
-  Users
+  Users,
+  Trash2
 } from 'lucide-react';
 
 interface SiteVisit {
@@ -40,6 +42,13 @@ interface Lead {
 }
 
 export const SiteVisits: React.FC = () => {
+  const { role } = useAuth();
+  // Delete is restricted to super_admin — both DB tables' DELETE RLS
+  // policies already enforce this independently (site_visits_delete /
+  // quick_site_visits_delete both check is_super_admin()), this only
+  // decides whether to show the button.
+  const canDelete = role === 'super_admin';
+
   // Query & state filters
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -55,7 +64,6 @@ export const SiteVisits: React.FC = () => {
   const [leadsMap, setLeadsMap] = useState<Map<string, Lead>>(new Map());
   const [projectMap, setProjectMap] = useState<Map<string, string>>(new Map());
   const [profileMap, setProfileMap] = useState<Map<string, string>>(new Map());
-  const [leadsList, setLeadsList] = useState<Lead[]>([]); // For Create dropdown
 
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -63,25 +71,194 @@ export const SiteVisits: React.FC = () => {
 
   // Modal open states
   const [selectedVisit, setSelectedVisit] = useState<SiteVisit | null>(null);
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [createLoading, setCreateLoading] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  // Create Form fields
-  const [selectedLeadId, setSelectedLeadId] = useState('');
-  const [selectedProjectId, setSelectedProjectId] = useState('');
-  const [scheduledAt, setScheduledAt] = useState('');
-  const [selectedStatus, setSelectedStatus] = useState('planned');
-  const [selectedChannelPartnerId, setSelectedChannelPartnerId] = useState('');
-  const [remarks, setRemarks] = useState('');
-
   // Channel Partner lookups lists & map
-  const [channelPartners, setChannelPartners] = useState<{ id: string; name: string; cp_code: string }[]>([]);
+  const [channelPartners, setChannelPartners] = useState<{ id: string; name: string; cp_code: string; mobile: string | null }[]>([]);
   const [channelPartnerMap, setChannelPartnerMap] = useState<Map<string, string>>(new Map());
 
   // Status updating loader
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+
+  // --- Walk-in Site Visit (new, standalone — no lead relation at all) ---
+  // Client's explicit requirement: customer name/number, date-time, CP and
+  // project only; duplicate customer numbers are allowed (unlike Leads);
+  // open to every role; auto-expires 24h after creation; a verification
+  // code is generated and sent via WhatsApp to both the customer and the
+  // referring Channel Partner. Lives entirely in its own table
+  // (quick_site_visits) — nothing here touches leads or the existing
+  // site_visits records above.
+  interface QuickVisit {
+    id: string;
+    customer_name: string;
+    customer_mobile: string;
+    visit_at: string;
+    channel_partner_id: string;
+    project_id: string;
+    verification_code: string;
+    referenced_by: string;
+    status: 'active' | 'expired';
+    created_at: string;
+  }
+  const [quickVisits, setQuickVisits] = useState<QuickVisit[]>([]);
+  const [isQuickCreateOpen, setIsQuickCreateOpen] = useState(false);
+  const [quickCreateLoading, setQuickCreateLoading] = useState(false);
+  const [quickCreateError, setQuickCreateError] = useState<string | null>(null);
+  const [quickCustomerName, setQuickCustomerName] = useState('');
+  const [quickCustomerMobile, setQuickCustomerMobile] = useState('');
+  const [quickVisitAt, setQuickVisitAt] = useState('');
+  const [quickChannelPartnerId, setQuickChannelPartnerId] = useState('');
+  const [quickProjectId, setQuickProjectId] = useState('');
+  const [quickReferencedBy, setQuickReferencedBy] = useState('');
+
+  const fetchQuickVisits = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('quick_site_visits')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) reportQueryError('Site Visits: walk-in visits', error);
+    else setQuickVisits(data || []);
+  }, []);
+
+  // Live WhatsApp delivery status per walk-in visit — quick_visit_id ->
+  // list of {status}. Each visit sends up to 2 messages (customer + CP), so
+  // this rolls them into one summary per visit rather than showing rows.
+  const [quickVisitMsgStatus, setQuickVisitMsgStatus] = useState<Map<string, string[]>>(new Map());
+
+  const fetchQuickVisitMsgStatus = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('whatsapp_outbox')
+      .select('quick_visit_id, status')
+      .not('quick_visit_id', 'is', null);
+    if (error) return reportQueryError('Site Visits: walk-in message status', error);
+    const map = new Map<string, string[]>();
+    for (const row of data || []) {
+      if (!row.quick_visit_id) continue;
+      const arr = map.get(row.quick_visit_id) || [];
+      arr.push(row.status);
+      map.set(row.quick_visit_id, arr);
+    }
+    setQuickVisitMsgStatus(map);
+  }, []);
+
+  useEffect(() => {
+    fetchQuickVisitMsgStatus();
+    // Realtime: the gateway updates whatsapp_outbox.status as it sends —
+    // subscribe so "queued" flips to "sent"/"failed" live, no manual refresh.
+    const channel = supabase
+      .channel('quick-visit-outbox-status')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'whatsapp_outbox' }, () => {
+        fetchQuickVisitMsgStatus();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchQuickVisitMsgStatus]);
+
+  const summarizeMsgStatus = (visitId: string): { label: string; color: string } => {
+    const statuses = quickVisitMsgStatus.get(visitId);
+    if (!statuses || statuses.length === 0) return { label: 'No messages', color: 'text-slate-400' };
+    if (statuses.some(s => s === 'failed')) return { label: 'Failed', color: 'text-rose-600' };
+    if (statuses.every(s => s === 'sent')) return { label: 'Delivered', color: 'text-emerald-600' };
+    if (statuses.some(s => s === 'sending')) return { label: 'Sending...', color: 'text-indigo-600' };
+    return { label: 'Queued', color: 'text-amber-600' };
+  };
+
+  const resetQuickForm = () => {
+    setQuickCustomerName('');
+    setQuickCustomerMobile('');
+    setQuickVisitAt('');
+    setQuickChannelPartnerId('');
+    setQuickProjectId('');
+    setQuickReferencedBy('');
+    setQuickCreateError(null);
+  };
+
+  // DD-MM-YYYY, matching the client's exact template example ("25-12-2021").
+  const formatDDMMYYYY = (d: Date) => {
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    return `${day}-${month}-${d.getFullYear()}`;
+  };
+
+  const handleQuickCreateSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickCustomerName.trim() || !quickCustomerMobile.trim() || !quickVisitAt || !quickChannelPartnerId || !quickProjectId || !quickReferencedBy.trim()) {
+      setQuickCreateError('All fields are required.');
+      return;
+    }
+
+    setQuickCreateError(null);
+    setQuickCreateLoading(true);
+    try {
+      const verificationCode = Math.random().toString(36).slice(2, 8).toUpperCase();
+      const { data: { user } } = await supabase.auth.getUser();
+
+      // Normalise to a clean 10-digit Indian number: strip spaces, dashes,
+      // +91 or 0 prefixes so the DB always holds the local format and the
+      // gateway's toJid() can reliably prepend the country code.
+      const normalizePhone = (p: string) => {
+        let d = p.replace(/[^0-9]/g, '');
+        if (d.startsWith('91') && d.length === 12) d = d.slice(2);
+        if (d.startsWith('0') && d.length === 11) d = d.slice(1);
+        return d;
+      };
+      const customerPhone = normalizePhone(quickCustomerMobile.trim());
+
+      const { data: inserted, error: insertErr } = await supabase
+        .from('quick_site_visits')
+        .insert([{
+          customer_name: quickCustomerName.trim(),
+          customer_mobile: customerPhone,
+          visit_at: new Date(quickVisitAt).toISOString(),
+          channel_partner_id: quickChannelPartnerId,
+          project_id: quickProjectId,
+          verification_code: verificationCode,
+          referenced_by: quickReferencedBy.trim(),
+          status: 'active',
+          created_by: user?.id || null,
+        }])
+        .select('id')
+        .single();
+      if (insertErr) throw insertErr;
+
+      const cp = channelPartners.find(c => c.id === quickChannelPartnerId);
+      const projectName = projectMap.get(quickProjectId) || 'the project';
+      const visitDateLabel = formatDDMMYYYY(new Date(quickVisitAt));
+
+      // Exact template requested — identical text sent to both the
+      // customer and the Channel Partner, merge fields filled in:
+      // "Dear {customer name}, use code {code} with (91) {customer number}
+      //  to preview {project} on {date}. Referred by {referenced_by}."
+      const message = `Dear ${quickCustomerName.trim()}, use code ${verificationCode} with (91) ${customerPhone} to preview ${projectName} on ${visitDateLabel}. Referred by ${quickReferencedBy.trim()}.`;
+
+      const outboxRows: { to_phone: string; message: string }[] = [];
+      outboxRows.push({ to_phone: customerPhone, message });
+      if (cp?.mobile) {
+        const cpPhone = normalizePhone(cp.mobile);
+        outboxRows.push({ to_phone: cpPhone, message });
+      }
+      const { error: outboxErr } = await supabase.from('whatsapp_outbox').insert(
+        outboxRows.map(r => ({ ...r, status: 'queued', quick_visit_id: inserted.id }))
+      );
+      if (outboxErr) {
+        // Visit itself is already saved — a failed notification shouldn't
+        // undo that, but the admin needs to know the code wasn't sent.
+        reportQueryError('Site Visits: walk-in visit code WhatsApp send', outboxErr);
+        setNotification({ type: 'error', message: 'Visit logged, but the WhatsApp code could not be queued: ' + outboxErr.message });
+      } else {
+        setNotification({ type: 'success', message: 'Walk-in visit logged. Verification code sent to the customer and Channel Partner.' });
+      }
+
+      setIsQuickCreateOpen(false);
+      resetQuickForm();
+      await fetchQuickVisits();
+    } catch (err: any) {
+      reportQueryError('Site Visits: walk-in visit create', err);
+      setQuickCreateError(err.message || 'Failed to log the walk-in visit.');
+    } finally {
+      setQuickCreateLoading(false);
+    }
+  };
 
   // Fetch lookups (projects, profiles, leads, CPs)
   const fetchLookups = useCallback(async () => {
@@ -90,7 +267,7 @@ export const SiteVisits: React.FC = () => {
         supabase.from('projects').select('id, project_name'),
         supabase.from('user_profiles').select('id, full_name'),
         supabase.from('leads').select('id, customer_name, mobile, email, project_id, owner_id, channel_partner_id'),
-        supabase.from('channel_partners').select('id, name, cp_code').eq('status', 'active')
+        supabase.from('channel_partners').select('id, name, cp_code, mobile').eq('status', 'active')
       ]);
 
       if (projectsRes.data) {
@@ -100,7 +277,6 @@ export const SiteVisits: React.FC = () => {
         setProfileMap(new Map(profilesRes.data.map(u => [u.id, u.full_name])));
       }
       if (leadsRes.data) {
-        setLeadsList(leadsRes.data as any);
         setLeadsMap(new Map(leadsRes.data.map(l => [l.id, l as any])));
       }
       if (cpRes.data) {
@@ -160,12 +336,17 @@ export const SiteVisits: React.FC = () => {
     fetchSiteVisits();
   }, [fetchSiteVisits]);
 
+  useEffect(() => {
+    fetchQuickVisits();
+  }, [fetchQuickVisits]);
+
   // Sync refresh trigger
   const handleSync = async () => {
     if (syncing) return;
     setSyncing(true);
     await fetchLookups();
     await fetchSiteVisits();
+    await fetchQuickVisits();
   };
 
   // Auto-dismiss alert notifications
@@ -177,89 +358,6 @@ export const SiteVisits: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [notification]);
-
-  // Auto-populate Project and Channel Partner select when Lead is chosen in Creation form
-  useEffect(() => {
-    if (selectedLeadId) {
-      const lead = leadsMap.get(selectedLeadId);
-      if (lead) {
-        if (lead.project_id) {
-          setSelectedProjectId(lead.project_id);
-        }
-        if (lead.channel_partner_id) {
-          setSelectedChannelPartnerId(lead.channel_partner_id);
-        } else {
-          setSelectedChannelPartnerId('');
-        }
-      }
-    }
-  }, [selectedLeadId, leadsMap]);
-
-  // Submit New Site Visit
-  const handleCreateSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedLeadId) {
-      setCreateError('Please select a Customer / Lead.');
-      return;
-    }
-    if (!selectedProjectId) {
-      setCreateError('Please select a Project.');
-      return;
-    }
-    if (!scheduledAt) {
-      setCreateError('Please select a Site Visit Date and Time.');
-      return;
-    }
-
-    setCreateError(null);
-    setCreateLoading(true);
-
-    try {
-      const { error: insertError } = await supabase
-        .from('site_visits')
-        .insert([
-          {
-            lead_id: selectedLeadId,
-            project_id: selectedProjectId,
-            status: selectedStatus || 'planned',
-            remarks: remarks.trim() || null,
-            scheduled_at: new Date(scheduledAt).toISOString()
-          }
-        ]);
-
-      if (insertError) {
-        throw new Error(insertError.message);
-      }
-
-      // Reset form states
-      setIsCreateOpen(false);
-      setSelectedLeadId('');
-      setSelectedProjectId('');
-      setScheduledAt('');
-      setRemarks('');
-      setSelectedStatus('planned');
-      setSelectedChannelPartnerId('');
-
-      // Refresh list
-      setPage(0);
-      await fetchSiteVisits();
-
-      setNotification({
-        type: 'success',
-        message: 'New site visit schedule created successfully!'
-      });
-    } catch (err: any) {
-      console.error('Site visit creation error:', err);
-      // Nice user-facing message translation
-      if (err.message && err.message.toLowerCase().includes('violates not-null constraint')) {
-        setCreateError('Database insertion denied: missing required project fields or constraints.');
-      } else {
-        setCreateError(err.message || 'Database error occurred while scheduling site visit.');
-      }
-    } finally {
-      setCreateLoading(false);
-    }
-  };
 
   // Update Status Quick Actions (Complete/Cancel)
   const handleUpdateStatus = async (visitId: string, newStatus: string) => {
@@ -293,6 +391,41 @@ export const SiteVisits: React.FC = () => {
       });
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  const [deletingVisitId, setDeletingVisitId] = useState<string | null>(null);
+
+  const handleDeleteVisit = async (visitId: string) => {
+    if (!window.confirm('Delete this site visit? This cannot be undone.')) return;
+    setDeletingVisitId(visitId);
+    try {
+      const { error } = await supabase.from('site_visits').delete().eq('id', visitId);
+      if (error) throw error;
+      setVisits(prev => prev.filter(v => v.id !== visitId));
+      if (selectedVisit?.id === visitId) setSelectedVisit(null);
+      setNotification({ type: 'success', message: 'Site visit deleted.' });
+    } catch (err: any) {
+      reportQueryError('Site Visits: delete', err);
+      setNotification({ type: 'error', message: err.message || 'Failed to delete site visit.' });
+    } finally {
+      setDeletingVisitId(null);
+    }
+  };
+
+  const handleDeleteQuickVisit = async (visitId: string) => {
+    if (!window.confirm('Delete this walk-in visit? This cannot be undone.')) return;
+    setDeletingVisitId(visitId);
+    try {
+      const { error } = await supabase.from('quick_site_visits').delete().eq('id', visitId);
+      if (error) throw error;
+      setQuickVisits(prev => prev.filter(v => v.id !== visitId));
+      setNotification({ type: 'success', message: 'Walk-in visit deleted.' });
+    } catch (err: any) {
+      reportQueryError('Site Visits: delete walk-in visit', err);
+      setNotification({ type: 'error', message: err.message || 'Failed to delete walk-in visit.' });
+    } finally {
+      setDeletingVisitId(null);
     }
   };
 
@@ -336,10 +469,11 @@ export const SiteVisits: React.FC = () => {
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
           <button
-            onClick={() => setIsCreateOpen(true)}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
+            onClick={() => setIsQuickCreateOpen(true)}
+            title="Log a walk-in visit not tied to any Lead — sends a verification code via WhatsApp"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-emerald-600/10 hover:shadow-lg transition-all focus:outline-none"
           >
-            + New Site Visit
+            + Log Walk-in Visit
           </button>
         </div>
       </div>
@@ -413,6 +547,71 @@ export const SiteVisits: React.FC = () => {
         </div>
       </div>
 
+      {/* WALK-IN VISITS — standalone, no lead relation. Shows the
+          verification code and live WhatsApp delivery status per visit. */}
+      {quickVisits.length > 0 && (
+        <div className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100">
+            <h3 className="text-sm font-bold text-slate-800">Walk-in Visits</h3>
+            <p className="text-xxs text-slate-400 mt-0.5">Logged directly — not tied to any Lead. Auto-expires 24 hours after logging.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-sm">
+              <thead>
+                <tr className="text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-100">
+                  <th className="py-3 px-6">Customer</th>
+                  <th className="py-3 px-6">Visit Time</th>
+                  <th className="py-3 px-6">Project</th>
+                  <th className="py-3 px-6">Channel Partner</th>
+                  <th className="py-3 px-6">Code</th>
+                  <th className="py-3 px-6">Message Status</th>
+                  <th className="py-3 px-6">Status</th>
+                  {canDelete && <th className="py-3 px-6 text-right">Actions</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {quickVisits.map(v => {
+                  const cp = channelPartners.find(c => c.id === v.channel_partner_id);
+                  const msgStatus = summarizeMsgStatus(v.id);
+                  return (
+                    <tr key={v.id} className="hover:bg-slate-50/50">
+                      <td className="py-3 px-6">
+                        <div className="font-semibold text-slate-900">{v.customer_name}</div>
+                        <div className="text-xs text-slate-500">{v.customer_mobile}</div>
+                      </td>
+                      <td className="py-3 px-6 text-slate-600">{new Date(v.visit_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</td>
+                      <td className="py-3 px-6 text-slate-600">{projectMap.get(v.project_id) || 'N/A'}</td>
+                      <td className="py-3 px-6 text-slate-600">{cp ? `${cp.cp_code} - ${cp.name}` : 'N/A'}</td>
+                      <td className="py-3 px-6">
+                        <span className="font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-1 rounded-lg">{v.verification_code}</span>
+                      </td>
+                      <td className={`py-3 px-6 text-xs font-semibold ${msgStatus.color}`}>{msgStatus.label}</td>
+                      <td className="py-3 px-6">
+                        <span className={`inline-flex px-2 py-0.5 rounded-full text-xxs font-semibold ${v.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                          {v.status === 'active' ? 'Active' : 'Expired'}
+                        </span>
+                      </td>
+                      {canDelete && (
+                        <td className="py-3 px-6 text-right">
+                          <button
+                            onClick={() => handleDeleteQuickVisit(v.id)}
+                            disabled={deletingVisitId === v.id}
+                            title="Delete (Super Admin only)"
+                            className="inline-flex items-center justify-center p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 disabled:opacity-40"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* TABLE DIRECTORY */}
       <div className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden flex flex-col">
         {loading ? (
@@ -484,6 +683,16 @@ export const SiteVisits: React.FC = () => {
                                 <Eye className="h-3.5 w-3.5" />
                                 <span>View</span>
                               </button>
+                              {canDelete && (
+                                <button
+                                  onClick={() => handleDeleteVisit(v.id)}
+                                  disabled={deletingVisitId === v.id}
+                                  title="Delete (Super Admin only)"
+                                  className="inline-flex items-center justify-center p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 disabled:opacity-40"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -689,149 +898,143 @@ export const SiteVisits: React.FC = () => {
         </div>
       )}
 
-      {/* CREATE SITE VISIT MODAL */}
-      {isCreateOpen && (
+      {/* LOG WALK-IN VISIT MODAL — standalone, no lead relation, open to
+          every role. Duplicate customer numbers are explicitly allowed
+          here (unlike Leads), per the client's requirement. */}
+      {isQuickCreateOpen && (
         <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsCreateOpen(false)} />
-          
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => { setIsQuickCreateOpen(false); resetQuickForm(); }} />
+
           <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            {/* Header */}
-            <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">Schedule New Site Visit</span>
-              <button type="button" onClick={() => setIsCreateOpen(false)} className="p-1 rounded-lg text-indigo-200 hover:text-white focus:outline-none">
+            <div className="bg-emerald-600 text-white px-6 py-4 flex items-center justify-between">
+              <span className="font-bold tracking-tight">Log Walk-in Visit</span>
+              <button type="button" onClick={() => { setIsQuickCreateOpen(false); resetQuickForm(); }} className="p-1 rounded-lg text-emerald-100 hover:text-white focus:outline-none">
                 <X className="h-5 w-5" />
               </button>
             </div>
 
-            {/* Form */}
-            <form onSubmit={handleCreateSubmit}>
+            <form onSubmit={handleQuickCreateSubmit}>
               <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
-                {createError && (
+                {quickCreateError && (
                   <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl flex items-start space-x-2.5">
                     <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
-                    <span className="text-sm font-semibold leading-tight">{createError}</span>
+                    <span className="text-sm font-medium leading-tight">{quickCreateError}</span>
                   </div>
                 )}
 
-                {/* Lead Select */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Select Lead / Customer *</label>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Customer Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="John Doe"
+                    value={quickCustomerName}
+                    onChange={(e) => setQuickCustomerName(e.target.value)}
+                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                    Customer WhatsApp Number *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. 9876543210"
+                    value={quickCustomerMobile}
+                    onChange={(e) => setQuickCustomerMobile(e.target.value)}
+                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    This must be a working WhatsApp number — the verification code is sent here.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Site Visit Date &amp; Time *</label>
+                  <input
+                    type="datetime-local"
+                    required
+                    value={quickVisitAt}
+                    onChange={(e) => setQuickVisitAt(e.target.value)}
+                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Channel Partner *</label>
                   <select
                     required
-                    value={selectedLeadId}
-                    onChange={(e) => setSelectedLeadId(e.target.value)}
+                    value={quickChannelPartnerId}
+                    onChange={(e) => setQuickChannelPartnerId(e.target.value)}
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                   >
-                    <option value="">Choose Lead...</option>
-                    {leadsList.length > 0 ? (
-                      leadsList.map(l => (
-                        <option key={l.id} value={l.id}>
-                          {l.customer_name || 'Unnamed Lead'}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="" disabled>No Leads available (Database is empty)</option>
-                    )}
-                  </select>
-                </div>
-
-                {/* Channel Partner Select */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Channel Partner (Auto-inherited from Lead)</label>
-                  <select
-                    value={selectedChannelPartnerId}
-                    onChange={(e) => setSelectedChannelPartnerId(e.target.value)}
-                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
-                  >
-                    <option value="">No Channel Partner...</option>
+                    <option value="">Select Channel Partner...</option>
                     {channelPartners.map(cp => (
-                      <option key={cp.id} value={cp.id}>
-                        {cp.cp_code} - {cp.name}
-                      </option>
+                      <option key={cp.id} value={cp.id}>{cp.cp_code} - {cp.name}</option>
                     ))}
                   </select>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Their number is taken automatically from their Channel Partner record — no need to type it.
+                  </p>
                 </div>
 
-                {/* Project Select */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Project *</label>
                   <select
                     required
-                    value={selectedProjectId}
-                    onChange={(e) => setSelectedProjectId(e.target.value)}
+                    value={quickProjectId}
+                    onChange={(e) => setQuickProjectId(e.target.value)}
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                   >
-                    <option value="">Choose Project...</option>
-                    {projectMap.size > 0 ? (
-                      Array.from(projectMap.entries()).map(([id, name]) => (
-                        <option key={id} value={id}>{name}</option>
-                      ))
-                    ) : (
-                      <option value="" disabled>No projects available (Database is empty)</option>
-                    )}
+                    <option value="">Select Project...</option>
+                    {Array.from(projectMap.entries()).map(([id, name]) => (
+                      <option key={id} value={id}>{name}</option>
+                    ))}
                   </select>
                 </div>
 
-                {/* Scheduled Date & Time */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Site Visit Date & Time *</label>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Referenced By *</label>
                   <input
-                    type="datetime-local"
+                    type="text"
                     required
-                    value={scheduledAt}
-                    onChange={(e) => setScheduledAt(e.target.value)}
-                    className="block w-full px-4 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-indigo-600 focus:outline-none transition-all"
+                    placeholder="Name of the person who referred this visit"
+                    value={quickReferencedBy}
+                    onChange={(e) => setQuickReferencedBy(e.target.value)}
+                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
                   />
+                  <p className="text-[10px] text-slate-400 mt-1">Appears in the WhatsApp message as "Referred by {'{'}name{'}'}".</p>
                 </div>
 
-                {/* Status select */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Status *</label>
-                  <select
-                    value={selectedStatus}
-                    onChange={(e) => setSelectedStatus(e.target.value)}
-                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
-                  >
-                    <option value="planned">Planned</option>
-                    <option value="completed">Completed</option>
-                    <option value="cancelled">Cancelled</option>
-                  </select>
-                </div>
-
-                {/* Remarks */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Remarks / Notes</label>
-                  <textarea
-                    placeholder="Describe visit coordinates, specific flat block/unit interest..."
-                    rows={3}
-                    value={remarks}
-                    onChange={(e) => setRemarks(e.target.value)}
-                    className="block w-full px-4 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-indigo-600 focus:outline-none transition-all"
-                  />
+                <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 text-xxs text-slate-500">
+                  A unique verification code will be generated and sent via WhatsApp to both the customer and the Channel Partner. This visit stays <span className="font-semibold">active for 24 hours</span>, after which it automatically expires.
                 </div>
               </div>
 
-              {/* Form Footer */}
               <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setIsCreateOpen(false)}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
+                  onClick={() => { setIsQuickCreateOpen(false); resetQuickForm(); }}
+                  disabled={quickCreateLoading}
+                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={createLoading}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
+                  disabled={quickCreateLoading}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-semibold shadow-md shadow-emerald-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
                 >
-                  {createLoading ? 'Scheduling...' : 'Schedule Visit'}
+                  {quickCreateLoading ? 'Logging & Sending Code...' : 'Log Visit & Send Code'}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+
     </div>
   );
 };

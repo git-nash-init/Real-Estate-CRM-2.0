@@ -158,7 +158,12 @@ function randomDelay() {
 }
 
 function toJid(phone) {
-  const digits = phone.replace(/[^0-9]/g, '');
+  let digits = phone.replace(/[^0-9]/g, '');
+  // Normalise Indian 10-digit numbers: WhatsApp JIDs must use the full
+  // international format (e.g. 919876543210), not the local 10-digit form.
+  // If the number is exactly 10 digits it is almost certainly a local Indian
+  // number stored without the country code — prepend 91.
+  if (digits.length === 10) digits = `91${digits}`;
   return `${digits}@s.whatsapp.net`;
 }
 

@@ -5,52 +5,47 @@ import type { UserProfile, UserRole, UserSession } from '../types/auth';
 interface AuthContextType extends UserSession {
   login: (email: string, password: string) => Promise<{ error: any }>;
   logout: () => Promise<{ error: any }>;
-  /** True once `loading` has been stuck for too long — see the timeout effect below. */
-  timedOut: boolean;
-}
-
-interface AuthUser {
-  id: string;
-  email?: string;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const fetchProfileAndRole = async (userId: string, email: string) => {
+const fetchProfileAndRole = async (userId: string, email: string): Promise<{ profile: UserProfile | null; role: UserRole | null }> => {
   try {
-    // 1. Fetch user profile from user_profiles
-    const { data: profile, error: profileError } = await supabase
+    const profilePromise = supabase
       .from('user_profiles')
       .select('*')
       .eq('id', userId)
       .maybeSingle();
 
-    if (profileError) {
-      console.error('Error fetching user profile:', profileError.message);
-    }
-
-    // 2. Fetch role_id from user_roles
-    const { data: userRole, error: userRoleError } = await supabase
+    const userRolePromise = supabase
       .from('user_roles')
       .select('role_id')
       .eq('user_id', userId)
       .maybeSingle();
 
+    // 2.5s safeguard timeout so database latency never hangs auth
+    const timeoutPromise = new Promise<{ timeout: true }>((resolve) =>
+      setTimeout(() => resolve({ timeout: true }), 2500)
+    );
+
+    const [profileRes, userRoleRes] = await Promise.race([
+      Promise.all([profilePromise, userRolePromise]),
+      timeoutPromise.then(() => [{ data: null, error: null }, { data: null, error: null }]),
+    ]);
+
+    const profile = (profileRes as any)?.data;
+    const userRole = (userRoleRes as any)?.data;
+
     let roleName: UserRole | null = null;
 
-    if (userRoleError) {
-      console.error('Error fetching user role mapping:', userRoleError.message);
-    } else if (userRole?.role_id) {
-      // 3. Fetch role name from roles
-      const { data: role, error: roleError } = await supabase
+    if (userRole?.role_id) {
+      const { data: role } = await supabase
         .from('roles')
         .select('name')
         .eq('id', userRole.role_id)
         .maybeSingle();
 
-      if (roleError) {
-        console.error('Error fetching role name:', roleError.message);
-      } else if (role?.name) {
+      if (role?.name) {
         roleName = role.name as UserRole;
       }
     }
@@ -70,78 +65,122 @@ const fetchProfileAndRole = async (userId: string, email: string) => {
       role: roleName,
     };
   } catch (err) {
-    console.error('Unexpected error in fetchProfileAndRole:', err);
-    return { profile: null, role: null };
+    console.error('Error in fetchProfileAndRole:', err);
+    return {
+      profile: {
+        id: userId,
+        email: email,
+        full_name: null,
+        avatar_url: null,
+        status: 'active',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      role: null,
+    };
   }
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Split in two: `authUser` tracks only what Supabase's auth events tell us
-  // (id/email), `sessionState` carries the derived profile/role once fetched.
-  // This split is deliberate — see the effect below for why.
-  const [authUser, setAuthUser] = useState<AuthUser | null | undefined>(undefined); // undefined = not yet resolved
-  const [sessionState, setSessionState] = useState<UserSession>({
-    user: null,
-    profile: null,
-    role: null,
-    loading: true,
-  });
-  const [timedOut, setTimedOut] = useState(false);
-
-  // Safety net for the exact failure mode that once caused a permanent
-  // "Verifying secure session..." hang (see the comment on the auth-event
-  // listener below): if `loading` is ever stuck for more than 10s — a
-  // held navigator.locks lock from a stale tab, a network call that never
-  // resolves, anything — stop pretending the app is about to recover on
-  // its own and tell ProtectedRoute to offer a reload instead. A full page
-  // reload starts a fresh browsing context, which releases any
-  // origin-scoped lock the previous context was holding, so this always
-  // has a real chance of fixing it, not just a spinner that lies.
-  useEffect(() => {
-    if (!sessionState.loading) {
-      setTimedOut(false);
-      return;
+  const [sessionState, setSessionState] = useState<UserSession>(() => {
+    // If no Supabase token exists in localStorage, initialize immediately as unauthenticated
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const hasToken = Object.keys(localStorage).some(
+          (k) => k.startsWith('sb-') && k.endsWith('-auth-token')
+        );
+        if (!hasToken) {
+          return { user: null, profile: null, role: null, loading: false };
+        }
+      }
+    } catch {
+      // ignore
     }
-    const timer = setTimeout(() => setTimedOut(true), 10000);
-    return () => clearTimeout(timer);
-  }, [sessionState.loading]);
+    return { user: null, profile: null, role: null, loading: true };
+  });
 
-  // Auth-event listener: intentionally does NOTHING but synchronous state
-  // updates. supabase-js holds a navigator.locks lock for the entire
-  // duration of this callback; if it were async and awaited another
-  // Supabase call (as this used to), that call's own internal getSession()
-  // would deadlock waiting on the same lock this callback is holding —
-  // the callback would never resolve, and `loading` would stay true
-  // forever. Since onAuthStateChange fires an INITIAL_SESSION event on
-  // every page load, that deadlock reproduced on every load, not just
-  // some — this is what caused the permanent "Verifying secure session..."
-  // hang. A single getSession() call up front is redundant with
-  // INITIAL_SESSION, so it's dropped rather than kept as a second source
-  // of truth.
   useEffect(() => {
     let mounted = true;
+
+    const initAuth = async () => {
+      try {
+        const sessionPromise = supabase.auth.getSession();
+        const timeoutPromise = new Promise<{ data: { session: null }; error: null }>((resolve) =>
+          setTimeout(() => resolve({ data: { session: null }, error: null }), 1200)
+        );
+
+        const { data } = await Promise.race([sessionPromise, timeoutPromise]);
+        const session = data?.session;
+
+        if (!mounted) return;
+
+        if (!session?.user) {
+          setSessionState({
+            user: null,
+            profile: null,
+            role: null,
+            loading: false,
+          });
+          return;
+        }
+
+        const userObj = { id: session.user.id, email: session.user.email };
+        const { profile, role } = await fetchProfileAndRole(userObj.id, userObj.email || '');
+
+        if (mounted) {
+          setSessionState({
+            user: userObj,
+            profile,
+            role,
+            loading: false,
+          });
+        }
+      } catch (err) {
+        console.error('Auth initialization error:', err);
+        if (mounted) {
+          setSessionState({
+            user: null,
+            profile: null,
+            role: null,
+            loading: false,
+          });
+        }
+      }
+    };
+
+    initAuth();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
 
-      // supabase-js silently re-validates the session every time the tab
-      // regains focus/visibility (and on token refresh), firing another
-      // auth event for the SAME user. Previously that was treated as a
-      // fresh login: a brand new {id,email} object triggered the
-      // profile/role effect below, which flipped `loading` back to true
-      // and re-showed "Verifying secure session..." on every tab switch.
-      // Skip re-verification entirely for events that can't represent an
-      // actual identity change, and for the rest, only update state (and
-      // therefore re-render/re-fetch) when the user id actually changed —
-      // returning the same object reference from a functional update lets
-      // React bail out of re-rendering for an unchanged id.
-      if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') return;
+      if (event === 'SIGNED_OUT' || !session?.user) {
+        setSessionState({
+          user: null,
+          profile: null,
+          role: null,
+          loading: false,
+        });
+        return;
+      }
 
-      const nextId = session?.user?.id ?? null;
-      setAuthUser((prev) => {
-        if ((prev?.id ?? null) === nextId) return prev;
-        return session?.user ? { id: session.user.id, email: session.user.email } : null;
-      });
+      if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
+        const userObj = { id: session.user.id, email: session.user.email };
+        setSessionState((prev) => ({
+          ...prev,
+          user: userObj,
+          loading: false,
+        }));
+
+        fetchProfileAndRole(userObj.id, userObj.email || '').then(({ profile, role }) => {
+          if (mounted) {
+            setSessionState((prev) => ({
+              ...prev,
+              profile,
+              role,
+            }));
+          }
+        });
+      }
     });
 
     return () => {
@@ -150,49 +189,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // Profile/role fetch lives in its own effect, entirely outside the auth
-  // callback above, so it's free to await Supabase calls without deadlocking.
-  useEffect(() => {
-    if (authUser === undefined) return; // still waiting on the first auth event
-
-    let cancelled = false;
-
-    if (!authUser) {
-      setSessionState({ user: null, profile: null, role: null, loading: false });
-      return;
-    }
-
-    setSessionState((prev) => ({ ...prev, user: authUser, loading: true }));
-
-    fetchProfileAndRole(authUser.id, authUser.email || '')
-      .then(({ profile, role }) => {
-        if (!cancelled) setSessionState({ user: authUser, profile, role, loading: false });
-      })
-      .catch((err) => {
-        // fetchProfileAndRole already catches internally and never throws,
-        // but this guards against a truly unexpected failure so `loading`
-        // can never be stranded at true.
-        console.error('Unexpected error resolving profile/role:', err);
-        if (!cancelled) setSessionState({ user: authUser, profile: null, role: null, loading: false });
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authUser]);
-
   const login = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (!error && data.user) {
+      const userObj = { id: data.user.id, email: data.user.email };
+      setSessionState({
+        user: userObj,
+        profile: null,
+        role: null,
+        loading: false,
+      });
+      fetchProfileAndRole(userObj.id, userObj.email || '').then(({ profile, role }) => {
+        setSessionState((prev) => ({
+          ...prev,
+          profile,
+          role,
+        }));
+      });
+    }
     return { error };
   };
 
   const logout = async () => {
     const { error } = await supabase.auth.signOut();
+    setSessionState({
+      user: null,
+      profile: null,
+      role: null,
+      loading: false,
+    });
     return { error };
   };
 
   return (
-    <AuthContext.Provider value={{ ...sessionState, login, logout, timedOut }}>
+    <AuthContext.Provider value={{ ...sessionState, login, logout }}>
       {children}
     </AuthContext.Provider>
   );
@@ -205,3 +235,4 @@ export const useAuth = () => {
   }
   return context;
 };
+

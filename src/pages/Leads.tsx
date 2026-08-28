@@ -30,7 +30,8 @@ import {
   MessageCircle,
   Send,
   Paperclip,
-  Pencil
+  Pencil,
+  Trash2
 } from 'lucide-react';
 
 interface Lead {
@@ -305,6 +306,22 @@ export const Leads: React.FC = () => {
     setSyncing(true);
     await fetchFilterOptions();
     await fetchLeads();
+  };
+
+  const handleDeleteLead = async (lead: Lead) => {
+    if (window.confirm(`Are you sure you want to permanently delete lead "${lead.customer_name}"?`)) {
+      setLoading(true);
+      try {
+        const { error } = await supabase.from('leads').delete().eq('id', lead.id);
+        if (error) throw error;
+        setNotification({ type: 'success', message: 'Lead deleted successfully.' });
+        fetchLeads();
+      } catch (err: any) {
+        setNotification({ type: 'error', message: err.message || 'Failed to delete lead' });
+      } finally {
+        setLoading(false);
+      }
+    }
   };
 
   const openLogCall = () => {
@@ -967,6 +984,15 @@ export const Leads: React.FC = () => {
                             >
                               <Pencil className="h-3.5 w-3.5" />
                             </button>
+                            {role === 'super_admin' && (
+                              <button
+                                onClick={() => handleDeleteLead(lead)}
+                                title="Delete lead"
+                                className="inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-red-600 transition-colors focus:outline-none"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
                             <button
                               onClick={() => setSelectedLead(lead)}
                               className="inline-flex items-center space-x-1 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition-colors focus:outline-none"

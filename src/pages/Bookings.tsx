@@ -1037,10 +1037,14 @@ export const Bookings: React.FC = () => {
         throw new Error('Unable to cancel booking. Please try again.');
       }
 
-      // Inventory release: the DB trigger already does this on any
-      // cancellation. Mirror it into local state so the UI updates without
-      // waiting for a refetch.
+      // Inventory release: explicitly release it in the database just in case
+      // the trigger is missing or failing, then mirror to local state.
       if (booking.inventory_id) {
+        await supabase
+          .from('project_inventory')
+          .update({ status: 'available' })
+          .eq('id', booking.inventory_id);
+
         setInventoryList(prev => prev.map(item =>
           item.id === booking.inventory_id ? { ...item, status: 'available' } : item
         ));

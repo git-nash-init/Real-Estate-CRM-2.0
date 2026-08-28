@@ -11,9 +11,11 @@ import {
   AlertCircle,
   Users,
   CheckCircle,
-  Edit2
+  Edit2,
+  Trash2
 } from 'lucide-react';
 import type { UserRole } from '../types/auth';
+import { useAuth } from '../hooks/useAuth';
 
 interface Employee {
   id: string;
@@ -95,6 +97,8 @@ function generateRandomPassword(): string {
 }
 
 export const Employees: React.FC = () => {
+  const { role: currentUserRole } = useAuth();
+  
   // Query & state filters
   const [searchQuery, setSearchQuery] = useState('');
   const [deptFilter, setDeptFilter] = useState('');
@@ -249,6 +253,23 @@ export const Employees: React.FC = () => {
     setSyncing(true);
     await fetchLookups();
     await fetchEmployees();
+  };
+
+  const handleDeleteEmployee = async (emp: Employee) => {
+    if (window.confirm(`Are you sure you want to permanently delete employee ${emp.first_name} ${emp.last_name}?`)) {
+      setLoading(true);
+      try {
+        const { error } = await supabase.from('employees').delete().eq('id', emp.id);
+        if (error) throw error;
+        setNotification({ type: 'success', message: 'Employee deleted successfully.' });
+        fetchEmployees();
+        setSelectedEmployee(null);
+      } catch (err: any) {
+        setNotification({ type: 'error', message: err.message || 'Failed to delete employee' });
+      } finally {
+        setLoading(false);
+      }
+    }
   };
 
   // Toast alert dismiss timer
@@ -984,6 +1005,15 @@ export const Employees: React.FC = () => {
                               >
                                 <Edit2 className="h-3.5 w-3.5" />
                               </button>
+                              {currentUserRole === 'super_admin' && (
+                                <button
+                                  onClick={() => handleDeleteEmployee(emp)}
+                                  className="p-1.5 border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-50 hover:text-red-600 transition-colors"
+                                  title="Delete Employee"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                               <button
                                 onClick={() => setSelectedEmployee(emp)}
                                 className="p-1.5 border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition-colors"
@@ -1550,6 +1580,7 @@ export const Employees: React.FC = () => {
                           <option key={p.id} value={p.id}>{p.full_name} ({p.email})</option>
                         ))}
                       </select>
+                      <p className="text-[10px] text-slate-500 mt-1 italic">Optional: Select an existing account instead of auto-creating a new one.</p>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Access Role Assignment</label>
@@ -1575,36 +1606,46 @@ export const Employees: React.FC = () => {
                         only matters, for every other role. Whichever
                         projects are checked here become the only project
                         data this employee's account can see. */}
-                    {selectedRole && selectedRole !== 'super_admin' && (
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-                          Assigned Project(s) <span className="text-slate-400 normal-case font-normal">— data access is limited to these</span>
-                        </label>
-                        <div className="border border-slate-200 rounded-xl bg-slate-50 p-3 space-y-1.5 max-h-40 overflow-y-auto">
-                          {projectsList.length === 0 ? (
-                            <p className="text-xs text-slate-400 italic">No projects found.</p>
-                          ) : (
-                            projectsList.map(p => (
-                              <label key={p.id} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={assignedProjectIds.includes(p.id)}
-                                  onChange={(e) => {
-                                    setAssignedProjectIds(prev =>
-                                      e.target.checked ? [...prev, p.id] : prev.filter(id => id !== p.id)
-                                    );
-                                  }}
-                                />
-                                {p.project_name}
-                              </label>
-                            ))
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                        Assigned Project(s) <span className="text-slate-400 normal-case font-normal">— data access is limited to these</span>
+                      </label>
+                      {!selectedRole ? (
+                        <div className="border border-slate-200 rounded-xl bg-slate-50 p-3 text-center text-sm text-slate-500 italic">
+                          Please assign an Access Role above first to configure project access.
+                        </div>
+                      ) : selectedRole === 'super_admin' ? (
+                        <div className="border border-slate-200 rounded-xl bg-slate-50 p-3 text-center text-sm text-slate-500 italic">
+                          Super Admins automatically have access to all projects data.
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="border border-slate-200 rounded-xl bg-slate-50 p-3 space-y-1.5 max-h-40 overflow-y-auto">
+                            {projectsList.length === 0 ? (
+                              <p className="text-xs text-slate-400 italic">No projects found.</p>
+                            ) : (
+                              projectsList.map(p => (
+                                <label key={p.id} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={assignedProjectIds.includes(p.id)}
+                                    onChange={(e) => {
+                                      setAssignedProjectIds(prev =>
+                                        e.target.checked ? [...prev, p.id] : prev.filter(id => id !== p.id)
+                                      );
+                                    }}
+                                  />
+                                  {p.project_name}
+                                </label>
+                              ))
+                            )}
+                          </div>
+                          {assignedProjectIds.length === 0 && (
+                            <p className="text-[10px] text-amber-600 mt-1">No project selected — this employee won't see any project-scoped data until at least one is assigned.</p>
                           )}
                         </div>
-                        {assignedProjectIds.length === 0 && (
-                          <p className="text-[10px] text-amber-600 mt-1">No project selected — this employee won't see any project-scoped data until at least one is assigned.</p>
-                        )}
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 </div>
 

@@ -8,36 +8,13 @@ interface ProtectedRouteProps {
 }
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowedRoles }) => {
-  const { user, profile, role, loading, timedOut } = useAuth();
+  const { user, profile, role, loading } = useAuth();
   const location = useLocation();
 
   if (loading) {
-    // Stuck for 10s+ (a stale tab holding the browser's auth lock, a
-    // network call that never resolved) — a spinner that never changes is
-    // worse than an honest dead end. A full reload starts a fresh browsing
-    // context, which is enough to clear this class of problem.
-    if (timedOut) {
-      return (
-        <div className="min-h-screen flex items-center justify-center bg-slate-50">
-          <div className="max-w-sm w-full bg-white p-8 rounded-xl shadow-lg text-center border border-slate-100">
-            <h2 className="text-lg font-bold text-slate-800 mb-2">Taking longer than expected</h2>
-            <p className="text-sm text-slate-500 mb-6">Your session is taking too long to verify. This usually clears up with a reload.</p>
-            <button
-              onClick={() => window.location.reload()}
-              className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold"
-            >
-              Reload
-            </button>
-          </div>
-        </div>
-      );
-    }
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <div className="flex flex-col items-center space-y-4">
-          <div className="animate-spin rounded-full h-10 w-10 border-4 border-indigo-200 border-t-indigo-600"></div>
-          <p className="text-slate-500 font-medium animate-pulse">Verifying secure session...</p>
-        </div>
+        <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
       </div>
     );
   }

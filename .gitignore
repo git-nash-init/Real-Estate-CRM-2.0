@@ -12,6 +12,22 @@ dist
 dist-ssr
 *.local
 
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# AI files & scratch
+.claude
+.mcp.json
+task.md
+AUDIT.md
+SUBMISSION.md
+WALKTHROUGH.md
+read_claude_json.py
+scratch/
+*.zip
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

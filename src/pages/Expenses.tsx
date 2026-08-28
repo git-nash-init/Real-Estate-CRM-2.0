@@ -13,6 +13,7 @@ import {
   Search,
   ReceiptText,
 } from 'lucide-react';
+import { Navigate } from 'react-router-dom';
 
 // Personal, super-admin-only expense ledger. RLS on personal_expenses
 // (user_id = auth.uid() AND is_super_admin()) means this query can only ever
@@ -52,8 +53,16 @@ const paymentModeOptions = ['Cash', 'Card', 'UPI', 'Bank Transfer', 'Cheque'];
 const formatCurrency = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 
 export const Expenses: React.FC = () => {
-  const { role, user } = useAuth();
+  const { role, user, profile } = useAuth();
   const isSuperAdmin = role === 'super_admin';
+
+  // Specific hardcoded block per client request. NOTE: this check must stay
+  // BELOW all hook calls — an early `return` placed above them changes the
+  // number of hooks React sees between renders (profile arrives async, so
+  // the first render has it null and a later one doesn't), which crashes
+  // with "Rendered fewer hooks than expected". Evaluated here, applied
+  // after the hooks below.
+  const isBlockedUser = profile?.email === 'anilhiwale17@gmail.com';
 
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
@@ -201,6 +210,11 @@ export const Expenses: React.FC = () => {
     const actual = filtered.reduce((s, e) => s + (e.actual_amount || 0), 0);
     return { receipt, actual, delta: receipt - actual };
   }, [filtered]);
+
+  // Safe to return early from here on — every hook above has already run.
+  if (isBlockedUser) {
+    return <Navigate to="/" replace />;
+  }
 
   if (!isSuperAdmin) {
     return (
