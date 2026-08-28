@@ -12,15 +12,10 @@ import {
   ShieldAlert,
   Search,
   ReceiptText,
+  Calendar,
 } from 'lucide-react';
 import { Navigate } from 'react-router-dom';
-
-// Personal, super-admin-only expense ledger. RLS on personal_expenses
-// (user_id = auth.uid() AND is_super_admin()) means this query can only ever
-// return the logged-in super admin's own rows — no other account, including
-// another super_admin, can see or write here. The role check below is a UX
-// convenience (hide the nav item / show a clean message); the real boundary
-// is the database policy.
+import { resolveDateRange, presetOptions, type DateRangePreset } from '../services/dateRangePresets';
 
 interface Expense {
   id: string;
@@ -54,16 +49,60 @@ const paymentModeOptions = ['Cash', 'Card', 'UPI', 'Bank Transfer', 'Cheque'];
 
 const formatCurrency = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 
-export const Expenses: React.FC = () => {
-  const { role, user, profile } = useAuth();
-  const isSuperAdmin = role === 'super_admin';
+const DateRangeFilter: React.FC<{
+  preset: DateRangePreset;
+  onPresetChange: (p: DateRangePreset) => void;
+  customStart: string;
+  customEnd: string;
+  onCustomChange: (start: string, end: string) => void;
+}> = ({ preset, onPresetChange, customStart, customEnd, onCustomChange }) => (
+  <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-4">
+    <div className="flex items-center gap-2 mb-3 text-slate-700">
+      <Calendar className="h-4 w-4 text-indigo-600" />
+      <span className="text-xs font-bold uppercase tracking-wider">Time Frame Filter</span>
+    </div>
+    <div className="flex flex-wrap gap-2">
+      {presetOptions.map((opt) => (
+        <button
+          key={opt.value}
+          onClick={() => onPresetChange(opt.value)}
+          className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors \${
+            preset === opt.value
+              ? 'bg-indigo-600 border-indigo-600 text-white'
+              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+    {preset === 'custom' && (
+      <div className="flex flex-wrap items-center gap-2 mt-3">
+        <input
+          type="date"
+          value={customStart}
+          onChange={(e) => onCustomChange(e.target.value, customEnd)}
+          className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
+        />
+        <span className="text-xs text-slate-400">to</span>
+        <input
+          type="date"
+          value={customEnd}
+          onChange={(e) => onCustomChange(customStart, e.target.value)}
+          min={customStart || undefined}
+          className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
+        />
+        {(!customStart || !customEnd) && (
+          <span className="text-xs text-amber-600">Pick both dates to apply.</span>
+        )}
+      </div>
+    )}
+  </div>
+);
 
-  // Specific hardcoded block per client request. NOTE: this check must stay
-  // BELOW all hook calls — an early `return` placed above them changes the
-  // number of hooks React sees between renders (profile arrives async, so
-  // the first render has it null and a later one doesn't), which crashes
-  // with "Rendered fewer hooks than expected". Evaluated here, applied
-  // after the hooks below.
+export const Expenses: React.FC = () => {
+  const { role, profile } = useAuth();
+  const isSuperAdmin = role === 'super_admin';
   const isBlockedUser = profile?.email === 'anilhiwale17@gmail.com';
 
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -72,7 +111,13 @@ export const Expenses: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+  const [preset, setPreset] = useState<DateRangePreset>('this_month');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+  const range = useMemo(() => resolveDateRange(preset, customStart, customEnd), [preset, customStart, customEnd]);
+
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [formMode, setFormMode] = useState<'expense' | 'received'>('expense');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
@@ -88,12 +133,14 @@ export const Expenses: React.FC = () => {
     const { data, error } = await supabase
       .from('personal_expenses')
       .select('*')
+      .gte('expense_date', range.startISO)
+      .lt('expense_date', range.endISO)
       .order('expense_date', { ascending: false });
     if (error) reportQueryError('Expenses: list', error);
     else setExpenses(data || []);
     setLoading(false);
     setSyncing(false);
-  }, [isSuperAdmin]);
+  }, [isSuperAdmin, range]);
 
   useEffect(() => { fetchExpenses(); }, [fetchExpenses]);
 
@@ -115,13 +162,15 @@ export const Expenses: React.FC = () => {
     setFormError(null);
   };
 
-  const openCreate = () => {
+  const openCreate = (mode: 'expense' | 'received') => {
     resetForm();
+    setFormMode(mode);
     setIsFormOpen(true);
   };
 
   const openEdit = (exp: Expense) => {
     setEditingId(exp.id);
+    setFormMode((exp.received_amount || 0) > 0 && (exp.actual_amount || 0) === 0 ? 'received' : 'expense');
     setForm({
       expense_date: exp.expense_date,
       category: exp.category || '',
@@ -141,13 +190,24 @@ export const Expenses: React.FC = () => {
     e.preventDefault();
     setFormError(null);
 
-    if (!form.expense_date || form.receipt_amount === '' || form.actual_amount === '') {
-      setFormError('Date, receipt amount, and actual amount are required.');
+    if (!form.expense_date) {
+      setFormError('Date is required.');
       return;
     }
-    const receiptAmount = Number(form.receipt_amount);
-    const actualAmount = Number(form.actual_amount);
-    if (Number.isNaN(receiptAmount) || Number.isNaN(actualAmount) || receiptAmount < 0 || actualAmount < 0) {
+    if (formMode === 'expense' && form.actual_amount === '') {
+      setFormError('Spent amount is required.');
+      return;
+    }
+    if (formMode === 'received' && form.received_amount === '') {
+      setFormError('Received amount is required.');
+      return;
+    }
+
+    const receiptAmount = Number(form.receipt_amount) || 0;
+    const actualAmount = Number(form.actual_amount) || 0;
+    const receivedAmount = Number(form.received_amount) || 0;
+
+    if (receiptAmount < 0 || actualAmount < 0 || receivedAmount < 0) {
       setFormError('Amounts must be valid non-negative numbers.');
       return;
     }
@@ -159,7 +219,7 @@ export const Expenses: React.FC = () => {
       vendor: form.vendor || null,
       description: form.description || null,
       receipt_amount: receiptAmount,
-      received_amount: Number(form.received_amount) || 0,
+      received_amount: receivedAmount,
       actual_amount: actualAmount,
       payment_mode: form.payment_mode || null,
       notes: form.notes || null,
@@ -171,7 +231,8 @@ export const Expenses: React.FC = () => {
         if (error) throw error;
         setNotification({ type: 'success', message: 'Expense updated.' });
       } else {
-        const { error } = await supabase.from('personal_expenses').insert([{ ...payload, user_id: user?.id }]);
+        const { data: { session } } = await supabase.auth.getSession();
+        const { error } = await supabase.from('personal_expenses').insert([{ ...payload, user_id: session?.user?.id }]);
         if (error) throw error;
         setNotification({ type: 'success', message: 'Expense logged.' });
       }
@@ -210,12 +271,12 @@ export const Expenses: React.FC = () => {
   }, [expenses, searchTerm]);
 
   const totals = useMemo(() => {
+    const received = filtered.reduce((s, e) => s + (e.received_amount || 0), 0);
     const receipt = filtered.reduce((s, e) => s + (e.receipt_amount || 0), 0);
     const actual = filtered.reduce((s, e) => s + (e.actual_amount || 0), 0);
-    return { receipt, actual, delta: receipt - actual };
+    return { received, receipt, actual, delta: received - actual };
   }, [filtered]);
 
-  // Safe to return early from here on — every hook above has already run.
   if (isBlockedUser) {
     return <Navigate to="/" replace />;
   }
@@ -233,7 +294,7 @@ export const Expenses: React.FC = () => {
   return (
     <div className="space-y-6">
       {notification && (
-        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-medium ${notification.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'}`}>
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-medium \${notification.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'}`}>
           {notification.message}
         </div>
       )}
@@ -252,10 +313,16 @@ export const Expenses: React.FC = () => {
             className="p-2.5 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-50"
             title="Refresh"
           >
-            <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-4 w-4 \${syncing ? 'animate-spin' : ''}`} />
           </button>
           <button
-            onClick={openCreate}
+            onClick={() => openCreate('received')}
+            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold shadow-sm"
+          >
+            <Plus className="h-4 w-4" /> Log Received
+          </button>
+          <button
+            onClick={() => openCreate('expense')}
             className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold shadow-sm"
           >
             <Plus className="h-4 w-4" /> Log Expense
@@ -263,19 +330,31 @@ export const Expenses: React.FC = () => {
         </div>
       </div>
 
+      <DateRangeFilter
+        preset={preset}
+        onPresetChange={setPreset}
+        customStart={customStart}
+        customEnd={customEnd}
+        onCustomChange={(start, end) => { setCustomStart(start); setCustomEnd(end); }}
+      />
+
       {/* Summary cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
         <div className="bg-white border border-slate-200 rounded-2xl p-5">
-          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Total Receipt Amount</p>
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Total Received</p>
+          <p className="text-2xl font-bold text-slate-900 mt-1">{formatCurrency(totals.received)}</p>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-2xl p-5">
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Total Billed</p>
           <p className="text-2xl font-bold text-slate-900 mt-1">{formatCurrency(totals.receipt)}</p>
         </div>
         <div className="bg-white border border-slate-200 rounded-2xl p-5">
-          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Total Actual Spent</p>
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Total Spent</p>
           <p className="text-2xl font-bold text-slate-900 mt-1">{formatCurrency(totals.actual)}</p>
         </div>
         <div className="bg-white border border-slate-200 rounded-2xl p-5">
-          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Difference (Receipt − Actual)</p>
-          <p className={`text-2xl font-bold mt-1 ${totals.delta > 0 ? 'text-emerald-600' : totals.delta < 0 ? 'text-rose-600' : 'text-slate-900'}`}>
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Balance (Received − Spent)</p>
+          <p className={`text-2xl font-bold mt-1 \${totals.delta > 0 ? 'text-emerald-600' : totals.delta < 0 ? 'text-rose-600' : 'text-slate-900'}`}>
             {totals.delta >= 0 ? '+' : ''}{formatCurrency(totals.delta)}
           </p>
         </div>
@@ -302,7 +381,7 @@ export const Expenses: React.FC = () => {
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-slate-400">
             <ReceiptText className="h-10 w-10 mb-2" />
-            <p className="text-sm">No expenses logged yet.</p>
+            <p className="text-sm">No entries match your search/filters.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -326,18 +405,18 @@ export const Expenses: React.FC = () => {
                   return (
                     <tr key={exp.id} className="hover:bg-slate-50">
                       <td className="px-4 py-3 whitespace-nowrap text-slate-700">{new Date(exp.expense_date).toLocaleDateString('en-IN')}</td>
-                      <td className="px-4 py-3 text-slate-700">{exp.category || '—'}</td>
+                      <td className="px-4 py-3 text-slate-700">{exp.category || '-'}</td>
                       <td className="px-4 py-3 text-slate-700">
-                        <div className="font-medium">{exp.vendor || '—'}</div>
+                        <div className="font-medium">{exp.vendor || '-'}</div>
                         {exp.description && <div className="text-xs text-slate-400">{exp.description}</div>}
                       </td>
                       <td className="px-4 py-3 text-right text-slate-700">{formatCurrency(exp.received_amount)}</td>
                       <td className="px-4 py-3 text-right text-slate-700">{formatCurrency(exp.receipt_amount)}</td>
                       <td className="px-4 py-3 text-right text-slate-700">{formatCurrency(exp.actual_amount)}</td>
-                      <td className={`px-4 py-3 text-right font-semibold ${delta > 0 ? 'text-emerald-600' : delta < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
+                      <td className={`px-4 py-3 text-right font-semibold \${delta > 0 ? 'text-emerald-600' : delta < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
                         {delta >= 0 ? '+' : ''}{formatCurrency(delta)}
                       </td>
-                      <td className="px-4 py-3 text-slate-500">{exp.payment_mode || '—'}</td>
+                      <td className="px-4 py-3 text-slate-500">{exp.payment_mode || '-'}</td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <button onClick={() => openEdit(exp)} className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50">
@@ -363,7 +442,7 @@ export const Expenses: React.FC = () => {
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsFormOpen(false)} />
           <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden">
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-              <h3 className="text-lg font-bold text-slate-800">{editingId ? 'Edit Expense' : 'Log Expense'}</h3>
+              <h3 className="text-lg font-bold text-slate-800">{editingId ? 'Edit Entry' : formMode === 'received' ? 'Log Received' : 'Log Expense'}</h3>
               <button onClick={() => setIsFormOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100">
                 <X className="h-5 w-5" />
               </button>
@@ -392,20 +471,33 @@ export const Expenses: React.FC = () => {
                 <input type="text" value={form.vendor} onChange={(e) => setForm({ ...form, vendor: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Receipt Amount (₹) *</label>
-                  <input type="number" min="0" step="0.01" value={form.receipt_amount} onChange={(e) => setForm({ ...form, receipt_amount: e.target.value })} required
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-                  <p className="text-[10px] text-slate-400 mt-1">Amount shown on the bill/receipt.</p>
+              
+              {formMode === 'received' ? (
+                <div className="grid grid-cols-1 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">Received Amount (₹) *</label>
+                    <input type="number" min="0" step="0.01" value={form.received_amount} onChange={(e) => setForm({ ...form, received_amount: e.target.value, actual_amount: '0', receipt_amount: '0' })} required
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+                    <p className="text-[10px] text-slate-400 mt-1">Money received.</p>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Actual Amount (₹) *</label>
-                  <input type="number" min="0" step="0.01" value={form.actual_amount} onChange={(e) => setForm({ ...form, actual_amount: e.target.value })} required
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-                  <p className="text-[10px] text-slate-400 mt-1">What was actually paid out of pocket.</p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">Billed Amount (₹)</label>
+                    <input type="number" min="0" step="0.01" value={form.receipt_amount} onChange={(e) => setForm({ ...form, receipt_amount: e.target.value, received_amount: '0' })}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+                    <p className="text-[10px] text-slate-400 mt-1">Amount shown on the bill (optional).</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">Spent Amount (₹) *</label>
+                    <input type="number" min="0" step="0.01" value={form.actual_amount} onChange={(e) => setForm({ ...form, actual_amount: e.target.value, received_amount: '0' })} required
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+                    <p className="text-[10px] text-slate-400 mt-1">Paid out of pocket.</p>
+                  </div>
                 </div>
-              </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-slate-500 mb-1">Payment Mode</label>
                 <select value={form.payment_mode} onChange={(e) => setForm({ ...form, payment_mode: e.target.value })}
@@ -429,7 +521,7 @@ export const Expenses: React.FC = () => {
                   Cancel
                 </button>
                 <button type="submit" disabled={formLoading} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
-                  {formLoading ? 'Saving...' : editingId ? 'Save Changes' : 'Log Expense'}
+                  {formLoading ? 'Saving...' : editingId ? 'Save Changes' : formMode === 'received' ? 'Log Received' : 'Log Expense'}
                 </button>
               </div>
             </form>
@@ -442,8 +534,8 @@ export const Expenses: React.FC = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setDeletingExpense(null)} />
           <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
-            <h3 className="text-lg font-bold text-slate-800 mb-2">Delete Expense</h3>
-            <p className="text-sm text-slate-500 mb-6">Are you sure you want to delete this expense entry? This cannot be undone.</p>
+            <h3 className="text-lg font-bold text-slate-800 mb-2">Delete Entry</h3>
+            <p className="text-sm text-slate-500 mb-6">Are you sure you want to delete this entry? This cannot be undone.</p>
             <div className="flex justify-end gap-2">
               <button onClick={() => setDeletingExpense(null)} className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg">
                 Cancel
