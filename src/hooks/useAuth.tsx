@@ -111,6 +111,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     let mounted = true;
+    let realtimeChannel: ReturnType<typeof supabase.channel> | null = null;
+
+    const setupRealtime = (userId: string, userEmail: string) => {
+      if (realtimeChannel) {
+        supabase.removeChannel(realtimeChannel);
+      }
+
+      // We listen to user_roles and user_project_assignments for the current user
+      realtimeChannel = supabase.channel(`public:auth_changes_\${userId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'user_roles', filter: `user_id=eq.\${userId}` },
+          () => {
+            // Refetch roles on any change
+            fetchProfileAndRole(userId, userEmail).then(({ profile, role, assignedProjects }) => {
+              if (mounted) {
+                setSessionState((prev) => ({ ...prev, profile, role, assignedProjects }));
+              }
+            });
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'user_project_assignments', filter: `user_id=eq.\${userId}` },
+          () => {
+            // Refetch assigned projects on any change
+            fetchProfileAndRole(userId, userEmail).then(({ profile, role, assignedProjects }) => {
+              if (mounted) {
+                setSessionState((prev) => ({ ...prev, profile, role, assignedProjects }));
+              }
+            });
+          }
+        )
+        .subscribe();
+    };
 
     const initAuth = async () => {
       try {
@@ -146,6 +181,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             assignedProjects,
             loading: false,
           });
+          setupRealtime(userObj.id, userObj.email || '');
         }
       } catch (err) {
         console.error('Auth initialization error:', err);
@@ -167,6 +203,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!mounted) return;
 
       if (event === 'SIGNED_OUT' || !session?.user) {
+        if (realtimeChannel) {
+          supabase.removeChannel(realtimeChannel);
+          realtimeChannel = null;
+        }
         setSessionState({
           user: null,
           profile: null,
@@ -193,6 +233,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               role,
               assignedProjects,
             }));
+            setupRealtime(userObj.id, userObj.email || '');
           }
         });
       }
@@ -201,6 +242,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => {
       mounted = false;
       subscription.unsubscribe();
+      if (realtimeChannel) {
+        supabase.removeChannel(realtimeChannel);
+      }
     };
   }, []);
 
@@ -253,4 +297,3 @@ export const useAuth = () => {
   }
   return context;
 };
-
