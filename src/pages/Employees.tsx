@@ -139,6 +139,8 @@ export const Employees: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [newAccountCredentials, setNewAccountCredentials] = useState<{ email: string; password: string; syntheticEmail: boolean; whatsappSentTo?: string | null } | null>(null);
+  const [waSending, setWaSending] = useState(false);
+  const [waSent, setWaSent] = useState(false);
 
   // Employee details sub-resources states
   const [assignedLeads, setAssignedLeads] = useState<any[]>([]);
@@ -1800,15 +1802,17 @@ export const Employees: React.FC = () => {
         <div className="fixed inset-0 z-[60] overflow-y-auto flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm" />
           <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-emerald-600 text-white px-6 py-4">
+            <div className="bg-emerald-600 text-white px-6 py-4 flex items-center gap-3">
+              <span className="text-xl">🔑</span>
               <span className="font-bold tracking-tight">Account Created — Save This Now</span>
             </div>
             <div className="p-6 space-y-4">
+              {/* Auto-send confirmation banner */}
               {newAccountCredentials.whatsappSentTo && (
                 <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-3 text-xs flex items-center space-x-2">
                   <span className="text-base">📲</span>
                   <div>
-                    <strong>WhatsApp Dispatched:</strong> Welcome message with login credentials was automatically queued to <strong>{newAccountCredentials.whatsappSentTo}</strong>.
+                    <strong>Auto-Sent:</strong> Welcome message with credentials was automatically queued to <strong>+{newAccountCredentials.whatsappSentTo.replace(/[^0-9]/g, '').length === 10 ? '91' + newAccountCredentials.whatsappSentTo.replace(/[^0-9]/g, '') : newAccountCredentials.whatsappSentTo}</strong>.
                   </div>
                 </div>
               )}
@@ -1837,17 +1841,55 @@ export const Employees: React.FC = () => {
                   </div>
                   <button
                     type="button"
-                    onClick={() => navigator.clipboard.writeText(`Email: ${newAccountCredentials.email}\nPassword: ${newAccountCredentials.password}`)}
+                    onClick={() => navigator.clipboard.writeText(`Email: ${newAccountCredentials!.email}\nPassword: ${newAccountCredentials!.password}`)}
                     className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex-shrink-0"
                   >
                     Copy Both
                   </button>
                 </div>
               </div>
+
+              {/* Manual Send on WhatsApp button */}
+              {newAccountCredentials.whatsappSentTo && (
+                <div className="border-t border-slate-100 pt-3">
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Re-send via WhatsApp</label>
+                  {waSent ? (
+                    <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-xs font-semibold">
+                      <span>✅</span> Credentials re-sent to WhatsApp successfully!
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={waSending}
+                      onClick={async () => {
+                        if (!newAccountCredentials) return;
+                        setWaSending(true);
+                        try {
+                          const raw = newAccountCredentials.whatsappSentTo || '';
+                          const digits = raw.replace(/[^0-9]/g, '');
+                          const waPhone = digits.length === 10 ? `91${digits}` : digits;
+                          const portalUrl = `${window.location.origin}/login`;
+                          const msg = `🔑 *Your CRM Login Credentials*\n\n• Email: ${newAccountCredentials.email}\n• Password: ${newAccountCredentials.password}\n🌐 Portal: ${portalUrl}\n\nPlease change your password after first login.`;
+                          await supabase.from('whatsapp_outbox').insert([{ to_phone: waPhone, message: msg, status: 'queued' }]);
+                          setWaSent(true);
+                        } catch (err) {
+                          console.error('Manual WhatsApp re-send failed:', err);
+                        } finally {
+                          setWaSending(false);
+                        }
+                      }}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold transition-all"
+                    >
+                      <span>📲</span>
+                      {waSending ? 'Sending...' : 'Send Credentials on WhatsApp'}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
             <div className="bg-slate-50 px-6 py-4 flex justify-end border-t border-slate-100">
               <button
-                onClick={() => setNewAccountCredentials(null)}
+                onClick={() => { setNewAccountCredentials(null); setWaSent(false); setWaSending(false); }}
                 className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-sm"
               >
                 I've Saved This — Close

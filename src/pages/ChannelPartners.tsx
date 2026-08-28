@@ -16,7 +16,11 @@ import {
   X,
   AlertCircle,
   Users,
-  CheckCircle
+  CheckCircle,
+  Clock,
+  ThumbsUp,
+  ThumbsDown,
+  Send
 } from 'lucide-react';
 
 interface ChannelPartner {
@@ -68,6 +72,30 @@ interface Commission {
   status: string;
 }
 
+interface CPRequest {
+  id: string;
+  submitted_by: string | null;
+  submitted_by_name: string | null;
+  partner_name: string;
+  company_name: string | null;
+  contact_person: string | null;
+  phone: string;
+  whatsapp_number: string | null;
+  email: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  pincode: string | null;
+  rera_number: string | null;
+  pan_number: string | null;
+  gst_number: string | null;
+  notes: string | null;
+  project_ids: string[] | null;
+  status: string;  // pending | approved | rejected
+  rejection_reason: string | null;
+  created_at: string;
+}
+
 
 
 // Cryptographically secure random password generator for newly provisioned accounts
@@ -114,13 +142,11 @@ const parseCityField = (cityVal: string | null) => {
 
 export const ChannelPartners: React.FC = () => {
   const navigate = useNavigate();
-  const { role } = useAuth();
-  // "sourcing, sourcing TL, site head, super admin these are the users who
-  // can add channel partners only" — the real boundary is the
-  // channel_partners_insert RLS policy; this only hides the button for a
-  // role that would get rejected by the database anyway (e.g.
-  // project_admin, who can still view/manage existing partners).
-  const canCreatePartner = role === 'super_admin' || role === 'site_head' || role === 'sourcing_manager_tl' || role === 'sourcing_manager';
+  const { role, user } = useAuth();
+
+  // All logged-in users can submit a CP request.
+  // Only super_admin / site_head can approve them and directly edit existing partners.
+  const canApprove = role === 'super_admin' || role === 'site_head';
 
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState('');
@@ -138,6 +164,8 @@ export const ChannelPartners: React.FC = () => {
   const [commissions, setCommissions] = useState<Commission[]>([]);
   const [projectsMap, setProjectsMap] = useState<Map<string, string>>(new Map());
   const [partnerProjectsList, setPartnerProjectsList] = useState<{ channel_partner_id: string; project_id: string }[]>([]);
+  const [cpRequests, setCpRequests] = useState<CPRequest[]>([]);
+  const [requestsLoading, setRequestsLoading] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -154,8 +182,15 @@ export const ChannelPartners: React.FC = () => {
     email: string;
     password: string;
     cpCode: string;
+    phone: string;
     whatsappSentTo: string | null;
   } | null>(null);
+  const [cpWaSending, setCpWaSending] = useState(false);
+  const [cpWaSent, setCpWaSent] = useState(false);
+  // Reject modal
+  const [rejectingRequest, setRejectingRequest] = useState<CPRequest | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [approvalLoading, setApprovalLoading] = useState<string | null>(null); // id being processed
 
   // Deactivation confirmation modal states
   const [confirmToggleCp, setConfirmToggleCp] = useState<ChannelPartner | null>(null);
@@ -165,6 +200,8 @@ export const ChannelPartners: React.FC = () => {
   const [companyName, setCompanyName] = useState('');
   const [contactPerson, setContactPerson] = useState('');
   const [phone, setPhone] = useState('');
+  const [whatsappNum, setWhatsappNum] = useState('');        // NEW: separate WA number
+  const [sameAsPhone, setSameAsPhone] = useState(true);     // toggle: use phone as WA
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('');
@@ -288,14 +325,38 @@ export const ChannelPartners: React.FC = () => {
     setSyncing(false);
   }, []);
 
+  // Fetch pending CP requests (for super_admin / site_head)
+  const fetchRequests = useCallback(async () => {
+    if (!canApprove) return;
+    setRequestsLoading(true);
+    try {
+      const { data, error: reqErr } = await supabase
+        .from('channel_partner_requests')
+        .select('*')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false });
+      if (reqErr) reportQueryError('CP Requests: fetch', reqErr);
+      else setCpRequests(data || []);
+    } catch (err) {
+      reportQueryError('CP Requests: fetch', err);
+    } finally {
+      setRequestsLoading(false);
+    }
+  }, [canApprove]);
+
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    fetchRequests();
+  }, [fetchRequests]);
 
   // Sync refresh trigger
   const handleSync = async () => {
     setSyncing(true);
     await fetchData();
+    await fetchRequests();
   };
 
   // Toast timer
@@ -342,7 +403,174 @@ export const ChannelPartners: React.FC = () => {
     }
   };
 
-  // Submit Partner Insert / Update
+  // Helper: notify all super_admin + site_head users about a new CP request
+  const notifyAdminsOfRequest = async (reqName: string) => {
+    try {
+      // Find all super_admin and site_head user IDs
+      const { data: adminRoles } = await supabase
+        .from('user_roles')
+        .select('user_id, roles!inner(name)')
+        .in('roles.name', ['super_admin', 'site_head']);
+
+      if (!adminRoles || adminRoles.length === 0) return;
+
+      const notifRows = adminRoles.map((r: any) => ({
+        user_id: r.user_id,
+        notification_type: 'cp_request',
+        title: '🤝 New CP Request Submitted',
+        message: `A request to register "${reqName}" as a Channel Partner is awaiting your approval.`,
+        related_entity: 'channel_partner_requests',
+        is_read: false,
+        created_at: new Date().toISOString(),
+      }));
+
+      const { error: notifErr } = await supabase.from('notifications').insert(notifRows);
+      if (notifErr) reportQueryError('CP Request: notify admins', notifErr);
+    } catch (err) {
+      console.warn('Failed to notify admins of CP request:', err);
+    }
+  };
+
+  // Helper: normalise phone to WhatsApp-safe format (no +91 duplication)
+  const toWaPhone = (raw: string): string => {
+    const digits = raw.replace(/[^0-9]/g, '');
+    if (digits.length === 10) return `91${digits}`;
+    if (digits.length === 12 && digits.startsWith('91')) return digits;
+    if (digits.length === 11 && digits.startsWith('0')) return `91${digits.slice(1)}`;
+    return digits;
+  };
+
+  // Approve a pending CP request: create auth account + CP record
+  const approveRequest = async (req: CPRequest) => {
+    setApprovalLoading(req.id);
+    try {
+      // 1. Generate credentials
+      const targetEmail = req.email?.trim() || `${req.phone.trim().slice(-10)}@partner.opalproperties.com`;
+      const generatedPassword = generateRandomPassword();
+      const { data: maxCP } = await supabase
+        .from('channel_partners')
+        .select('cp_code')
+        .order('cp_code', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const generatedCode = generateCPCode(maxCP?.cp_code || null);
+
+      // 2. Provision auth account
+      let newUserId: string | null = null;
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const accessToken = sessionData.session?.access_token;
+        if (accessToken) {
+          const { data: fnData, error: fnError } = await supabase.functions.invoke('create-employee-account', {
+            body: { email: targetEmail, password: generatedPassword, full_name: req.partner_name },
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          if (!fnError && fnData?.id) {
+            newUserId = fnData.id;
+            const { data: cpRole } = await supabase.from('roles').select('id').eq('name', 'channel_partner').maybeSingle();
+            if (cpRole?.id && newUserId) {
+              await supabase.from('user_roles').insert({ user_id: newUserId, role_id: cpRole.id });
+            }
+          }
+        }
+      } catch (authErr) {
+        console.warn('CP auth creation failed/skipped:', authErr);
+      }
+
+      // 3. Build CP payload and insert
+      const formattedCity = req.pincode?.trim()
+        ? `${req.city?.trim() || ''}, ${req.state?.trim() || ''} - ${req.pincode.trim()}`
+        : req.state?.trim() ? `${req.city?.trim() || ''}, ${req.state.trim()}` : req.city?.trim() || null;
+
+      const cpPayload: any = {
+        name: req.partner_name,
+        mobile: req.phone,
+        whatsapp_number: req.whatsapp_number || req.phone,
+        email: req.email?.trim() || null,
+        address: req.address || null,
+        city: formattedCity,
+        rera_number: req.rera_number || null,
+        pan_number: req.pan_number || null,
+        gst_number: req.gst_number || null,
+        status: 'active',
+        notes: req.notes || null,
+        cp_code: generatedCode,
+        partner_code: generatedCode,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      if (newUserId) cpPayload.user_id = newUserId;
+
+      const { data: newCP, error: createErr } = await supabase
+        .from('channel_partners').insert([cpPayload]).select().single();
+      if (createErr) throw createErr;
+
+      // 4. Assign projects
+      if (newCP && req.project_ids && req.project_ids.length > 0) {
+        await supabase.from('channel_partner_projects').insert(
+          req.project_ids.map(pid => ({ channel_partner_id: newCP.id, project_id: pid }))
+        );
+      }
+
+      // 5. Mark request approved
+      await supabase.from('channel_partner_requests')
+        .update({ status: 'approved', reviewed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq('id', req.id);
+
+      // 6. Auto-queue WhatsApp welcome message
+      const waTarget = req.whatsapp_number || req.phone;
+      if (waTarget) {
+        const waPhone = toWaPhone(waTarget);
+        const portalUrl = `${window.location.origin}/login`;
+        let welcomeMsg = `🎉 *Welcome to Opal Properties Channel Partner Network!*\n\nDear ${req.partner_name},\nYour Channel Partner registration request has been approved!\n\n📋 *Partner Code:* ${generatedCode}\n👤 *Role:* Channel Partner`;
+        welcomeMsg += `\n\n🔑 *Portal Login Credentials:*\n• Email: ${targetEmail}\n• Temporary Password: ${generatedPassword}\n🌐 *Login Portal:* ${portalUrl}\n\nPlease log in and update your password upon your first access.`;
+        await supabase.from('whatsapp_outbox').insert([{ to_phone: waPhone, message: welcomeMsg, status: 'queued' }]);
+      }
+
+      // 7. Show credentials modal
+      setNewCPCredentials({
+        name: req.partner_name,
+        email: targetEmail,
+        password: generatedPassword,
+        cpCode: generatedCode,
+        phone: req.phone,
+        whatsappSentTo: waTarget || null,
+      });
+
+      // 8. Refresh
+      await fetchRequests();
+      await fetchData();
+      setNotification({ type: 'success', message: `${req.partner_name} approved and registered as Channel Partner!` });
+    } catch (err: any) {
+      console.error('CP approval error:', err);
+      setNotification({ type: 'error', message: err.message || 'Failed to approve request.' });
+    } finally {
+      setApprovalLoading(null);
+    }
+  };
+
+  // Reject a pending CP request
+  const rejectRequest = async () => {
+    if (!rejectingRequest) return;
+    try {
+      await supabase.from('channel_partner_requests')
+        .update({
+          status: 'rejected',
+          rejection_reason: rejectionReason || 'No reason provided.',
+          reviewed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', rejectingRequest.id);
+      setRejectingRequest(null);
+      setRejectionReason('');
+      await fetchRequests();
+      setNotification({ type: 'success', message: 'Request rejected.' });
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to reject.' });
+    }
+  };
+
+  // Submit Partner — now saves as a REQUEST (for all users) or directly edits (for admins editing existing)
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!partnerName.trim()) {
@@ -371,205 +599,96 @@ export const ChannelPartners: React.FC = () => {
     setFormLoading(true);
 
     try {
-      let partnerId = editingPartner?.id;
+      // === EDITING AN EXISTING PARTNER (admin only, direct update) ===
+      if (editingPartner) {
+        const partnerId = editingPartner.id;
+        const dupeCheck = partners.filter(p => p.id !== partnerId);
+        if (dupeCheck.some(p => p.mobile === phone.trim())) {
+          throw new Error('A partner with this phone number is already registered.');
+        }
+        if (email.trim() && dupeCheck.some(p => p.email?.toLowerCase() === email.trim().toLowerCase())) {
+          throw new Error('A partner with this email is already registered.');
+        }
 
+        const formattedCity = pincode.trim()
+          ? `${city.trim()}, ${state.trim()} - ${pincode.trim()}`
+          : (state.trim() ? `${city.trim()}, ${state.trim()}` : city.trim() || null);
+        const formattedNotes = [
+          companyName.trim() ? `Company: ${companyName.trim()}` : null,
+          contactPerson.trim() ? `Contact: ${contactPerson.trim()}` : null,
+          reraValidFrom ? `ValidFrom: ${reraValidFrom}` : null,
+          reraValidTo ? `ValidTo: ${reraValidTo}` : null,
+          notes.trim() ? `Notes: ${notes.trim()}` : null
+        ].filter(Boolean).join('\n');
 
-      // Quick client-side check for instant feedback before the round
-      // trip — but the real enforcement is the prevent_duplicate_cp_
-      // mobile_trigger DB trigger below, which also catches races between
-      // two people submitting at once and doesn't depend on `partners`
-      // being freshly loaded. `p.phone` was dead code: channel_partners
-      // has no `phone` column, only `mobile`.
-      const dupeCheck = partners.filter(p => p.id !== partnerId);
-      if (dupeCheck.some(p => p.mobile === phone.trim())) {
-        throw new Error('A partner with this phone number is already registered.');
+        const payload: any = {
+          name: partnerName.trim(),
+          mobile: phone.trim(),
+          whatsapp_number: sameAsPhone ? phone.trim() : (whatsappNum.trim() || phone.trim()),
+          email: email.trim() || null,
+          address: address.trim() || null,
+          city: formattedCity,
+          rera_number: reraNumber.trim() || null,
+          gst_number: gstNumber.trim() || null,
+          status: status,
+          notes: formattedNotes || null,
+          updated_at: new Date().toISOString()
+        };
+
+        const { error: editErr } = await supabase.from('channel_partners').update(payload).eq('id', partnerId);
+        if (editErr) throw editErr;
+
+        // Sync project mappings
+        await supabase.from('channel_partner_projects').delete().eq('channel_partner_id', partnerId);
+        if (selectedProjects.length > 0) {
+          await supabase.from('channel_partner_projects').insert(
+            selectedProjects.map(projId => ({ channel_partner_id: partnerId, project_id: projId }))
+          );
+        }
+
+        setNotification({ type: 'success', message: 'Channel Partner details updated successfully!' });
+        setIsCreateOpen(false);
+        setEditingPartner(null);
+        resetFormFields();
+        await fetchData();
+        return;
       }
-      if (email.trim() && dupeCheck.some(p => p.email?.toLowerCase() === email.trim().toLowerCase())) {
-        throw new Error('A partner with this email is already registered.');
-      }
 
-      // Save to legacy columns AND upgraded columns
-      // Format city, state, and pincode
-      const formattedCity = pincode.trim() 
-        ? `${city.trim()}, ${state.trim()} - ${pincode.trim()}` 
-        : (state.trim() ? `${city.trim()}, ${state.trim()}` : city.trim() || null);
-
-      // Store company, contact, valid from/to and notes together in notes
-      const formattedNotes = [
-        companyName.trim() ? `Company: ${companyName.trim()}` : null,
-        contactPerson.trim() ? `Contact: ${contactPerson.trim()}` : null,
-        reraValidFrom ? `ValidFrom: ${reraValidFrom}` : null,
-        reraValidTo ? `ValidTo: ${reraValidTo}` : null,
-        notes.trim() ? `Notes: ${notes.trim()}` : null
-      ].filter(Boolean).join('\n');
-
-      const payload: any = {
-        name: partnerName.trim(),
-        mobile: phone.trim(),
+      // === SUBMITTING A NEW REQUEST (all users) ===
+      const requestPayload = {
+        submitted_by: user?.id || null,
+        submitted_by_name: user?.email || null,
+        partner_name: partnerName.trim(),
+        company_name: companyName.trim() || null,
+        contact_person: contactPerson.trim() || null,
+        phone: phone.trim(),
+        whatsapp_number: sameAsPhone ? phone.trim() : (whatsappNum.trim() || phone.trim()),
         email: email.trim() || null,
         address: address.trim() || null,
-        city: formattedCity,
+        city: city.trim() || null,
+        state: state.trim() || null,
+        pincode: pincode.trim() || null,
         rera_number: reraNumber.trim() || null,
+        pan_number: panNumber.trim() || null,
         gst_number: gstNumber.trim() || null,
-        status: status,
-        notes: formattedNotes || null,
-        updated_at: new Date().toISOString()
+        notes: notes.trim() || null,
+        project_ids: selectedProjects.length > 0 ? selectedProjects : null,
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       };
 
-      if (editingPartner) {
-        const { error: editErr } = await supabase
-          .from('channel_partners')
-          .update(payload)
-          .eq('id', partnerId);
-        if (editErr) throw editErr;
-      } else {
-        // Create Partner. Auto-generate CP code and provision credentials
-        const { data: maxCP } = await supabase
-          .from('channel_partners')
-          .select('cp_code')
-          .order('cp_code', { ascending: false })
-          .limit(1)
-          .maybeSingle();
+      const { error: reqErr } = await supabase.from('channel_partner_requests').insert([requestPayload]);
+      if (reqErr) throw reqErr;
 
-        const generatedCode = generateCPCode(maxCP?.cp_code || null);
-        payload.cp_code = generatedCode;
-        payload.partner_code = generatedCode; // Legacy code, kept in sync
-        payload.created_at = new Date().toISOString();
+      // Notify all super_admin + site_head users
+      await notifyAdminsOfRequest(partnerName.trim());
 
-        // 1. Provision user account for the Channel Partner
-        let cpCredentials: { name: string; email: string; password: string; cpCode: string; whatsappSentTo: string | null } | null = null;
-        const targetEmail = email.trim() || `${generatedCode.toLowerCase()}@partner.opalproperties.com`;
-        const generatedPassword = generateRandomPassword();
-
-        try {
-          const { data: sessionData } = await supabase.auth.getSession();
-          const accessToken = sessionData.session?.access_token;
-          if (accessToken) {
-            const { data: fnData, error: fnError } = await supabase.functions.invoke('create-employee-account', {
-              body: {
-                email: targetEmail,
-                password: generatedPassword,
-                full_name: partnerName.trim(),
-              },
-              headers: { Authorization: `Bearer ${accessToken}` },
-            });
-
-            if (!fnError && fnData?.id) {
-              const newUserId = fnData.id;
-              payload.user_id = newUserId;
-
-              // Assign channel_partner role in user_roles
-              const { data: cpRole } = await supabase
-                .from('roles')
-                .select('id')
-                .eq('name', 'channel_partner')
-                .maybeSingle();
-
-              if (cpRole?.id) {
-                await supabase.from('user_roles').insert({
-                  user_id: newUserId,
-                  role_id: cpRole.id,
-                });
-              }
-
-              cpCredentials = {
-                name: partnerName.trim(),
-                email: targetEmail,
-                password: generatedPassword,
-                cpCode: generatedCode,
-                whatsappSentTo: phone.trim() || null,
-              };
-            }
-          }
-        } catch (authErr) {
-          console.warn('Channel partner auth creation failed/skipped:', authErr);
-        }
-
-        const { data: newCP, error: createErr } = await supabase
-          .from('channel_partners')
-          .insert([payload])
-          .select()
-          .single();
-
-        if (createErr) throw createErr;
-        partnerId = newCP.id;
-
-        // 2. Automatically dispatch credentials & welcome message via WhatsApp
-        if (phone.trim()) {
-          try {
-            const cleanDigits = phone.trim().replace(/[^0-9]/g, '');
-            const waPhone = cleanDigits.length === 10 ? `91${cleanDigits}` : cleanDigits;
-            const portalUrl = `${window.location.origin}/login`;
-
-            let welcomeMsg = `🎉 *Welcome to Opal Properties Channel Partner Network!*\n\nDear ${partnerName.trim()},\nYou have been successfully registered as an authorized Channel Partner with Opal Properties.\n\n📋 *Partner Code:* ${generatedCode}\n👤 *Role:* Channel Partner`;
-
-            if (cpCredentials) {
-              welcomeMsg += `\n\n🔑 *Portal Login Credentials:*\n• Username / Email: ${cpCredentials.email}\n• Temporary Password: ${cpCredentials.password}\n🌐 *Login Portal:* ${portalUrl}\n\nPlease log in and update your password upon your first access.`;
-            } else {
-              welcomeMsg += `\n\nWe look forward to a successful and rewarding partnership with you!`;
-            }
-
-            const { error: waErr } = await supabase.from('whatsapp_outbox').insert([{
-              to_phone: waPhone,
-              message: welcomeMsg,
-              status: 'queued'
-            }]);
-            if (waErr) {
-              reportQueryError('ChannelPartners: send WhatsApp credentials', waErr);
-            }
-          } catch (waErr) {
-            console.error('Failed to queue Channel Partner credentials WhatsApp message:', waErr);
-          }
-        }
-
-        if (cpCredentials) {
-          setNewCPCredentials(cpCredentials);
-        }
-      }
-
-      // Sync overrides mapping status
-      if (partnerId) {
-        // Clear overrides project rows
-        await supabase
-          .from('channel_partner_projects')
-          .delete()
-          .eq('channel_partner_id', partnerId);
-
-        // Re-insert overrides mapping rows
-        if (selectedProjects.length > 0) {
-          const overrides = selectedProjects.map(projId => ({
-            channel_partner_id: partnerId,
-            project_id: projId
-          }));
-          const { error: mapErr } = await supabase
-            .from('channel_partner_projects')
-            .insert(overrides);
-          if (mapErr) throw mapErr;
-        }
-      }
-
-      if (editingPartner) {
-        setNotification({
-          type: 'success',
-          message: 'Channel Partner details updated successfully!'
-        });
-      } else if (!newCPCredentials) {
-        setNotification({
-          type: 'success',
-          message: 'New Channel Partner registered successfully!'
-        });
-      }
-
+      setNotification({ type: 'success', message: `Request for "${partnerName.trim()}" submitted! Awaiting admin approval.` });
       setIsCreateOpen(false);
-      setEditingPartner(null);
       resetFormFields();
-      await fetchData();
     } catch (err: any) {
       console.error('Channel Partner form error:', err);
-      // Raised by prevent_duplicate_cp_mobile_trigger — a real DB-level
-      // check now, not just the client-side comparison against whatever
-      // was already loaded into `partners` above. Strip the internal id
-      // before showing it to the user.
       if (err.message && /already registered to channel partner/i.test(err.message)) {
         setFormError(err.message.replace(/\s*\(id [0-9a-f-]+\)/i, ''));
       } else {
@@ -585,6 +704,8 @@ export const ChannelPartners: React.FC = () => {
     setCompanyName('');
     setContactPerson('');
     setPhone('');
+    setWhatsappNum('');
+    setSameAsPhone(true);
     setEmail('');
     setAddress('');
     setCity('');
@@ -606,6 +727,9 @@ export const ChannelPartners: React.FC = () => {
     setCompanyName(parseNotesField(cp.notes, 'Company') || cp.company_name || '');
     setContactPerson(parseNotesField(cp.notes, 'Contact') || cp.contact_person || '');
     setPhone(cp.phone || cp.mobile || '');
+    const waStored = (cp as any).whatsapp_number || '';
+    setWhatsappNum(waStored);
+    setSameAsPhone(!waStored || waStored === (cp.phone || cp.mobile || ''));
     setEmail(cp.email || '');
     setAddress(cp.address || '');
     
@@ -619,11 +743,6 @@ export const ChannelPartners: React.FC = () => {
     setReraValidTo(parseNotesField(cp.notes, 'ValidTo') || cp.rera_valid_to || cp.valid_to || '');
     setPanNumber(cp.pan_number || '');
     setGstNumber(cp.gst_number || '');
-    // NOTE: per-partner/per-project referral fee rates live in commission_structures
-    // (managed on the Channel Partner detail page), not on channel_partners itself.
-    // Removed dead commission_type/commission_value/commission_basis/default_commission_*
-    // state here — those columns don't exist on the live table and this block never
-    // rendered an input or wrote anywhere; see AUDIT.md.
     setStatus(cp.status || 'active');
     const notesMatch = cp.notes?.match(/Notes:\s*([\s\S]*)/);
     setNotes(notesMatch ? notesMatch[1].trim() : cp.notes || '');
@@ -730,15 +849,14 @@ export const ChannelPartners: React.FC = () => {
             <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
-          {canCreatePartner && (
-            <button
-              onClick={() => { resetFormFields(); setEditingPartner(null); setIsCreateOpen(true); }}
-              className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span>New Channel Partner</span>
-            </button>
-          )}
+          {/* All logged-in users can submit a request */}
+          <button
+            onClick={() => { resetFormFields(); setEditingPartner(null); setIsCreateOpen(true); }}
+            className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span>{canApprove ? 'New Channel Partner' : 'Request Channel Partner'}</span>
+          </button>
         </div>
       </div>
 
@@ -777,6 +895,67 @@ export const ChannelPartners: React.FC = () => {
           <span className="block text-md font-bold text-amber-500 mt-1 truncate">₹{pendingCommission.toLocaleString('en-IN')}</span>
         </div>
       </div>
+
+      {/* PENDING REQUESTS PANEL — visible to super_admin and site_head only */}
+      {canApprove && (
+        <div className="bg-white border border-amber-200 rounded-2xl shadow-sm overflow-hidden">
+          <div className="bg-amber-50 px-5 py-3 border-b border-amber-200 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Clock className="h-4 w-4 text-amber-600" />
+              <span className="font-bold text-sm text-amber-800">Pending Channel Partner Requests</span>
+              {cpRequests.length > 0 && (
+                <span className="bg-amber-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{cpRequests.length}</span>
+              )}
+            </div>
+            <button onClick={fetchRequests} className="text-amber-600 hover:text-amber-800 text-xs font-semibold">
+              {requestsLoading ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
+          {requestsLoading ? (
+            <div className="py-8 text-center text-xs text-slate-400">Loading requests...</div>
+          ) : cpRequests.length === 0 ? (
+            <div className="py-8 text-center text-xs text-slate-400 italic">No pending requests. All clear!</div>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {cpRequests.map(req => (
+                <div key={req.id} className="px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-sm text-slate-900">{req.partner_name}</p>
+                    <p className="text-xs text-slate-500">
+                      {req.company_name ? `${req.company_name} · ` : ''}
+                      📞 {req.phone}
+                      {req.whatsapp_number && req.whatsapp_number !== req.phone ? ` · 📲 WA: ${req.whatsapp_number}` : ''}
+                      {req.email ? ` · ${req.email}` : ''}
+                    </p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Submitted by {req.submitted_by_name || 'unknown'} · {new Date(req.created_at).toLocaleString('en-IN')}
+                    </p>
+                    {req.notes && <p className="text-xs text-slate-500 italic mt-1">"{req.notes}"</p>}
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      disabled={approvalLoading === req.id}
+                      onClick={() => approveRequest(req)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold disabled:opacity-60 transition-all"
+                    >
+                      <ThumbsUp className="h-3.5 w-3.5" />
+                      {approvalLoading === req.id ? 'Approving...' : 'Approve'}
+                    </button>
+                    <button
+                      disabled={approvalLoading === req.id}
+                      onClick={() => { setRejectingRequest(req); setRejectionReason(''); }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 rounded-lg text-xs font-bold disabled:opacity-60 transition-all"
+                    >
+                      <ThumbsDown className="h-3.5 w-3.5" />
+                      Reject
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* SEARCH AND FILTERS */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
@@ -980,6 +1159,30 @@ export const ChannelPartners: React.FC = () => {
         </div>
       )}
 
+      {/* REJECT REQUEST MODAL */}
+      {rejectingRequest && (
+        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setRejectingRequest(null)} />
+          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-sm w-full overflow-hidden p-6 animate-in fade-in zoom-in-95 duration-150">
+            <h3 className="text-base font-bold text-slate-900 mb-2">Reject CP Request</h3>
+            <p className="text-xs text-slate-600 mb-3">
+              Rejecting <strong>{rejectingRequest.partner_name}</strong>. Optionally provide a reason:
+            </p>
+            <textarea
+              rows={3}
+              placeholder="Reason for rejection (optional)..."
+              value={rejectionReason}
+              onChange={e => setRejectionReason(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs text-slate-700 bg-slate-50 focus:outline-none mb-4"
+            />
+            <div className="flex justify-end space-x-2">
+              <button onClick={() => setRejectingRequest(null)} className="px-3.5 py-1.5 border border-slate-200 hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold">Cancel</button>
+              <button onClick={rejectRequest} className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold">Confirm Reject</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* CREATE & EDIT MODAL */}
       {isCreateOpen && (
         <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
@@ -988,12 +1191,19 @@ export const ChannelPartners: React.FC = () => {
           <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-2xl w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
               <span className="font-bold tracking-tight">
-                {editingPartner ? `Edit Channel Partner: ${editingPartner.cp_code || editingPartner.partner_code}` : 'Register New Channel Partner'}
+                {editingPartner
+                  ? `Edit Channel Partner: ${editingPartner.cp_code || editingPartner.partner_code}`
+                  : canApprove ? 'Register New Channel Partner' : '🤝 Request to Add Channel Partner'}
               </span>
               <button type="button" onClick={() => setIsCreateOpen(false)} className="p-1 rounded-lg text-indigo-200 hover:text-white focus:outline-none">
                 <X className="h-5 w-5" />
               </button>
             </div>
+            {!editingPartner && !canApprove && (
+              <div className="bg-amber-50 border-b border-amber-200 px-5 py-2.5 text-xs text-amber-800">
+                ℹ️ Your request will be sent to the admin for approval. Once approved, portal credentials will be generated and sent to the partner's WhatsApp.
+              </div>
+            )}
 
             <form onSubmit={handleFormSubmit}>
               <div className="p-6 space-y-5 max-h-[70vh] overflow-y-auto text-left">
@@ -1039,6 +1249,35 @@ export const ChannelPartners: React.FC = () => {
                         onChange={(e) => setPhone(e.target.value)}
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
                       />
+                    </div>
+                    {/* WhatsApp Number — same or separate */}
+                    <div className="md:col-span-2">
+                      <div className="flex items-center gap-3 mb-2">
+                        <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">WhatsApp Number</label>
+                        <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={sameAsPhone}
+                            onChange={e => { setSameAsPhone(e.target.checked); if (e.target.checked) setWhatsappNum(''); }}
+                            className="rounded text-emerald-600"
+                          />
+                          Same as phone number
+                        </label>
+                      </div>
+                      {!sameAsPhone && (
+                        <input
+                          type="text"
+                          placeholder="9999999999 (if different from phone)"
+                          value={whatsappNum}
+                          onChange={e => setWhatsappNum(e.target.value)}
+                          className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                        />
+                      )}
+                      {sameAsPhone && (
+                        <div className="px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-700 font-medium">
+                          📲 WhatsApp will be sent to: <strong>{phone || 'enter phone above'}</strong>
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Email Address *</label>
@@ -1224,7 +1463,7 @@ export const ChannelPartners: React.FC = () => {
                   disabled={formLoading}
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
                 >
-                  {formLoading ? 'Saving...' : 'Save Partner'}
+                  {formLoading ? 'Saving...' : editingPartner ? 'Update Partner' : canApprove ? 'Register Partner' : 'Submit Request'}
                 </button>
               </div>
             </form>
@@ -1237,7 +1476,8 @@ export const ChannelPartners: React.FC = () => {
         <div className="fixed inset-0 z-[60] overflow-y-auto flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm" />
           <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-emerald-600 text-white px-6 py-4 flex items-center justify-between">
+            <div className="bg-emerald-600 text-white px-6 py-4 flex items-center gap-3">
+              <span className="text-xl">🎉</span>
               <span className="font-bold tracking-tight">Channel Partner Registered & Account Created</span>
             </div>
             <div className="p-6 space-y-4">
@@ -1245,13 +1485,13 @@ export const ChannelPartners: React.FC = () => {
                 <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-3 text-xs flex items-center space-x-2">
                   <span className="text-base">📲</span>
                   <div>
-                    <strong>WhatsApp Dispatched:</strong> Welcome message with login credentials was automatically queued to <strong>{newCPCredentials.whatsappSentTo}</strong>.
+                    <strong>Auto-Sent:</strong> Welcome message with credentials was automatically queued to{' '}
+                    <strong>+{toWaPhone(newCPCredentials.whatsappSentTo)}</strong>.
                   </div>
                 </div>
               )}
               <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-xs">
-                These login credentials were automatically generated for <strong>{newCPCredentials.name}</strong> ({newCPCredentials.cpCode}).
-                Please save them now.
+                These login credentials were automatically generated for <strong>{newCPCredentials.name}</strong> ({newCPCredentials.cpCode}). Please save them now.
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">Partner Code</label>
@@ -1273,17 +1513,53 @@ export const ChannelPartners: React.FC = () => {
                   </div>
                   <button
                     type="button"
-                    onClick={() => navigator.clipboard.writeText(`Partner Code: ${newCPCredentials.cpCode}\nEmail: ${newCPCredentials.email}\nPassword: ${newCPCredentials.password}`)}
+                    onClick={() => navigator.clipboard.writeText(`Partner Code: ${newCPCredentials!.cpCode}\nEmail: ${newCPCredentials!.email}\nPassword: ${newCPCredentials!.password}`)}
                     className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex-shrink-0"
                   >
-                    Copy Both
+                    Copy All
                   </button>
                 </div>
               </div>
+
+              {/* Manual Send on WhatsApp */}
+              {newCPCredentials.whatsappSentTo && (
+                <div className="border-t border-slate-100 pt-3">
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Re-send via WhatsApp</label>
+                  {cpWaSent ? (
+                    <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-xs font-semibold">
+                      <span>✅</span> Credentials re-sent to WhatsApp!
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={cpWaSending}
+                      onClick={async () => {
+                        if (!newCPCredentials) return;
+                        setCpWaSending(true);
+                        try {
+                          const waPhone = toWaPhone(newCPCredentials.whatsappSentTo || newCPCredentials.phone);
+                          const portalUrl = `${window.location.origin}/login`;
+                          const msg = `📋 *Channel Partner Login Credentials*\n\n• Partner Code: ${newCPCredentials.cpCode}\n• Email: ${newCPCredentials.email}\n• Password: ${newCPCredentials.password}\n🌐 Portal: ${portalUrl}\n\nPlease log in and update your password upon first access.`;
+                          await supabase.from('whatsapp_outbox').insert([{ to_phone: waPhone, message: msg, status: 'queued' }]);
+                          setCpWaSent(true);
+                        } catch (err) {
+                          console.error('CP manual WhatsApp re-send failed:', err);
+                        } finally {
+                          setCpWaSending(false);
+                        }
+                      }}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold transition-all"
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                      {cpWaSending ? 'Sending...' : 'Send Credentials on WhatsApp'}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
             <div className="bg-slate-50 px-6 py-4 flex justify-end border-t border-slate-100">
               <button
-                onClick={() => setNewCPCredentials(null)}
+                onClick={() => { setNewCPCredentials(null); setCpWaSent(false); setCpWaSending(false); }}
                 className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-sm"
               >
                 I've Saved This — Close
