@@ -9,7 +9,7 @@ interface AuthContextType extends UserSession {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const fetchProfileAndRole = async (userId: string, email: string): Promise<{ profile: UserProfile | null; role: UserRole | null }> => {
+const fetchProfileAndRole = async (userId: string, email: string): Promise<{ profile: UserProfile | null; role: UserRole | null; assignedProjects: string[] }> => {
   try {
     const profilePromise = supabase
       .from('user_profiles')
@@ -23,18 +23,26 @@ const fetchProfileAndRole = async (userId: string, email: string): Promise<{ pro
       .eq('user_id', userId)
       .maybeSingle();
 
+    const assignedProjectsPromise = supabase
+      .from('user_project_assignments')
+      .select('project_id')
+      .eq('user_id', userId)
+      .eq('is_active', true);
+
     // 2.5s safeguard timeout so database latency never hangs auth
     const timeoutPromise = new Promise<{ timeout: true }>((resolve) =>
       setTimeout(() => resolve({ timeout: true }), 2500)
     );
 
-    const [profileRes, userRoleRes] = await Promise.race([
-      Promise.all([profilePromise, userRolePromise]),
-      timeoutPromise.then(() => [{ data: null, error: null }, { data: null, error: null }]),
+    const [profileRes, userRoleRes, assignedProjectsRes] = await Promise.race([
+      Promise.all([profilePromise, userRolePromise, assignedProjectsPromise]),
+      timeoutPromise.then(() => [{ data: null, error: null }, { data: null, error: null }, { data: null, error: null }]),
     ]);
 
     const profile = (profileRes as any)?.data;
     const userRole = (userRoleRes as any)?.data;
+    const assignedProjectsData = (assignedProjectsRes as any)?.data || [];
+    const assignedProjects = assignedProjectsData.map((row: any) => row.project_id);
 
     let roleName: UserRole | null = null;
 
@@ -63,6 +71,7 @@ const fetchProfileAndRole = async (userId: string, email: string): Promise<{ pro
     return {
       profile: finalProfile,
       role: roleName,
+      assignedProjects,
     };
   } catch (err) {
     console.error('Error in fetchProfileAndRole:', err);
@@ -77,6 +86,7 @@ const fetchProfileAndRole = async (userId: string, email: string): Promise<{ pro
         updated_at: new Date().toISOString(),
       },
       role: null,
+      assignedProjects: [],
     };
   }
 };
@@ -90,13 +100,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           (k) => k.startsWith('sb-') && k.endsWith('-auth-token')
         );
         if (!hasToken) {
-          return { user: null, profile: null, role: null, loading: false };
+          return { user: null, profile: null, role: null, assignedProjects: [], loading: false };
         }
       }
     } catch {
       // ignore
     }
-    return { user: null, profile: null, role: null, loading: true };
+    return { user: null, profile: null, role: null, assignedProjects: [], loading: true };
   });
 
   useEffect(() => {
@@ -119,19 +129,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             user: null,
             profile: null,
             role: null,
+            assignedProjects: [],
             loading: false,
           });
           return;
         }
 
         const userObj = { id: session.user.id, email: session.user.email };
-        const { profile, role } = await fetchProfileAndRole(userObj.id, userObj.email || '');
+        const { profile, role, assignedProjects } = await fetchProfileAndRole(userObj.id, userObj.email || '');
 
         if (mounted) {
           setSessionState({
             user: userObj,
             profile,
             role,
+            assignedProjects,
             loading: false,
           });
         }
@@ -142,6 +154,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             user: null,
             profile: null,
             role: null,
+            assignedProjects: [],
             loading: false,
           });
         }
@@ -158,6 +171,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           user: null,
           profile: null,
           role: null,
+          assignedProjects: [],
           loading: false,
         });
         return;
@@ -171,12 +185,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           loading: false,
         }));
 
-        fetchProfileAndRole(userObj.id, userObj.email || '').then(({ profile, role }) => {
+        fetchProfileAndRole(userObj.id, userObj.email || '').then(({ profile, role, assignedProjects }) => {
           if (mounted) {
             setSessionState((prev) => ({
               ...prev,
               profile,
               role,
+              assignedProjects,
             }));
           }
         });
@@ -197,13 +212,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user: userObj,
         profile: null,
         role: null,
+        assignedProjects: [],
         loading: false,
       });
-      fetchProfileAndRole(userObj.id, userObj.email || '').then(({ profile, role }) => {
+      fetchProfileAndRole(userObj.id, userObj.email || '').then(({ profile, role, assignedProjects }) => {
         setSessionState((prev) => ({
           ...prev,
           profile,
           role,
+          assignedProjects,
         }));
       });
     }
@@ -216,6 +233,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       user: null,
       profile: null,
       role: null,
+      assignedProjects: [],
       loading: false,
     });
     return { error };

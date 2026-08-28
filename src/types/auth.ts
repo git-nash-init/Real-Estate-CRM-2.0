@@ -32,5 +32,6 @@ export interface UserSession {
   } | null;
   profile: UserProfile | null;
   role: UserRole | null;
+  assignedProjects: string[];
   loading: boolean;
 }

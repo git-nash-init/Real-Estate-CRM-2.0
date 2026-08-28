@@ -142,7 +142,7 @@ const parseCityField = (cityVal: string | null) => {
 
 export const ChannelPartners: React.FC = () => {
   const navigate = useNavigate();
-  const { role, user } = useAuth();
+  const { role, user, assignedProjects } = useAuth();
 
   // All logged-in users can submit a CP request.
   // Only super_admin / site_head can approve them and directly edit existing partners.
@@ -335,14 +335,24 @@ export const ChannelPartners: React.FC = () => {
         .select('*')
         .eq('status', 'pending')
         .order('created_at', { ascending: false });
-      if (reqErr) reportQueryError('CP Requests: fetch', reqErr);
-      else setCpRequests(data || []);
+      if (reqErr) {
+        reportQueryError('CP Requests: fetch', reqErr);
+      } else {
+        let filtered = data || [];
+        if (role === 'site_head') {
+          filtered = filtered.filter((r: CPRequest) => {
+            if (!r.project_ids || r.project_ids.length === 0) return false;
+            return r.project_ids.some(pid => assignedProjects.includes(pid));
+          });
+        }
+        setCpRequests(filtered);
+      }
     } catch (err) {
       reportQueryError('CP Requests: fetch', err);
     } finally {
       setRequestsLoading(false);
     }
-  }, [canApprove]);
+  }, [canApprove, role, assignedProjects]);
 
   useEffect(() => {
     fetchData();

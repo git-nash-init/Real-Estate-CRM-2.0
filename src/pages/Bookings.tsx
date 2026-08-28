@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
+import { useAuth } from '../hooks/useAuth';
 import {
   Search,
   RefreshCw,
@@ -83,6 +84,17 @@ interface Tower {
 }
 
 export const Bookings: React.FC = () => {
+  const { role, assignedProjects } = useAuth();
+  
+  const canApproveBooking = useCallback((booking: Booking | null) => {
+    if (!booking) return false;
+    if (role === 'super_admin') return true;
+    if (role === 'site_head' && booking.project_id) {
+      return assignedProjects.includes(booking.project_id);
+    }
+    return false;
+  }, [role, assignedProjects]);
+
   // Filters & query states
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -1350,7 +1362,7 @@ export const Bookings: React.FC = () => {
                           <td className="py-4 px-6 text-right">
                             <div className="flex items-center justify-end space-x-2">
                               {/* Confirm Booking Action */}
-                              {b.status?.toLowerCase() === 'draft' && (
+                              {b.status?.toLowerCase() === 'draft' && canApproveBooking(b) && (
                                 <button
                                   onClick={() => setConfirmingBooking(b)}
                                   disabled={updatingId === b.id}
@@ -1804,19 +1816,21 @@ export const Bookings: React.FC = () => {
 
             {/* Footer */}
             <div className="bg-slate-50 px-6 py-4 flex justify-between items-center border-t border-slate-100">
-              <div className="flex items-center space-x-2">
-                {selectedBooking.status?.toLowerCase() === 'draft' && (
-                  <button
-                    onClick={() => { setConfirmingBooking(selectedBooking); setSelectedBooking(null); }}
-                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all mr-2"
-                  >
-                    Confirm Booking
-                  </button>
-                )}
-                {(selectedBooking.status?.toLowerCase() === 'draft' || selectedBooking.status?.toLowerCase() === 'confirmed') && (
+                {/* Actions */}
+                <div className="flex space-x-3 w-full">
+                  {selectedBooking.status?.toLowerCase() === 'draft' && canApproveBooking(selectedBooking) && (
+                    <button 
+                      onClick={() => { setConfirmingBooking(selectedBooking); setSelectedBooking(null); }}
+                      className="flex-1 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition-colors"
+                    >
+                      Confirm Booking
+                    </button>
+                  )}
+                  {(selectedBooking.status?.toLowerCase() === 'draft' || selectedBooking.status?.toLowerCase() === 'confirmed') && (
                   <button
                     onClick={() => { setCancellingBooking(selectedBooking); setSelectedBooking(null); setCancelReason(''); setCancelRefundAmount(String(selectedBooking.token_amount || 0)); setCancelError(null); }}
-                    className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-semibold transition-all"
+                    className={`px-4 py-2.5 ${canApproveBooking(selectedBooking) ? 'bg-rose-50 hover:bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed'} rounded-xl text-sm font-bold transition-all`}
+                    disabled={!canApproveBooking(selectedBooking)}
                   >
                     Cancel Booking
                   </button>
@@ -2323,7 +2337,7 @@ export const Bookings: React.FC = () => {
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                   >
                     <option value="draft">Draft</option>
-                    <option value="confirmed">Confirmed</option>
+                    {canApproveBooking(selectedBooking) && <option value="confirmed">Confirmed</option>}
                     <option value="cancelled">Cancelled</option>
                   </select>
                 </div>

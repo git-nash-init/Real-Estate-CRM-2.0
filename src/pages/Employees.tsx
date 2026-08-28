@@ -610,7 +610,12 @@ export const Employees: React.FC = () => {
         const { error: insertError } = await supabase
           .from('employees')
           .insert([payload]);
-        if (insertError) throw insertError;
+        if (insertError) {
+          if (insertError.code === '23505') {
+            throw new Error('An employee with this email already exists in the system. Please edit the existing employee instead.');
+          }
+          throw insertError;
+        }
       }
 
       // Sync Role with user_roles RBAC mapping

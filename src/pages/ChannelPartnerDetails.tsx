@@ -149,7 +149,7 @@ interface CommissionStructure {
 export const ChannelPartnerDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { role } = useAuth();
+  const { role, assignedProjects: userAssignedProjects } = useAuth();
   const isAuthorized = role === 'super_admin' || role === 'project_admin';
 
   const [partner, setPartner] = useState<ChannelPartner | null>(null);
@@ -227,6 +227,17 @@ export const ChannelPartnerDetails: React.FC = () => {
   const [manualRemarks, setManualRemarks] = useState('');
   const [manualLoading, setManualLoading] = useState(false);
   const [manualError, setManualError] = useState<string | null>(null);
+
+  const canApproveCommission = useCallback((c: any) => {
+    if (role === 'super_admin') return true;
+    if (role === 'site_head') {
+      const booking = bookingsList.find(b => b.id === c.booking_id);
+      if (booking && booking.project_id) {
+        return userAssignedProjects.includes(booking.project_id);
+      }
+    }
+    return false;
+  }, [role, userAssignedProjects, bookingsList]);
 
   // Fetch full partner detail data
   const fetchPartnerDetails = useCallback(async () => {
@@ -1466,7 +1477,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                               const statusLower = c.status?.toLowerCase();
                               return (
                                 <>
-                                  {statusLower === 'pending' && isAuthorized && (
+                                  {statusLower === 'pending' && canApproveCommission(c) && (
                                     <button
                                       onClick={() => {
                                         setSelectedApproveComm(c);
