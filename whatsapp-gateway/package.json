@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Standalone Baileys WhatsApp gateway for CRM 2.0 — bulk marketing and CP lead verification codes, zero licensing cost.",
   "scripts": {
+    "build": "echo 'No build step required'",
     "start": "node src/index.js"
   },
   "dependencies": {
