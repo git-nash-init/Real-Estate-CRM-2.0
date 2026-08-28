@@ -98,7 +98,7 @@ function generateRandomPassword(): string {
 }
 
 export const Employees: React.FC = () => {
-  const { role: currentUserRole } = useAuth();
+  const { role: currentUserRole, user } = useAuth();
   
   // Query & state filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -671,7 +671,8 @@ export const Employees: React.FC = () => {
           const { error: waErr } = await supabase.from('whatsapp_outbox').insert([{
             to_phone: waPhone,
             message: welcomeMsg,
-            status: 'queued'
+            status: 'queued',
+            created_by: user?.id || null
           }]);
           if (waErr) {
             reportQueryError('Employees: send WhatsApp credentials', waErr);
@@ -1875,7 +1876,7 @@ export const Employees: React.FC = () => {
                           const waPhone = digits.length === 10 ? `91${digits}` : digits;
                           const portalUrl = `${window.location.origin}/login`;
                           const msg = `🔑 *Your CRM Login Credentials*\n\n• Email: ${newAccountCredentials.email}\n• Password: ${newAccountCredentials.password}\n🌐 Portal: ${portalUrl}\n\nPlease change your password after first login.`;
-                          await supabase.from('whatsapp_outbox').insert([{ to_phone: waPhone, message: msg, status: 'queued' }]);
+                          await supabase.from('whatsapp_outbox').insert([{ to_phone: waPhone, message: msg, status: 'queued', created_by: user?.id || null }]);
                           setWaSent(true);
                         } catch (err) {
                           console.error('Manual WhatsApp re-send failed:', err);

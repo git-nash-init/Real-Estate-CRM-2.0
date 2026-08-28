@@ -534,7 +534,7 @@ export const ChannelPartners: React.FC = () => {
         const portalUrl = `${window.location.origin}/login`;
         let welcomeMsg = `🎉 *Welcome to Opal Properties Channel Partner Network!*\n\nDear ${req.partner_name},\nYour Channel Partner registration request has been approved!\n\n📋 *Partner Code:* ${generatedCode}\n👤 *Role:* Channel Partner`;
         welcomeMsg += `\n\n🔑 *Portal Login Credentials:*\n• Email: ${targetEmail}\n• Temporary Password: ${generatedPassword}\n🌐 *Login Portal:* ${portalUrl}\n\nPlease log in and update your password upon your first access.`;
-        await supabase.from('whatsapp_outbox').insert([{ to_phone: waPhone, message: welcomeMsg, status: 'queued' }]);
+        await supabase.from('whatsapp_outbox').insert([{ to_phone: waPhone, message: welcomeMsg, status: 'queued', created_by: user?.id || null }]);
       }
 
       // 7. Show credentials modal
@@ -1550,7 +1550,7 @@ export const ChannelPartners: React.FC = () => {
                           const waPhone = toWaPhone(newCPCredentials.whatsappSentTo || newCPCredentials.phone);
                           const portalUrl = `${window.location.origin}/login`;
                           const msg = `📋 *Channel Partner Login Credentials*\n\n• Partner Code: ${newCPCredentials.cpCode}\n• Email: ${newCPCredentials.email}\n• Password: ${newCPCredentials.password}\n🌐 Portal: ${portalUrl}\n\nPlease log in and update your password upon first access.`;
-                          await supabase.from('whatsapp_outbox').insert([{ to_phone: waPhone, message: msg, status: 'queued' }]);
+                          await supabase.from('whatsapp_outbox').insert([{ to_phone: waPhone, message: msg, status: 'queued', created_by: user?.id || null }]);
                           setCpWaSent(true);
                         } catch (err) {
                           console.error('CP manual WhatsApp re-send failed:', err);

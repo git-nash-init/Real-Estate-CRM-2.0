@@ -9,7 +9,6 @@ import {
   LogOut,
   RefreshCw,
   AlertTriangle,
-  ShieldAlert,
   KeyRound,
   CheckCircle,
 } from 'lucide-react';
@@ -33,17 +32,19 @@ const statusMeta: Record<string, { label: string; color: string; dot: string }> 
 };
 
 const WhatsAppPanel: React.FC = () => {
+  const { user } = useAuth();
   const [session, setSession] = useState<WhatsAppSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [loggingOut, setLoggingOut] = useState(false);
   const [isStale, setIsStale] = useState(true);
 
   const fetchSession = useCallback(async () => {
-    const { data, error } = await supabase.from('whatsapp_session').select('*').eq('id', 'default').maybeSingle();
+    if (!user?.id) return;
+    const { data, error } = await supabase.from('whatsapp_session').select('*').eq('id', user.id).maybeSingle();
     if (error) reportQueryError('Settings: WhatsApp session', error);
     else setSession(data);
     setLoading(false);
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => { fetchSession(); }, [fetchSession]);
 
@@ -51,14 +52,15 @@ const WhatsAppPanel: React.FC = () => {
   // so a fresh QR code or a status change (connected, logged out) shows up
   // here without any manual refresh.
   useEffect(() => {
+    if (!user?.id) return;
     const channel = supabase
-      .channel('whatsapp-session-live')
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'whatsapp_session', filter: 'id=eq.default' }, (payload) => {
+      .channel(`whatsapp-session-live-${user.id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'whatsapp_session', filter: `id=eq.${user.id}` }, (payload) => {
         setSession(payload.new as WhatsAppSession);
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, []);
+  }, [user?.id]);
 
   // If the gateway process isn't running at all, its heartbeat stops
   // updating last_heartbeat_at — detect that as "offline" rather than
@@ -80,11 +82,12 @@ const WhatsAppPanel: React.FC = () => {
   const meta = statusMeta[effectiveStatus] || statusMeta.disconnected;
 
   const handleLogout = async () => {
+    if (!user?.id) return;
     setLoggingOut(true);
     const { error } = await supabase
       .from('whatsapp_session')
       .update({ pending_command: 'logout' })
-      .eq('id', 'default');
+      .eq('id', user.id);
     if (error) reportQueryError('Settings: WhatsApp logout', error);
     setLoggingOut(false);
   };
@@ -245,17 +248,7 @@ const ChangePasswordPanel: React.FC = () => {
 
 export const Settings: React.FC = () => {
   const { role } = useAuth();
-  const isAdmin = role === 'super_admin' || role === 'project_admin';
-
-  if (!isAdmin) {
-    return (
-      <div className="bg-white border border-slate-200 rounded-2xl p-10 flex flex-col items-center justify-center text-center min-h-[300px]">
-        <ShieldAlert className="h-10 w-10 text-amber-500 mb-3" />
-        <h3 className="text-lg font-bold text-slate-800">Admin Access Only</h3>
-        <p className="text-sm text-slate-500 mt-1 max-w-sm">Settings is currently limited to admin roles.</p>
-      </div>
-    );
-  }
+  const canUseWhatsApp = role === 'super_admin' || role === 'closing_manager' || role === 'closing_manager_tl';
 
   return (
     <div className="space-y-6">
@@ -267,7 +260,7 @@ export const Settings: React.FC = () => {
       </div>
 
       <ChangePasswordPanel />
-      <WhatsAppPanel />
+      {canUseWhatsApp && <WhatsAppPanel />}
     </div>
   );
 };

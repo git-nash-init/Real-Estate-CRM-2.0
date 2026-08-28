@@ -58,7 +58,7 @@ export const AppLayout: React.FC = () => {
     { name: 'Tasks', path: '/tasks', icon: CheckSquare },
     { name: 'Reports', path: '/reports', icon: BarChart3 },
     { name: 'Expenses', path: '/expenses', icon: Wallet, allowedRoles: ['super_admin'] },
-    { name: 'Settings', path: '/settings', icon: Settings, allowedRoles: ['super_admin', 'project_admin'] },
+    { name: 'Settings', path: '/settings', icon: Settings },
   ].filter(item => {
     if (item.name === 'Expenses' && profile?.email === 'anilhiwale17@gmail.com') {
       return false;

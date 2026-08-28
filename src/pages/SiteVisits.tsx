@@ -238,7 +238,7 @@ export const SiteVisits: React.FC = () => {
         outboxRows.push({ to_phone: cpPhone, message });
       }
       const { error: outboxErr } = await supabase.from('whatsapp_outbox').insert(
-        outboxRows.map(r => ({ ...r, status: 'queued', quick_visit_id: inserted.id }))
+        outboxRows.map(r => ({ ...r, status: 'queued', quick_visit_id: inserted.id, created_by: user?.id || null }))
       );
       if (outboxErr) {
         // Visit itself is already saved — a failed notification shouldn't

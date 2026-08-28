@@ -106,11 +106,7 @@ function App() {
             />
             <Route
               path="settings"
-              element={
-                <ProtectedRoute allowedRoles={['super_admin', 'project_admin']}>
-                  <Settings />
-                </ProtectedRoute>
-              }
+              element={<Settings />}
             />
 
             {/* Catch-all redirected back to dashboard */}

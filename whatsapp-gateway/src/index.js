@@ -14,16 +14,11 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const GATEWAY_API_KEY = process.env.GATEWAY_API_KEY; // shared secret for the HTTP API
 const PORT = process.env.PORT || 3100;
 
-// Throttling: randomised gap between sends, and a hard daily cap. Baileys is
-// an unofficial client — sending too fast or too many messages risks the
-// connected number being banned. These are conservative defaults; tune via
-// env vars once real send volume is known.
 const MIN_GAP_MS = Number(process.env.WA_MIN_GAP_MS || 8000);
 const MAX_GAP_MS = Number(process.env.WA_MAX_GAP_MS || 15000);
 const DAILY_CAP = Number(process.env.WA_DAILY_CAP || 200);
 const POLL_INTERVAL_MS = Number(process.env.WA_POLL_INTERVAL_MS || 5000);
 const HEARTBEAT_INTERVAL_MS = Number(process.env.WA_HEARTBEAT_INTERVAL_MS || 3000);
-const SESSION_ROW_ID = 'default';
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   logger.error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required. See .env.example.');
@@ -32,60 +27,73 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-let sock = null;
-let currentQr = null;
-let connectionState = 'connecting'; // connecting | open | close
-let loggedOut = false;
-let connectedPhone = null;
-let manualLogoutRequested = false;
-
-// ---- Live status: the CRM reads this table instead of calling the
-// gateway's HTTP API directly, so the browser never needs the gateway's
-// API key or a CORS-open endpoint. ---------------------------------------
+// Multi-session map
+// Key: userId (string)
+// Value: { sock, currentQr, connectionState, loggedOut, connectedPhone, manualLogoutRequested }
+const sessions = new Map();
 
 async function pushStatusHeartbeat() {
-  const status = connectionState === 'open'
-    ? 'open'
-    : currentQr
-      ? 'qr_pending'
-      : loggedOut
-        ? 'logged_out'
-        : 'connecting';
+  const upserts = [];
+  for (const [userId, session] of sessions.entries()) {
+    const status = session.connectionState === 'open'
+      ? 'open'
+      : session.currentQr
+        ? 'qr_pending'
+        : session.loggedOut
+          ? 'logged_out'
+          : 'connecting';
 
-  const qrDataUrl = currentQr ? await QRCode.toDataURL(currentQr) : null;
+    const qrDataUrl = session.currentQr ? await QRCode.toDataURL(session.currentQr) : null;
 
-  const { error } = await supabase
-    .from('whatsapp_session')
-    .upsert({
-      id: SESSION_ROW_ID,
+    upserts.push({
+      id: userId,
       status,
       qr_data_url: qrDataUrl,
-      connected_phone: connectedPhone,
+      connected_phone: session.connectedPhone,
       last_heartbeat_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
-  if (error) logger.error({ error }, 'Failed to push status heartbeat');
+  }
+
+  if (upserts.length > 0) {
+    const { error } = await supabase.from('whatsapp_session').upsert(upserts);
+    if (error) logger.error({ error }, 'Failed to push status heartbeat');
+  }
 }
 
-async function checkForCommands() {
-  const { data, error } = await supabase
+async function checkForCommandsAndNewSessions() {
+  // 1. Fetch all sessions from DB to see if any new ones need connecting
+  const { data: dbSessions, error } = await supabase
     .from('whatsapp_session')
-    .select('pending_command')
-    .eq('id', SESSION_ROW_ID)
-    .maybeSingle();
+    .select('id, pending_command, status');
+
   if (error) {
-    logger.error({ error }, 'Failed to check for pending commands');
+    logger.error({ error }, 'Failed to check for pending commands and new sessions');
     return;
   }
-  if (data?.pending_command === 'logout') {
-    logger.warn('Logout requested from the CRM — logging out and clearing the session.');
-    manualLogoutRequested = true;
-    // Clear the command immediately so it doesn't re-trigger.
-    await supabase.from('whatsapp_session').update({ pending_command: null }).eq('id', SESSION_ROW_ID);
-    try {
-      await sock?.logout();
-    } catch (err) {
-      logger.warn({ err: err.message }, 'sock.logout() threw (often expected if already disconnected)');
+
+  for (const dbSession of dbSessions) {
+    const userId = dbSession.id;
+    const s = sessions.get(userId);
+
+    // Handle logout command
+    if (dbSession.pending_command === 'logout') {
+      logger.warn({ userId }, 'Logout requested from the CRM — logging out and clearing the session.');
+      if (s) {
+        s.manualLogoutRequested = true;
+      }
+      await supabase.from('whatsapp_session').update({ pending_command: null }).eq('id', userId);
+      try {
+        await s?.sock?.logout();
+      } catch (err) {
+        logger.warn({ userId, err: err.message }, 'sock.logout() threw (often expected if already disconnected)');
+      }
+    }
+
+    // Connect if status is connecting and we don't have it in memory
+    if ((dbSession.status === 'connecting' || dbSession.status === 'open') && !sessions.has(userId)) {
+      logger.info({ userId }, 'Starting new session from DB trigger');
+      connectToWhatsApp(userId);
     }
   }
 }
@@ -94,64 +102,65 @@ async function heartbeatLoop() {
   // eslint-disable-next-line no-constant-condition
   while (true) {
     await pushStatusHeartbeat();
-    await checkForCommands();
+    await checkForCommandsAndNewSessions();
     await new Promise((r) => setTimeout(r, HEARTBEAT_INTERVAL_MS));
   }
 }
 
-async function connectToWhatsApp() {
-  loggedOut = false;
-  connectionState = 'connecting';
+async function connectToWhatsApp(userId) {
+  // Initialize session state
+  const session = {
+    sock: null,
+    currentQr: null,
+    connectionState: 'connecting',
+    loggedOut: false,
+    connectedPhone: null,
+    manualLogoutRequested: false,
+  };
+  sessions.set(userId, session);
 
-  const { state, saveCreds } = await useSupabaseAuthState(supabase);
+  const { state, saveCreds } = await useSupabaseAuthState(supabase, userId);
 
-  sock = makeWASocket({
+  session.sock = makeWASocket({
     auth: state,
     browser: Browsers.ubuntu('CRM WhatsApp Gateway'),
-    logger,
+    logger: pino({ level: 'silent' }), // Reduce noise per session
   });
 
-  sock.ev.on('creds.update', saveCreds);
+  session.sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('connection.update', async (update) => {
+  session.sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      currentQr = qr;
-      loggedOut = false;
-      logger.info('New QR code generated — visible live on the CRM Settings > WhatsApp page.');
+      session.currentQr = qr;
+      session.loggedOut = false;
+      logger.info({ userId }, 'New QR code generated');
     }
 
     if (connection === 'open') {
-      connectionState = 'open';
-      currentQr = null;
-      loggedOut = false;
-      connectedPhone = sock?.user?.id?.split(':')[0] || sock?.user?.id || null;
-      logger.info({ connectedPhone }, 'WhatsApp connection open');
+      session.connectionState = 'open';
+      session.currentQr = null;
+      session.loggedOut = false;
+      session.connectedPhone = session.sock?.user?.id?.split(':')[0] || session.sock?.user?.id || null;
+      logger.info({ userId, connectedPhone: session.connectedPhone }, 'WhatsApp connection open');
     } else if (connection === 'close') {
-      connectionState = 'close';
+      session.connectionState = 'close';
       const statusCode = (lastDisconnect?.error instanceof Boom)
         ? lastDisconnect.error.output?.statusCode
         : undefined;
-      const isLoggedOut = statusCode === DisconnectReason.loggedOut || manualLogoutRequested;
-      logger.warn({ statusCode, isLoggedOut }, 'Connection closed');
+      const isLoggedOut = statusCode === DisconnectReason.loggedOut || session.manualLogoutRequested;
+      logger.warn({ userId, statusCode, isLoggedOut }, 'Connection closed');
 
       if (isLoggedOut) {
-        loggedOut = true;
-        connectedPhone = null;
-        manualLogoutRequested = false;
-        // Clear the persisted session so the next boot starts a genuinely
-        // fresh pairing (a stale session would otherwise be reloaded and
-        // immediately rejected by WhatsApp).
-        await supabase.from('whatsapp_auth_state').delete().eq('session_id', 'default');
-        logger.warn('Session cleared — reconnecting to generate a fresh QR code.');
-        setTimeout(connectToWhatsApp, 2000);
+        session.loggedOut = true;
+        session.connectedPhone = null;
+        session.manualLogoutRequested = false;
+        await supabase.from('whatsapp_auth_state').delete().eq('session_id', userId);
+        logger.warn({ userId }, 'Session cleared — reconnecting to generate a fresh QR code.');
+        setTimeout(() => connectToWhatsApp(userId), 2000);
       } else {
-        // Any other disconnect (including the QR-scan-timeout 408 Baileys
-        // raises after a few unscanned refreshes) — just reconnect, which
-        // generates a new QR automatically. The CRM's live view means a
-        // human is far more likely to actually see and scan it in time now.
-        setTimeout(connectToWhatsApp, 3000);
+        setTimeout(() => connectToWhatsApp(userId), 3000);
       }
     }
   });
@@ -163,32 +172,12 @@ function randomDelay() {
 
 function toJid(phone) {
   let digits = phone.replace(/[^0-9]/g, '');
-  // Normalise Indian 10-digit numbers: WhatsApp JIDs must use the full
-  // international format (e.g. 919876543210), not the local 10-digit form.
-  // If the number is exactly 10 digits it is almost certainly a local Indian
-  // number stored without the country code — prepend 91.
   if (digits.length === 10) digits = `91${digits}`;
   return `${digits}@s.whatsapp.net`;
 }
 
 const ATTACHMENT_BUCKET = 'whatsapp-attachments';
 
-// Builds the Baileys message payload(s) for an outbox row. Returns an
-// ARRAY because one logical message can need two WhatsApp sends (see the
-// audio case below). Text-only rows behave exactly as before; rows with a
-// media_path get the file attached with the message as its caption.
-//
-// The attachments bucket is private, so the file is fetched through a
-// short-lived signed URL rather than a public link — otherwise every file
-// ever sent to a lead would be readable by anyone who guessed the URL.
-// Baileys accepts { url } and streams it itself, so the gateway never has
-// to buffer the whole file in memory.
-//
-// If the attachment can't be resolved we deliberately throw rather than
-// silently downgrading to a text-only send: a message whose whole point
-// was the attached brochure/price list is worse than a visible failure,
-// because the row would be marked 'sent' and nobody would know the file
-// never arrived.
 async function buildMessagePayloads(row) {
   if (!row.media_path) {
     return [{ text: row.message }];
@@ -213,10 +202,6 @@ async function buildMessagePayloads(row) {
     case 'video':
       return [{ video: { url }, caption }];
     case 'audio': {
-      // WhatsApp audio messages cannot carry a caption. Send the text as
-      // its own message rather than dropping it — otherwise the recipient
-      // gets a bare voice note with no context, and the sender has no way
-      // to know their text was discarded.
       const payloads = [{ audio: { url }, mimetype: 'audio/mp4' }];
       if (caption) payloads.unshift({ text: caption });
       return payloads;
@@ -242,8 +227,6 @@ async function sentToday() {
 }
 
 async function processOutboxOnce() {
-  if (connectionState !== 'open' || !sock) return;
-
   const sentSoFarToday = await sentToday();
   if (sentSoFarToday >= DAILY_CAP) {
     logger.warn({ sentSoFarToday, DAILY_CAP }, 'Daily send cap reached — pausing until tomorrow');
@@ -264,10 +247,20 @@ async function processOutboxOnce() {
   if (!rows || rows.length === 0) return;
 
   const row = rows[0];
+  const senderUserId = row.created_by;
 
-  // Claim the row (best-effort — this gateway is expected to run as a
-  // single instance, so a race here is unlikely, but the conditional
-  // update guards against a double-send if two instances are ever run).
+  if (!senderUserId) {
+    logger.error({ id: row.id }, 'Message has no created_by user_id, marking as failed');
+    await supabase.from('whatsapp_outbox').update({ status: 'failed', error: 'No sender (created_by) assigned' }).eq('id', row.id);
+    return;
+  }
+
+  const session = sessions.get(senderUserId);
+  if (!session || session.connectionState !== 'open' || !session.sock) {
+    logger.warn({ id: row.id, senderUserId }, 'Sender session is not open, skipping message for now');
+    return;
+  }
+
   const { data: claimed, error: claimErr } = await supabase
     .from('whatsapp_outbox')
     .update({ status: 'sending', attempts: row.attempts + 1 })
@@ -281,13 +274,13 @@ async function processOutboxOnce() {
   try {
     const jid = toJid(claimed.to_phone);
     for (const payload of await buildMessagePayloads(claimed)) {
-      await sock.sendMessage(jid, payload);
+      await session.sock.sendMessage(jid, payload);
     }
     await supabase
       .from('whatsapp_outbox')
       .update({ status: 'sent', sent_at: new Date().toISOString(), error: null })
       .eq('id', claimed.id);
-    logger.info({ id: claimed.id, to: claimed.to_phone }, 'Message sent');
+    logger.info({ id: claimed.id, to: claimed.to_phone, sender: senderUserId }, 'Message sent');
   } catch (err) {
     const isRateLimited = err?.output?.statusCode === 429;
     logger.error({ id: claimed.id, err: err.message, isRateLimited }, 'Send failed');
@@ -296,7 +289,6 @@ async function processOutboxOnce() {
       .update({ status: 'failed', error: err.message })
       .eq('id', claimed.id);
     if (isRateLimited) {
-      // Back off harder than the normal gap on a 429.
       await new Promise((r) => setTimeout(r, 60000));
     }
   }
@@ -310,68 +302,31 @@ async function outboxWorkerLoop() {
   }
 }
 
-// ---- HTTP API (optional — the CRM uses Supabase directly, not this) ----
-
+// HTTP API (optional)
 const app = express();
 app.use(express.json());
 
-// Public health checks for UptimeRobot / pingers (no API key required)
 app.get('/', (_req, res) => res.status(200).send('WhatsApp Gateway is active'));
-app.get('/health', (_req, res) => res.status(200).json({ status: 'ok', uptime: process.uptime() }));
-
-function requireApiKey(req, res, next) {
-  if (!GATEWAY_API_KEY) return next(); // no key configured — open (dev only)
-  const key = req.header('x-api-key');
-  if (key !== GATEWAY_API_KEY) {
-    return res.status(401).json({ error: 'Invalid or missing x-api-key header' });
-  }
-  next();
-}
-
-app.get('/status', requireApiKey, (_req, res) => {
-  res.json({ connectionState, hasQr: !!currentQr, connectedPhone, loggedOut });
-});
-
-app.get('/qr', requireApiKey, async (_req, res) => {
-  if (!currentQr) {
-    return res.status(404).json({ error: 'No QR pending — already connected, or not yet generated.' });
-  }
-  const dataUrl = await QRCode.toDataURL(currentQr);
-  res.json({ qr: dataUrl });
-});
-
-app.post('/logout', requireApiKey, async (_req, res) => {
-  manualLogoutRequested = true;
-  try {
-    await sock?.logout();
-  } catch (err) {
-    logger.warn({ err: err.message }, 'sock.logout() threw');
-  }
-  res.json({ ok: true });
-});
-
-// Convenience endpoint — mirrors what writing directly to whatsapp_outbox
-// via Supabase does. Most of the CRM should just insert into the outbox
-// table directly (it already has a Supabase connection); this exists for
-// external callers that don't.
-app.post('/send', requireApiKey, async (req, res) => {
-  const { to, message } = req.body || {};
-  if (!to || !message) {
-    return res.status(400).json({ error: 'Both "to" and "message" are required.' });
-  }
-  const { data, error } = await supabase
-    .from('whatsapp_outbox')
-    .insert([{ to_phone: to, message, status: 'queued' }])
-    .select()
-    .single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.status(202).json({ queued: data });
-});
+app.get('/health', (_req, res) => res.status(200).json({ status: 'ok', uptime: process.uptime(), sessions: sessions.size }));
 
 app.listen(PORT, () => {
   logger.info(`WhatsApp gateway HTTP API listening on :${PORT}`);
 });
 
-connectToWhatsApp();
+// Boot all existing sessions that are connected or connecting
+async function bootInitialSessions() {
+  const { data, error } = await supabase
+    .from('whatsapp_session')
+    .select('id, status');
+  if (data) {
+    for (const row of data) {
+      if (row.status === 'open' || row.status === 'connecting' || row.status === 'qr_pending') {
+        connectToWhatsApp(row.id);
+      }
+    }
+  }
+}
+
+bootInitialSessions();
 outboxWorkerLoop();
 heartbeatLoop();
