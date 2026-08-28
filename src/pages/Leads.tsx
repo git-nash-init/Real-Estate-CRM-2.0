@@ -9,6 +9,7 @@ import {
   formatBytes,
   type UploadedAttachment,
 } from '../services/whatsappAttachments';
+import { BulkUploadModal } from '../components/leads/BulkUploadModal';
 import {
   Search,
   RefreshCw,
@@ -31,7 +32,8 @@ import {
   Send,
   Paperclip,
   Pencil,
-  Trash2
+  Trash2,
+  FileSpreadsheet
 } from 'lucide-react';
 
 interface Lead {
@@ -119,6 +121,7 @@ export const Leads: React.FC = () => {
 
   // Create Lead modal & notification states
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -274,6 +277,11 @@ export const Leads: React.FC = () => {
       }
 
       // Apply Filters
+      const bulkUploadId = searchParams.get('bulk_upload_id');
+      if (bulkUploadId) {
+        query = query.eq('bulk_upload_id', bulkUploadId);
+      }
+      
       if (statusFilter) {
         query = query.eq('status', statusFilter);
       }
@@ -350,9 +358,27 @@ export const Leads: React.FC = () => {
         fetchLeads();
       } catch (err: any) {
         setNotification({ type: 'error', message: err.message || 'Failed to delete lead' });
-      } finally {
         setLoading(false);
       }
+    }
+  };
+
+  const updateLeadStatus = async (lead: Lead, newStatus: string) => {
+    setLoading(true);
+    try {
+      const { error } = await supabase.from('leads').update({ status: newStatus }).eq('id', lead.id);
+      if (error) throw error;
+      setNotification({ type: 'success', message: 'Status updated successfully.' });
+      fetchLeads();
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to update status' });
+      setLoading(false);
+    }
+  };
+
+  const handleLostStatus = (lead: Lead) => {
+    if (window.confirm(`Marking as LOST will permanently delete this lead. Continue?`)) {
+      handleDeleteLead(lead);
     }
   };
 
@@ -831,6 +857,31 @@ export const Leads: React.FC = () => {
             <RefreshCw className={`h-4 w-4 text-slate-500 ${syncing ? 'animate-spin' : ''}`} />
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
+          
+          {/* Back to Bulk Uploads if filtered */}
+          {searchParams.get('bulk_upload_id') && (
+            <button
+              onClick={() => {
+                const newParams = new URLSearchParams(searchParams);
+                newParams.delete('bulk_upload_id');
+                setSearchParams(newParams);
+              }}
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl text-sm font-semibold transition-all focus:outline-none"
+            >
+              Clear Upload Filter
+            </button>
+          )}
+
+          {(role === 'sourcing_manager' || role === 'sourcing_manager_tl' || role === 'super_admin' || role === 'site_head') && (
+            <button
+              onClick={() => setIsBulkUploadOpen(true)}
+              className="flex items-center gap-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-4 py-2 rounded-xl text-sm font-semibold transition-all focus:outline-none shadow-sm"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              Upload Bulk Leads
+            </button>
+          )}
+
           <button
             onClick={() => setIsCreateOpen(true)}
             className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
@@ -969,7 +1020,8 @@ export const Leads: React.FC = () => {
                 <tbody className="divide-y divide-slate-100">
                   {leads.length > 0 ? (
                     leads.map((lead) => (
-                      <tr key={lead.id} className="hover:bg-slate-50/50 transition-colors">
+                      <React.Fragment key={lead.id}>
+                      <tr className="hover:bg-slate-50/50 transition-colors">
                         <td className="py-4 px-6 font-semibold text-slate-900">{lead.customer_name || 'Unnamed Client'}</td>
                         <td className="py-4 px-6 text-sm text-slate-600">{lead.mobile || 'N/A'}</td>
                         <td className="py-4 px-6 text-sm text-slate-600">
@@ -1035,6 +1087,52 @@ export const Leads: React.FC = () => {
                           </div>
                         </td>
                       </tr>
+                      {searchParams.get('bulk_upload_id') && (
+                        <tr key={`${lead.id}-actions`} className="bg-slate-50/50 border-b border-slate-100">
+                          <td colSpan={8} className="py-3 px-6">
+                            <div className="flex flex-wrap gap-2 items-center">
+                              <a 
+                                href={`tel:${lead.mobile}`} 
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 transition-colors"
+                              >
+                                <Phone className="w-3.5 h-3.5" /> Call
+                              </a>
+                              <a 
+                                href={`https://wa.me/${lead.mobile?.replace(/\D/g, '')}`} 
+                                target="_blank" 
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-semibold hover:bg-emerald-100 transition-colors"
+                              >
+                                <MessageCircle className="w-3.5 h-3.5" /> WhatsApp
+                              </a>
+                              <div className="w-px h-5 bg-slate-200 mx-2"></div>
+                              
+                              <button onClick={() => setSelectedLead(lead)} className="px-3 py-1.5 border border-slate-200 bg-white text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-100 transition-colors">
+                                DETAILS
+                              </button>
+                              <button onClick={() => updateLeadStatus(lead, 'call_back')} className="px-3 py-1.5 border border-indigo-200 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-100 transition-colors">
+                                CALL BACK
+                              </button>
+                              <button onClick={() => handleLostStatus(lead)} className="px-3 py-1.5 border border-rose-200 bg-rose-50 text-rose-700 rounded-lg text-xs font-bold hover:bg-rose-100 transition-colors">
+                                LOST
+                              </button>
+                              <button onClick={() => updateLeadStatus(lead, 'booked')} className="px-3 py-1.5 border border-emerald-200 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-bold hover:bg-emerald-100 transition-colors">
+                                BOOKED
+                              </button>
+                              <button onClick={() => updateLeadStatus(lead, 'planed')} className="px-3 py-1.5 border border-amber-200 bg-amber-50 text-amber-700 rounded-lg text-xs font-bold hover:bg-amber-100 transition-colors">
+                                PLANED
+                              </button>
+                              <button onClick={() => updateLeadStatus(lead, 'other_lead')} className="px-3 py-1.5 border border-purple-200 bg-purple-50 text-purple-700 rounded-lg text-xs font-bold hover:bg-purple-100 transition-colors">
+                                OTHER LEAD
+                              </button>
+                              <button onClick={() => updateLeadStatus(lead, 'visit_done')} className="px-3 py-1.5 border border-sky-200 bg-sky-50 text-sky-700 rounded-lg text-xs font-bold hover:bg-sky-100 transition-colors">
+                                VISIT DONE
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                     ))
                   ) : (
                     <tr>
@@ -1818,6 +1916,14 @@ export const Leads: React.FC = () => {
           </div>
         </div>
       )}
+      <BulkUploadModal 
+        isOpen={isBulkUploadOpen}
+        onClose={() => setIsBulkUploadOpen(false)}
+        onUploadComplete={() => {
+          setPage(0);
+          fetchLeads();
+        }}
+      />
     </div>
   );
 };

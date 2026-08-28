@@ -28,7 +28,8 @@ import {
   Handshake,
   ChevronDown,
   Bell,
-  Wallet
+  Wallet,
+  FileSpreadsheet
 } from 'lucide-react';
 
 export const AppLayout: React.FC = () => {
@@ -44,6 +45,7 @@ export const AppLayout: React.FC = () => {
   const navigationItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     { name: 'Leads', path: '/leads', icon: UserCheck },
+    { name: 'Bulk Uploads', path: '/bulk-uploads', icon: FileSpreadsheet },
     { name: 'Follow-ups', path: '/follow-ups', icon: PhoneCall },
     { name: 'Site Visits', path: '/site-visits', icon: MapPin },
     { name: 'Projects', path: '/projects', icon: Building2 },
@@ -203,7 +205,13 @@ export const AppLayout: React.FC = () => {
                       notifications.map((n) => (
                         <button
                           key={n.id}
-                          onClick={() => markAsRead(n.id)}
+                          onClick={() => {
+                            markAsRead(n.id);
+                            if (n.related_entity === 'bulk_upload' && n.related_id) {
+                              setNotifDropdownOpen(false);
+                              navigate(`/leads?bulk_upload_id=${n.related_id}`);
+                            }
+                          }}
                           className={`w-full text-left px-4 py-2.5 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors ${n.is_read ? 'opacity-60' : ''}`}
                         >
                           <div className="flex items-start gap-2">
@@ -299,13 +307,27 @@ export const AppLayout: React.FC = () => {
 
       {/* Existing notification toast — bottom-centre */}
       {justArrived && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[80] bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-bottom-4 duration-200">
+        <div 
+          onClick={() => {
+            dismissJustArrived();
+            if (justArrived.related_entity === 'bulk_upload' && justArrived.related_id) {
+              navigate(`/leads?bulk_upload_id=${justArrived.related_id}`);
+            }
+          }}
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[80] bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-bottom-4 duration-200 cursor-pointer"
+        >
           <Bell className="h-4 w-4 text-indigo-400 flex-shrink-0" />
           <div className="text-sm">
             <p className="font-semibold">{justArrived.title}</p>
             <p className="text-slate-300 text-xs">{justArrived.message}</p>
           </div>
-          <button onClick={dismissJustArrived} className="ml-2 text-slate-400 hover:text-white">
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              dismissJustArrived();
+            }} 
+            className="ml-2 text-slate-400 hover:text-white"
+          >
             <X className="h-3.5 w-3.5" />
           </button>
         </div>

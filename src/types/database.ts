@@ -1,12 +1,3 @@
-/**
- * AUTO-GENERATED from the live Supabase database schema (project
- * umuctbiofbyjwnqavxus) via the Supabase MCP generate_typescript_types tool.
- *
- * This is the source of truth for what tables/columns actually exist —
- * unlike the repo's .sql migration files, several of which describe a
- * schema that was never applied (see AUDIT.md). Regenerate whenever the
- * live schema changes; do not hand-edit.
- */
 export type Json =
   | string
   | number
@@ -19,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.15"
+    PostgrestVersion: "14.5"
   }
   public: {
     Tables: {
@@ -394,8 +385,58 @@ export type Database = {
           },
         ]
       }
+      bulk_lead_uploads: {
+        Row: {
+          channel_partner_id: string | null
+          created_at: string
+          file_name: string
+          id: string
+          project_id: string
+          uploaded_by: string
+        }
+        Insert: {
+          channel_partner_id?: string | null
+          created_at?: string
+          file_name: string
+          id?: string
+          project_id: string
+          uploaded_by: string
+        }
+        Update: {
+          channel_partner_id?: string | null
+          created_at?: string
+          file_name?: string
+          id?: string
+          project_id?: string
+          uploaded_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bulk_lead_uploads_channel_partner_id_fkey"
+            columns: ["channel_partner_id"]
+            isOneToOne: false
+            referencedRelation: "channel_partners"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bulk_lead_uploads_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bulk_lead_uploads_uploaded_by_fkey"
+            columns: ["uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       call_logs: {
         Row: {
+          answered_at: string | null
           called_at: string
           channel_partner_id: string | null
           created_at: string
@@ -403,11 +444,17 @@ export type Database = {
           duration_seconds: number | null
           employee_id: string | null
           id: string
+          latitude: number | null
           lead_id: string | null
+          location_captured_at: string | null
+          longitude: number | null
           notes: string | null
           outcome: string | null
+          provider_call_id: string | null
+          recording_url: string | null
         }
         Insert: {
+          answered_at?: string | null
           called_at?: string
           channel_partner_id?: string | null
           created_at?: string
@@ -415,11 +462,17 @@ export type Database = {
           duration_seconds?: number | null
           employee_id?: string | null
           id?: string
+          latitude?: number | null
           lead_id?: string | null
+          location_captured_at?: string | null
+          longitude?: number | null
           notes?: string | null
           outcome?: string | null
+          provider_call_id?: string | null
+          recording_url?: string | null
         }
         Update: {
+          answered_at?: string | null
           called_at?: string
           channel_partner_id?: string | null
           created_at?: string
@@ -427,9 +480,14 @@ export type Database = {
           duration_seconds?: number | null
           employee_id?: string | null
           id?: string
+          latitude?: number | null
           lead_id?: string | null
+          location_captured_at?: string | null
+          longitude?: number | null
           notes?: string | null
           outcome?: string | null
+          provider_call_id?: string | null
+          recording_url?: string | null
         }
         Relationships: [
           {
@@ -469,6 +527,9 @@ export type Database = {
           id: string
           impressions: number
           leads: number
+          media_filename: string | null
+          media_path: string | null
+          media_type: string | null
           objective: string | null
           platform: string | null
           project_id: string
@@ -493,6 +554,9 @@ export type Database = {
           id?: string
           impressions?: number
           leads?: number
+          media_filename?: string | null
+          media_path?: string | null
+          media_type?: string | null
           objective?: string | null
           platform?: string | null
           project_id: string
@@ -517,6 +581,9 @@ export type Database = {
           id?: string
           impressions?: number
           leads?: number
+          media_filename?: string | null
+          media_path?: string | null
+          media_type?: string | null
           objective?: string | null
           platform?: string | null
           project_id?: string
@@ -594,6 +661,87 @@ export type Database = {
           },
         ]
       }
+      channel_partner_requests: {
+        Row: {
+          address: string | null
+          city: string | null
+          company_name: string | null
+          contact_person: string | null
+          created_at: string
+          email: string | null
+          gst_number: string | null
+          id: string
+          notes: string | null
+          pan_number: string | null
+          partner_name: string
+          phone: string
+          pincode: string | null
+          project_ids: string[] | null
+          rejection_reason: string | null
+          rera_number: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          state: string | null
+          status: string
+          submitted_by: string | null
+          submitted_by_name: string | null
+          updated_at: string
+          whatsapp_number: string | null
+        }
+        Insert: {
+          address?: string | null
+          city?: string | null
+          company_name?: string | null
+          contact_person?: string | null
+          created_at?: string
+          email?: string | null
+          gst_number?: string | null
+          id?: string
+          notes?: string | null
+          pan_number?: string | null
+          partner_name: string
+          phone: string
+          pincode?: string | null
+          project_ids?: string[] | null
+          rejection_reason?: string | null
+          rera_number?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          state?: string | null
+          status?: string
+          submitted_by?: string | null
+          submitted_by_name?: string | null
+          updated_at?: string
+          whatsapp_number?: string | null
+        }
+        Update: {
+          address?: string | null
+          city?: string | null
+          company_name?: string | null
+          contact_person?: string | null
+          created_at?: string
+          email?: string | null
+          gst_number?: string | null
+          id?: string
+          notes?: string | null
+          pan_number?: string | null
+          partner_name?: string
+          phone?: string
+          pincode?: string | null
+          project_ids?: string[] | null
+          rejection_reason?: string | null
+          rera_number?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          state?: string | null
+          status?: string
+          submitted_by?: string | null
+          submitted_by_name?: string | null
+          updated_at?: string
+          whatsapp_number?: string | null
+        }
+        Relationships: []
+      }
       channel_partners: {
         Row: {
           address: string | null
@@ -611,12 +759,14 @@ export type Database = {
           mobile: string
           name: string
           notes: string | null
+          pan_number: string | null
           partner_code: string | null
           rera_number: string | null
           sourcing_manager: string | null
           status: Database["public"]["Enums"]["channel_partner_status"]
           updated_at: string
           user_id: string | null
+          whatsapp_number: string | null
         }
         Insert: {
           address?: string | null
@@ -634,12 +784,14 @@ export type Database = {
           mobile: string
           name: string
           notes?: string | null
+          pan_number?: string | null
           partner_code?: string | null
           rera_number?: string | null
           sourcing_manager?: string | null
           status?: Database["public"]["Enums"]["channel_partner_status"]
           updated_at?: string
           user_id?: string | null
+          whatsapp_number?: string | null
         }
         Update: {
           address?: string | null
@@ -657,12 +809,14 @@ export type Database = {
           mobile?: string
           name?: string
           notes?: string | null
+          pan_number?: string | null
           partner_code?: string | null
           rera_number?: string | null
           sourcing_manager?: string | null
           status?: Database["public"]["Enums"]["channel_partner_status"]
           updated_at?: string
           user_id?: string | null
+          whatsapp_number?: string | null
         }
         Relationships: [
           {
@@ -974,8 +1128,11 @@ export type Database = {
           meet_date: string
           meeting_done: string
           meeting_remarks: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
           sourcing_manager_id: string | null
           sourcing_manager_other: string | null
+          status: string
           updated_at: string
         }
         Insert: {
@@ -993,8 +1150,11 @@ export type Database = {
           meet_date: string
           meeting_done: string
           meeting_remarks?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
           sourcing_manager_id?: string | null
           sourcing_manager_other?: string | null
+          status?: string
           updated_at?: string
         }
         Update: {
@@ -1012,8 +1172,11 @@ export type Database = {
           meet_date?: string
           meeting_done?: string
           meeting_remarks?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
           sourcing_manager_id?: string | null
           sourcing_manager_other?: string | null
+          status?: string
           updated_at?: string
         }
         Relationships: [
@@ -1029,6 +1192,13 @@ export type Database = {
             columns: ["logged_by"]
             isOneToOne: false
             referencedRelation: "employees"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cp_outreach_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
             referencedColumns: ["id"]
           },
           {
@@ -1139,6 +1309,7 @@ export type Database = {
           state: string | null
           updated_at: string
           user_id: string
+          whatsapp_number: string | null
           work_location: string | null
         }
         Insert: {
@@ -1173,6 +1344,7 @@ export type Database = {
           state?: string | null
           updated_at?: string
           user_id: string
+          whatsapp_number?: string | null
           work_location?: string | null
         }
         Update: {
@@ -1207,6 +1379,7 @@ export type Database = {
           state?: string | null
           updated_at?: string
           user_id?: string
+          whatsapp_number?: string | null
           work_location?: string | null
         }
         Relationships: [
@@ -1449,6 +1622,7 @@ export type Database = {
           budget: string | null
           budget_max: number | null
           budget_min: number | null
+          bulk_upload_id: string | null
           buying_timeline: string | null
           campaign_id: string | null
           channel_partner_id: string | null
@@ -1487,6 +1661,7 @@ export type Database = {
           budget?: string | null
           budget_max?: number | null
           budget_min?: number | null
+          bulk_upload_id?: string | null
           buying_timeline?: string | null
           campaign_id?: string | null
           channel_partner_id?: string | null
@@ -1525,6 +1700,7 @@ export type Database = {
           budget?: string | null
           budget_max?: number | null
           budget_min?: number | null
+          bulk_upload_id?: string | null
           buying_timeline?: string | null
           campaign_id?: string | null
           channel_partner_id?: string | null
@@ -1559,6 +1735,13 @@ export type Database = {
           visit_type?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "leads_bulk_upload_id_fkey"
+            columns: ["bulk_upload_id"]
+            isOneToOne: false
+            referencedRelation: "bulk_lead_uploads"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "leads_channel_partner_id_fkey"
             columns: ["channel_partner_id"]
@@ -1916,6 +2099,54 @@ export type Database = {
         }
         Relationships: []
       }
+      personal_expenses: {
+        Row: {
+          actual_amount: number
+          category: string | null
+          created_at: string
+          description: string | null
+          expense_date: string
+          id: string
+          notes: string | null
+          payment_mode: string | null
+          receipt_amount: number
+          received_amount: number | null
+          updated_at: string
+          user_id: string
+          vendor: string | null
+        }
+        Insert: {
+          actual_amount?: number
+          category?: string | null
+          created_at?: string
+          description?: string | null
+          expense_date?: string
+          id?: string
+          notes?: string | null
+          payment_mode?: string | null
+          receipt_amount?: number
+          received_amount?: number | null
+          updated_at?: string
+          user_id?: string
+          vendor?: string | null
+        }
+        Update: {
+          actual_amount?: number
+          category?: string | null
+          created_at?: string
+          description?: string | null
+          expense_date?: string
+          id?: string
+          notes?: string | null
+          payment_mode?: string | null
+          receipt_amount?: number
+          received_amount?: number | null
+          updated_at?: string
+          user_id?: string
+          vendor?: string | null
+        }
+        Relationships: []
+      }
       project_floors: {
         Row: {
           created_at: string
@@ -1956,7 +2187,7 @@ export type Database = {
       }
       project_inventory: {
         Row: {
-          base_price: number
+          base_price: number | null
           built_up_area: number | null
           carpet_area: number | null
           configuration: string | null
@@ -1981,7 +2212,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
-          base_price?: number
+          base_price?: number | null
           built_up_area?: number | null
           carpet_area?: number | null
           configuration?: string | null
@@ -2006,7 +2237,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
-          base_price?: number
+          base_price?: number | null
           built_up_area?: number | null
           carpet_area?: number | null
           configuration?: string | null
@@ -2175,6 +2406,70 @@ export type Database = {
             columns: ["created_by"]
             isOneToOne: false
             referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      quick_site_visits: {
+        Row: {
+          channel_partner_id: string
+          created_at: string
+          created_by: string | null
+          customer_mobile: string
+          customer_name: string
+          id: string
+          project_id: string
+          referenced_by: string
+          status: string
+          verification_code: string
+          visit_at: string
+        }
+        Insert: {
+          channel_partner_id: string
+          created_at?: string
+          created_by?: string | null
+          customer_mobile: string
+          customer_name: string
+          id?: string
+          project_id: string
+          referenced_by: string
+          status?: string
+          verification_code: string
+          visit_at: string
+        }
+        Update: {
+          channel_partner_id?: string
+          created_at?: string
+          created_by?: string | null
+          customer_mobile?: string
+          customer_name?: string
+          id?: string
+          project_id?: string
+          referenced_by?: string
+          status?: string
+          verification_code?: string
+          visit_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "quick_site_visits_channel_partner_id_fkey"
+            columns: ["channel_partner_id"]
+            isOneToOne: false
+            referencedRelation: "channel_partners"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "quick_site_visits_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "quick_site_visits_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
             referencedColumns: ["id"]
           },
         ]
@@ -2460,6 +2755,7 @@ export type Database = {
           full_name: string
           id: string
           mobile: string | null
+          must_change_password: boolean
           reports_to: string | null
           status: Database["public"]["Enums"]["user_status"]
           updated_at: string
@@ -2474,6 +2770,7 @@ export type Database = {
           full_name: string
           id: string
           mobile?: string | null
+          must_change_password?: boolean
           reports_to?: string | null
           status?: Database["public"]["Enums"]["user_status"]
           updated_at?: string
@@ -2488,6 +2785,7 @@ export type Database = {
           full_name?: string
           id?: string
           mobile?: string | null
+          must_change_password?: boolean
           reports_to?: string | null
           status?: Database["public"]["Enums"]["user_status"]
           updated_at?: string
@@ -2624,7 +2922,11 @@ export type Database = {
           error: string | null
           id: string
           lead_id: string | null
+          media_filename: string | null
+          media_path: string | null
+          media_type: string | null
           message: string
+          quick_visit_id: string | null
           sent_at: string | null
           status: string
           to_phone: string
@@ -2638,7 +2940,11 @@ export type Database = {
           error?: string | null
           id?: string
           lead_id?: string | null
+          media_filename?: string | null
+          media_path?: string | null
+          media_type?: string | null
           message: string
+          quick_visit_id?: string | null
           sent_at?: string | null
           status?: string
           to_phone: string
@@ -2652,7 +2958,11 @@ export type Database = {
           error?: string | null
           id?: string
           lead_id?: string | null
+          media_filename?: string | null
+          media_path?: string | null
+          media_type?: string | null
           message?: string
+          quick_visit_id?: string | null
           sent_at?: string | null
           status?: string
           to_phone?: string
@@ -2677,6 +2987,13 @@ export type Database = {
             columns: ["lead_id"]
             isOneToOne: false
             referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_outbox_quick_visit_id_fkey"
+            columns: ["quick_visit_id"]
+            isOneToOne: false
+            referencedRelation: "quick_site_visits"
             referencedColumns: ["id"]
           },
         ]
@@ -2720,6 +3037,7 @@ export type Database = {
       can_manage_project: { Args: { p_project_id: string }; Returns: boolean }
       current_user_has_role: { Args: { p_roles: string[] }; Returns: boolean }
       expire_cp_lead_claims: { Args: never; Returns: undefined }
+      expire_quick_site_visits: { Args: never; Returns: undefined }
       has_project_access: { Args: { p_project_id: string }; Returns: boolean }
       is_authenticated: { Args: never; Returns: boolean }
       is_super_admin: { Args: never; Returns: boolean }

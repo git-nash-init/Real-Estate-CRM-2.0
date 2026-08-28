@@ -24,6 +24,7 @@ import { Attendance } from './pages/Attendance';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import { Expenses } from './pages/Expenses';
+import { BulkUploads } from './pages/BulkUploads';
 
 function App() {
   return (
@@ -107,6 +108,10 @@ function App() {
             <Route
               path="settings"
               element={<Settings />}
+            />
+            <Route
+              path="bulk-uploads"
+              element={<BulkUploads />}
             />
 
             {/* Catch-all redirected back to dashboard */}
