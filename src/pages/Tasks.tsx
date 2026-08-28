@@ -10,6 +10,7 @@ import {
   CheckCircle,
   XCircle,
   Search,
+  Trash2
 } from 'lucide-react';
 
 interface Task {
@@ -49,7 +50,8 @@ const priorityColors: Record<string, string> = {
 };
 
 export const Tasks: React.FC = () => {
-  const { user } = useAuth();
+  const { user, role } = useAuth();
+  const isSuperAdmin = role === 'super_admin';
   const [tasks, setTasks] = useState<Task[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
   const [usersMap, setUsersMap] = useState<Map<string, string>>(new Map());
@@ -69,6 +71,18 @@ export const Tasks: React.FC = () => {
   const [priority, setPriority] = useState('normal');
   const [createError, setCreateError] = useState<string | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
+
+  const handleDeleteTask = async (taskId: string) => {
+    if (!window.confirm('Are you sure you want to permanently delete this task?')) return;
+    try {
+      const { error } = await supabase.from('tasks').delete().eq('id', taskId);
+      if (error) throw error;
+      setNotification({ type: 'success', message: 'Task deleted permanently.' });
+      fetchData();
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to delete task.' });
+    }
+  };
 
   const fetchData = useCallback(async () => {
     try {
@@ -302,7 +316,8 @@ export const Tasks: React.FC = () => {
                 <th className="py-3 px-6">Priority</th>
                 <th className="py-3 px-6">Due</th>
                 <th className="py-3 px-6">Status</th>
-              </tr>
+              <th className="py-3 px-6 text-right">Actions</th>
+</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredTasks.length > 0 ? (
@@ -331,11 +346,22 @@ export const Tasks: React.FC = () => {
                         {statusOptions.map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
                       </select>
                     </td>
-                  </tr>
+                  <td className="py-3 px-6 text-right">
+                      {isSuperAdmin && (
+                        <button
+                          onClick={() => handleDeleteTask(t.id)}
+                          className="p-1.5 border border-slate-200 rounded-lg text-rose-500 hover:bg-rose-50 transition-colors"
+                          title="Delete Task Permanently"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </td>
+</tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={5} className="py-10 text-center text-slate-400 italic">No tasks found.</td>
+                  <td colSpan={6} className="py-10 text-center text-slate-400 italic">No tasks found.</td>
                 </tr>
               )}
             </tbody>

@@ -30,6 +30,7 @@ interface Expense {
   vendor: string | null;
   description: string | null;
   receipt_amount: number;
+  received_amount: number;
   actual_amount: number;
   payment_mode: string | null;
   notes: string | null;
@@ -42,6 +43,7 @@ const emptyForm = {
   vendor: '',
   description: '',
   receipt_amount: '',
+  received_amount: '',
   actual_amount: '',
   payment_mode: '',
   notes: '',
@@ -126,6 +128,7 @@ export const Expenses: React.FC = () => {
       vendor: exp.vendor || '',
       description: exp.description || '',
       receipt_amount: String(exp.receipt_amount ?? ''),
+      received_amount: String(exp.received_amount ?? ''),
       actual_amount: String(exp.actual_amount ?? ''),
       payment_mode: exp.payment_mode || '',
       notes: exp.notes || '',
@@ -156,6 +159,7 @@ export const Expenses: React.FC = () => {
       vendor: form.vendor || null,
       description: form.description || null,
       receipt_amount: receiptAmount,
+      received_amount: Number(form.received_amount) || 0,
       actual_amount: actualAmount,
       payment_mode: form.payment_mode || null,
       notes: form.notes || null,
@@ -308,8 +312,9 @@ export const Expenses: React.FC = () => {
                   <th className="text-left px-4 py-3 font-semibold">Date</th>
                   <th className="text-left px-4 py-3 font-semibold">Category</th>
                   <th className="text-left px-4 py-3 font-semibold">Vendor / Bill</th>
-                  <th className="text-right px-4 py-3 font-semibold">Receipt Amount</th>
-                  <th className="text-right px-4 py-3 font-semibold">Actual Amount</th>
+                  <th className="text-right px-4 py-3 font-semibold">Received</th>
+                  <th className="text-right px-4 py-3 font-semibold">Billed</th>
+                  <th className="text-right px-4 py-3 font-semibold">Spent</th>
                   <th className="text-right px-4 py-3 font-semibold">Difference</th>
                   <th className="text-left px-4 py-3 font-semibold">Mode</th>
                   <th className="text-right px-4 py-3 font-semibold">Actions</th>
@@ -317,7 +322,7 @@ export const Expenses: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.map((exp) => {
-                  const delta = (exp.receipt_amount || 0) - (exp.actual_amount || 0);
+                  const delta = (exp.received_amount || 0) - (exp.actual_amount || 0);
                   return (
                     <tr key={exp.id} className="hover:bg-slate-50">
                       <td className="px-4 py-3 whitespace-nowrap text-slate-700">{new Date(exp.expense_date).toLocaleDateString('en-IN')}</td>
@@ -326,6 +331,7 @@ export const Expenses: React.FC = () => {
                         <div className="font-medium">{exp.vendor || '—'}</div>
                         {exp.description && <div className="text-xs text-slate-400">{exp.description}</div>}
                       </td>
+                      <td className="px-4 py-3 text-right text-slate-700">{formatCurrency(exp.received_amount)}</td>
                       <td className="px-4 py-3 text-right text-slate-700">{formatCurrency(exp.receipt_amount)}</td>
                       <td className="px-4 py-3 text-right text-slate-700">{formatCurrency(exp.actual_amount)}</td>
                       <td className={`px-4 py-3 text-right font-semibold ${delta > 0 ? 'text-emerald-600' : delta < 0 ? 'text-rose-600' : 'text-slate-500'}`}>

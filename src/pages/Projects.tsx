@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
+import { useAuth } from '../hooks/useAuth';
 import {
   Search,
   RefreshCw,
@@ -105,6 +106,8 @@ const serializeDescription = (developer: string, rera: string, website: string, 
 };
 
 export const Projects: React.FC = () => {
+  const { role } = useAuth();
+  const isSuperAdmin = role === 'super_admin';
   // Navigation & View Mode
   // 'list' or 'details'
   const [viewMode, setViewMode] = useState<'list' | 'details'>('list');
@@ -938,12 +941,14 @@ export const Projects: React.FC = () => {
                                   >
                                     <Edit2 className="h-3.5 w-3.5" />
                                   </button>
+                                  {isSuperAdmin && (
                                   <button
                                     onClick={() => handleDeleteProject(proj.id)}
                                     className="p-1.5 border border-slate-200 rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </button>
+                                )}
                                 </div>
                               </td>
                             </tr>
@@ -1196,12 +1201,14 @@ export const Projects: React.FC = () => {
                                 >
                                   <Edit2 className="h-3.5 w-3.5" />
                                 </button>
-                                <button
+                                {isSuperAdmin && (
+                                  <button
                                   onClick={() => handleDeleteTower(tow.id)}
                                   className="p-1 border border-slate-200 rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
                                 >
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </button>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -1313,12 +1320,14 @@ export const Projects: React.FC = () => {
                                 >
                                   <Edit2 className="h-3.5 w-3.5" />
                                 </button>
-                                <button
+                                {isSuperAdmin && (
+                                  <button
                                   onClick={() => handleDeleteUnit(unit.id)}
                                   className="p-1 border border-slate-200 rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
                                 >
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </button>
+                                )}
                               </div>
                             </td>
                           </tr>

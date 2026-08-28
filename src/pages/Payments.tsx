@@ -96,6 +96,7 @@ export const Payments: React.FC = () => {
   const [pageSize] = useState(10);
 
   const { role } = useAuth();
+  const isSuperAdmin = role === 'super_admin';
   const isAuthorized = role === 'super_admin' || role === 'project_admin';
 
   // Tab view selector: 'customer' | 'referral fee'
@@ -129,7 +130,7 @@ export const Payments: React.FC = () => {
 
   // Form Fields
   const [selectedBookingId, setSelectedBookingId] = useState('');
-  const [paymentType, setPaymentType] = useState('Booking');
+  const [paymentType, setPaymentType] = useState('OCR');
   const [amountInput, setAmountInput] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [receivedDate, setReceivedDate] = useState('');
@@ -514,6 +515,20 @@ export const Payments: React.FC = () => {
   };
 
   // Confirm and Execute Cancellation
+  
+  const handleDeletePayment = async (paymentId: string) => {
+    if (!window.confirm('Are you sure you want to permanently delete this payment?')) return;
+    try {
+      const { error } = await supabase.from('payments').delete().eq('id', paymentId);
+      if (error) throw error;
+      setNotification({ type: 'success', message: 'Payment deleted permanently.' });
+      fetchData();
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to delete payment.' });
+    }
+  };
+
+
   const handleCancelPayment = async () => {
     if (!cancellingPayment) return;
     try {
@@ -843,9 +858,12 @@ export const Payments: React.FC = () => {
               className="border border-slate-200 rounded-xl px-3 py-1.5 bg-slate-50 text-slate-700 text-xs focus:bg-white focus:outline-none transition-all w-full"
             >
               <option value="">All Types</option>
-              <option value="Booking">Booking Deposit</option>
-              <option value="Installment">Installment</option>
-              <option value="Other">Other</option>
+              <option value="OCR">OCR</option>
+              <option value="GST">GST</option>
+              <option value="Stamp Duty Registration">Stamp Duty Registration</option>
+              <option value="Development Charges">Development Charges</option>
+              <option value="Maintenance Charges">Maintenance Charges</option>
+              <option value="Other Charges">Other Charges</option>
             </select>
           </div>
 
@@ -994,7 +1012,16 @@ export const Payments: React.FC = () => {
                                 >
                                   <Trash2 className="h-4.5 w-4.5" />
                                 </button>
-                              </>
+                              {isSuperAdmin && (
+                                <button
+                                  onClick={() => handleDeletePayment(p.id)}
+                                  className="inline-flex p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
+                                  title="Delete Payment Permanently"
+                                >
+                                  <Trash2 className="h-4.5 w-4.5" />
+                                </button>
+                              )}
+</>
                             )}
                           </td>
                         </tr>
@@ -1271,9 +1298,12 @@ export const Payments: React.FC = () => {
                       onChange={(e) => setPaymentType(e.target.value)}
                       className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                     >
-                      <option value="Booking">Booking Deposit</option>
-                      <option value="Installment">Installment</option>
-                      <option value="Other">Other</option>
+                      <option value="OCR">OCR</option>
+                      <option value="GST">GST</option>
+                      <option value="Stamp Duty Registration">Stamp Duty Registration</option>
+                      <option value="Development Charges">Development Charges</option>
+                      <option value="Maintenance Charges">Maintenance Charges</option>
+                      <option value="Other Charges">Other Charges</option>
                     </select>
                   </div>
 

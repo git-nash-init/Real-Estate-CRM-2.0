@@ -20,7 +20,8 @@ import {
   Clock,
   ThumbsUp,
   ThumbsDown,
-  Send
+  Send,
+  Trash2
 } from 'lucide-react';
 
 interface ChannelPartner {
@@ -143,6 +144,7 @@ const parseCityField = (cityVal: string | null) => {
 export const ChannelPartners: React.FC = () => {
   const navigate = useNavigate();
   const { role, user, assignedProjects } = useAuth();
+  const isSuperAdmin = role === 'super_admin';
 
   // All logged-in users can submit a CP request.
   // Only super_admin / site_head can approve them and directly edit existing partners.
@@ -391,6 +393,19 @@ export const ChannelPartners: React.FC = () => {
   };
 
   // Status Activation Toggle
+  
+  const handleDeleteCP = async (cpId: string) => {
+    if (!window.confirm('Are you sure you want to permanently delete this Channel Partner?')) return;
+    try {
+      const { error } = await supabase.from('channel_partners').delete().eq('id', cpId);
+      if (error) throw error;
+      setNotification({ type: 'success', message: 'Channel Partner deleted permanently.' });
+      fetchData();
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to delete channel partner.' });
+    }
+  };
+
   const handleToggleStatus = async (cp: ChannelPartner) => {
     const nextStatus = cp.status === 'active' ? 'inactive' : 'active';
     try {
@@ -1083,7 +1098,16 @@ export const ChannelPartners: React.FC = () => {
                               >
                                 {cp.status === 'active' || cp.status === 'ACTIVE' ? <UserX className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}
                               </button>
-                            </div>
+                            {isSuperAdmin && (
+                                <button
+                                  onClick={() => handleDeleteCP(cp.id)}
+                                  className="p-1 border border-slate-200 rounded-lg text-rose-500 hover:bg-rose-50 hover:border-rose-100 transition-all"
+                                  title="Delete Channel Partner Permanently"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+</div>
                           </td>
                         </tr>
                       );

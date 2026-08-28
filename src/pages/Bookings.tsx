@@ -17,7 +17,8 @@ import {
   Home,
   IndianRupee,
   Plus,
-  Users
+  Users,
+  Trash2
 } from 'lucide-react';
 
 interface Booking {
@@ -85,6 +86,7 @@ interface Tower {
 
 export const Bookings: React.FC = () => {
   const { role, assignedProjects } = useAuth();
+  const isSuperAdmin = role === 'super_admin';
   
   const canApproveBooking = useCallback((booking: Booking | null) => {
     if (!booking) return false;
@@ -145,7 +147,7 @@ export const Bookings: React.FC = () => {
   const [considerationAmount, setConsiderationAmount] = useState('');
   const [gstAmount, setGstAmount] = useState('');
   const [stampDuty, setStampDuty] = useState('');
-  const [registrationCharges, setRegistrationCharges] = useState('');
+  
   const [developmentCharges, setDevelopmentCharges] = useState('');
   const [maintenanceCharges, setMaintenanceCharges] = useState('');
   const [parkingCharges, setParkingCharges] = useState('');
@@ -575,6 +577,27 @@ export const Bookings: React.FC = () => {
     await fetchBookings();
   };
 
+  const handleDeleteBooking = async (booking: Booking) => {
+    if (!window.confirm(`Are you sure you want to delete Booking ${booking.booking_number || booking.id}?`)) {
+      return;
+    }
+    
+    try {
+      const { error: deleteErr } = await supabase
+        .from('bookings')
+        .delete()
+        .eq('id', booking.id);
+      
+      if (deleteErr) throw deleteErr;
+      
+      setNotification({ type: 'success', message: 'Booking deleted successfully.' });
+      handleSync();
+    } catch (err: any) {
+      console.error('Error deleting booking:', err);
+      setNotification({ type: 'error', message: err.message || 'Failed to delete booking.' });
+    }
+  };
+
   // Auto-dismiss alert notifications
   useEffect(() => {
     if (notification) {
@@ -668,7 +691,7 @@ export const Bookings: React.FC = () => {
     const baseAmt = parseFloat(considerationAmount);
     const gstAmt = gstAmount.trim() ? parseFloat(gstAmount) : 0;
     const sdAmt = parseAmt(stampDuty);
-    const regAmt = parseAmt(registrationCharges);
+    const regAmt = 0;
     const devAmt = parseAmt(developmentCharges);
     const maintAmt = parseAmt(maintenanceCharges);
     const parkAmt = parseAmt(parkingCharges);
@@ -875,7 +898,7 @@ export const Bookings: React.FC = () => {
       setConsiderationAmount('');
       setGstAmount('');
       setStampDuty('');
-      setRegistrationCharges('');
+      
       setDevelopmentCharges('');
       setMaintenanceCharges('');
       setParkingCharges('');
@@ -1187,7 +1210,7 @@ export const Bookings: React.FC = () => {
   const calculatedTotalAdditionalCharges = 
     parseAmt(gstAmount) +
     parseAmt(stampDuty) +
-    parseAmt(registrationCharges) +
+    
     parseAmt(developmentCharges) +
     parseAmt(maintenanceCharges) +
     parseAmt(parkingCharges) +
@@ -1390,6 +1413,15 @@ export const Bookings: React.FC = () => {
                                 <Eye className="h-3.5 w-3.5" />
                                 <span>View</span>
                               </button>
+                              {isSuperAdmin && (
+                                <button
+                                  onClick={() => handleDeleteBooking(b)}
+                                  className="p-1.5 border border-slate-200 rounded-lg text-rose-500 hover:bg-rose-50 transition-colors"
+                                  title="Delete Booking"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -1649,13 +1681,10 @@ export const Bookings: React.FC = () => {
                                   <span className="font-semibold text-slate-800">₹{gstAmt.toLocaleString('en-IN')}</span>
                                 </div>
                                 <div className="flex justify-between">
-                                  <span className="text-slate-500 font-medium">Stamp Duty:</span>
+                                  <span className="text-slate-500 font-medium">Stamp Duty & Registration:</span>
                                   <span className="font-semibold text-slate-800">₹{sdAmt.toLocaleString('en-IN')}</span>
                                 </div>
-                                <div className="flex justify-between">
-                                  <span className="text-slate-500 font-medium">Registration:</span>
-                                  <span className="font-semibold text-slate-800">₹{regAmt.toLocaleString('en-IN')}</span>
-                                </div>
+                                
                                 <div className="flex justify-between">
                                   <span className="text-slate-500 font-medium">Development Charges:</span>
                                   <span className="font-semibold text-slate-800">₹{devAmt.toLocaleString('en-IN')}</span>
@@ -2209,7 +2238,7 @@ export const Bookings: React.FC = () => {
 
                     {/* Stamp Duty */}
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Stamp Duty Amount</label>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Stamp Duty & Registration Amount</label>
                       <div className="relative">
                         <IndianRupee className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
                         <input
@@ -2223,21 +2252,7 @@ export const Bookings: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Registration */}
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Registration Amount</label>
-                      <div className="relative">
-                        <IndianRupee className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
-                        <input
-                          type="number"
-                          min="0"
-                          placeholder="Enter registration"
-                          value={registrationCharges}
-                          onChange={(e) => setRegistrationCharges(e.target.value)}
-                          className="block w-full pl-9 pr-4 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-indigo-600 focus:outline-none transition-all"
-                        />
-                      </div>
-                    </div>
+                    
 
                     {/* Development Charges */}
                     <div>

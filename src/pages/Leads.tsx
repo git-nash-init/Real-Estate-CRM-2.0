@@ -72,6 +72,7 @@ export const Leads: React.FC = () => {
   const [profileMap, setProfileMap] = useState<Map<string, string>>(new Map());
   const [sourcingManagerMap, setSourcingManagerMap] = useState<Map<string, string>>(new Map());
   const [telecallerMap, setTelecallerMap] = useState<Map<string, string>>(new Map());
+  const [closingTeamMap, setClosingTeamMap] = useState<Map<string, string>>(new Map());
   const [uniqueStatuses, setUniqueStatuses] = useState<string[]>([]);
   const [uniqueSources, setUniqueSources] = useState<string[]>([]);
 
@@ -195,6 +196,7 @@ export const Leads: React.FC = () => {
           const roleMap = new Map(rolesRes.data.map(r => [r.id, r.name]));
           const smMap = new Map<string, string>();
           const tcMap = new Map<string, string>();
+          const cmMap = new Map<string, string>();
 
           userRolesRes.data.forEach(ur => {
             const rName = roleMap.get(ur.role_id);
@@ -206,10 +208,14 @@ export const Leads: React.FC = () => {
               if (rName === 'telecaller' || rName === 'telecaller_tl') {
                 tcMap.set(ur.user_id, pName);
               }
+              if (rName === 'closing_manager' || rName === 'closing_tl' || rName === 'site_head') {
+                cmMap.set(ur.user_id, pName);
+              }
             }
           });
           setSourcingManagerMap(smMap);
           setTelecallerMap(tcMap);
+          setClosingTeamMap(cmMap);
         }
       }
     } catch (err) {
@@ -1725,7 +1731,7 @@ export const Leads: React.FC = () => {
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
                         <option value="">Select Owner...</option>
-                        {Array.from(profileMap.entries()).map(([id, name]) => (
+                        {Array.from(closingTeamMap.entries()).map(([id, name]) => (
                           <option key={id} value={id}>{name}</option>
                         ))}
                       </select>
