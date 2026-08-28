@@ -311,6 +311,10 @@ async function outboxWorkerLoop() {
 const app = express();
 app.use(express.json());
 
+// Public health checks for UptimeRobot / pingers (no API key required)
+app.get('/', (_req, res) => res.status(200).send('WhatsApp Gateway is active'));
+app.get('/health', (_req, res) => res.status(200).json({ status: 'ok', uptime: process.uptime() }));
+
 function requireApiKey(req, res, next) {
   if (!GATEWAY_API_KEY) return next(); // no key configured — open (dev only)
   const key = req.header('x-api-key');
