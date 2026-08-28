@@ -70,6 +70,8 @@ export const Leads: React.FC = () => {
   // Dynamic filter option lists (populated from DB)
   const [projectMap, setProjectMap] = useState<Map<string, string>>(new Map());
   const [profileMap, setProfileMap] = useState<Map<string, string>>(new Map());
+  const [sourcingManagerMap, setSourcingManagerMap] = useState<Map<string, string>>(new Map());
+  const [telecallerMap, setTelecallerMap] = useState<Map<string, string>>(new Map());
   const [uniqueStatuses, setUniqueStatuses] = useState<string[]>([]);
   const [uniqueSources, setUniqueSources] = useState<string[]>([]);
 
@@ -174,17 +176,41 @@ export const Leads: React.FC = () => {
       console.error('Unexpected Projects fetch exception:', err);
     }
 
-    // 2. Load Sourcing Managers from public.user_profiles
+    // 2. Load User Profiles and Roles for filtering Sourcing Managers / Telecallers
     try {
-      const { data, error: profilesError } = await supabase
-        .from('user_profiles')
-        .select('id, full_name');
+      const [profilesRes, rolesRes, userRolesRes] = await Promise.all([
+        supabase.from('user_profiles').select('id, full_name'),
+        supabase.from('roles').select('id, name'),
+        supabase.from('user_roles').select('user_id, role_id')
+      ]);
       
-      if (profilesError) {
-        console.error('Supabase User Profiles API Error:', profilesError.message, profilesError.details);
-      } else if (data) {
-        console.log(`Supabase Profiles loaded: ${data.length} records`);
-        setProfileMap(new Map(data.map(u => [u.id, u.full_name])));
+      if (profilesRes.error) {
+        console.error('Supabase User Profiles API Error:', profilesRes.error.message);
+      } else if (profilesRes.data) {
+        console.log(`Supabase Profiles loaded: ${profilesRes.data.length} records`);
+        const allProfiles = new Map(profilesRes.data.map(u => [u.id, u.full_name]));
+        setProfileMap(allProfiles);
+        
+        if (rolesRes.data && userRolesRes.data) {
+          const roleMap = new Map(rolesRes.data.map(r => [r.id, r.name]));
+          const smMap = new Map<string, string>();
+          const tcMap = new Map<string, string>();
+
+          userRolesRes.data.forEach(ur => {
+            const rName = roleMap.get(ur.role_id);
+            const pName = allProfiles.get(ur.user_id);
+            if (rName && pName) {
+              if (rName === 'sourcing_manager' || rName === 'sourcing_manager_tl') {
+                smMap.set(ur.user_id, pName);
+              }
+              if (rName === 'telecaller' || rName === 'telecaller_tl') {
+                tcMap.set(ur.user_id, pName);
+              }
+            }
+          });
+          setSourcingManagerMap(smMap);
+          setTelecallerMap(tcMap);
+        }
       }
     } catch (err) {
       console.error('Unexpected Profiles fetch exception:', err);
@@ -1668,7 +1694,7 @@ export const Leads: React.FC = () => {
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
                         <option value="">Select Sourcing Manager...</option>
-                        {Array.from(profileMap.entries()).map(([id, name]) => (
+                        {Array.from(sourcingManagerMap.entries()).map(([id, name]) => (
                           <option key={id} value={id}>{name}</option>
                         ))}
                       </select>
@@ -1683,7 +1709,7 @@ export const Leads: React.FC = () => {
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
                         <option value="">Select Telecaller...</option>
-                        {Array.from(profileMap.entries()).map(([id, name]) => (
+                        {Array.from(telecallerMap.entries()).map(([id, name]) => (
                           <option key={id} value={id}>{name}</option>
                         ))}
                       </select>
