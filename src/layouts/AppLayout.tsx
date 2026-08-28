@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useNotifications } from '../hooks/useNotifications';
+import { useWhatsAppSentToast } from '../hooks/useWhatsAppSentToast';
 import { QueryFailureOverlay } from '../components/QueryFailureOverlay';
 import { GlobalSearch } from '../components/GlobalSearch';
 import {
@@ -38,6 +39,7 @@ export const AppLayout: React.FC = () => {
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
   const { notifications, unreadCount, markAsRead, markAllAsRead, justArrived, dismissJustArrived } = useNotifications();
+  const { toast: waSentToast, dismiss: dismissWaSent } = useWhatsAppSentToast();
 
   const navigationItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
@@ -295,6 +297,7 @@ export const AppLayout: React.FC = () => {
       </div>
       <QueryFailureOverlay />
 
+      {/* Existing notification toast — bottom-centre */}
       {justArrived && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[80] bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-bottom-4 duration-200">
           <Bell className="h-4 w-4 text-indigo-400 flex-shrink-0" />
@@ -305,6 +308,44 @@ export const AppLayout: React.FC = () => {
           <button onClick={dismissJustArrived} className="ml-2 text-slate-400 hover:text-white">
             <X className="h-3.5 w-3.5" />
           </button>
+        </div>
+      )}
+
+      {/* WhatsApp message delivered toast — bottom-right */}
+      {waSentToast && (
+        <div className="fixed bottom-6 right-6 z-[80] max-w-xs w-full animate-in fade-in slide-in-from-bottom-4 duration-200">
+          <div className="bg-white border border-emerald-200 rounded-2xl shadow-2xl overflow-hidden">
+            {/* Green header bar */}
+            <div className="bg-emerald-500 px-4 py-2.5 flex items-center gap-2">
+              <span className="text-lg leading-none">✅</span>
+              <span className="text-white font-bold text-sm tracking-tight">WhatsApp Message Sent</span>
+              <button
+                onClick={dismissWaSent}
+                className="ml-auto text-emerald-100 hover:text-white transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            {/* Body */}
+            <div className="px-4 py-3 space-y-1">
+              {waSentToast.to_phone && (
+                <p className="text-xs text-slate-500">
+                  <span className="font-semibold text-slate-700">To: </span>
+                  +{waSentToast.to_phone}
+                </p>
+              )}
+              {waSentToast.message && (
+                <p className="text-xs text-slate-600 line-clamp-2 italic">
+                  &ldquo;{waSentToast.message.slice(0, 100)}{waSentToast.message.length > 100 ? '…' : ''}&rdquo;
+                </p>
+              )}
+              <p className="text-[10px] text-slate-400 pt-0.5">Delivered by WhatsApp Gateway · {new Date().toLocaleTimeString('en-IN')}</p>
+            </div>
+            {/* Auto-dismiss progress bar */}
+            <div className="h-1 bg-emerald-100">
+              <div className="h-1 bg-emerald-400 animate-[shrink_5s_linear_forwards]" style={{ transformOrigin: 'left' }} />
+            </div>
+          </div>
         </div>
       )}
     </div>

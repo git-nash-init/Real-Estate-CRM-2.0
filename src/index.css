@@ -49,3 +49,9 @@ body {
   background-color: #f8fafc;
   color: #0f172a;
 }
+
+/* WhatsApp sent-toast progress bar countdown animation */
+@keyframes shrink {
+  from { width: 100%; }
+  to   { width: 0%; }
+}
