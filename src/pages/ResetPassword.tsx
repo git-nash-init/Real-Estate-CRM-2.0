@@ -52,8 +52,8 @@ export const ResetPassword: React.FC = () => {
       if (updateError) {
         setError(updateError.message);
       } else {
+        await supabase.auth.signOut();
         setSuccess(true);
-        setTimeout(() => navigate('/'), 2000);
       }
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');
@@ -93,10 +93,16 @@ export const ResetPassword: React.FC = () => {
         )}
 
         {success ? (
-          <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-4 rounded-xl flex flex-col items-center text-center space-y-2">
-            <CheckCircle className="h-10 w-10 text-emerald-600 flex-shrink-0" />
-            <h4 className="font-bold">Password Updated</h4>
-            <p className="text-sm text-emerald-700">Redirecting you to the dashboard...</p>
+          <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-6 py-8 rounded-xl flex flex-col items-center text-center space-y-3">
+            <CheckCircle className="h-12 w-12 text-emerald-600 flex-shrink-0" />
+            <h4 className="font-bold text-xl">Password Updated!</h4>
+            <p className="text-sm text-emerald-700">Your password has been successfully reset. Please log in with your new credentials.</p>
+            <button
+              onClick={() => navigate('/')}
+              className="mt-4 w-full flex items-center justify-center px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold shadow-md transition-all"
+            >
+              Back to Login
+            </button>
           </div>
         ) : sessionReady ? (
           <form className="space-y-6" onSubmit={handleSubmit}>
