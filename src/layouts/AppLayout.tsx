@@ -42,25 +42,36 @@ export const AppLayout: React.FC = () => {
   const { notifications, unreadCount, markAsRead, markAllAsRead, justArrived, dismissJustArrived } = useNotifications();
   const { toast: waSentToast, dismiss: dismissWaSent } = useWhatsAppSentToast();
 
+  // Channel Partner scoping: client's explicit requirement is that a CP
+  // sees ONLY their own leads/bulk-assigned leads, bookings and brokerage
+  // on those leads, and their own reports -- "nothing else". RLS is the
+  // real data boundary (see migration scope_channel_partner_data_access),
+  // but the sidebar previously showed a CP nearly every feature in the
+  // app regardless -- Follow-ups, Site Visits, Projects, Inventory, the
+  // full Channel Partners directory (every OTHER partner's info),
+  // CP Outreach, Marketing, Attendance, Tasks were all visible with no
+  // role restriction at all. hiddenForRoles closes that off at the nav
+  // level to match what RLS now actually allows them to do something
+  // useful with.
   const navigationItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     { name: 'Leads', path: '/leads', icon: UserCheck },
     { name: 'Bulk Uploads', path: '/bulk-uploads', icon: FileSpreadsheet, allowedRoles: ['super_admin', 'site_head', 'sourcing_manager', 'sourcing_manager_tl', 'telecaller', 'channel_partner'] },
-    { name: 'Follow-ups', path: '/follow-ups', icon: PhoneCall },
-    { name: 'Site Visits', path: '/site-visits', icon: MapPin },
-    { name: 'Projects', path: '/projects', icon: Building2 },
-    { name: 'Inventory', path: '/inventory', icon: Home },
+    { name: 'Follow-ups', path: '/follow-ups', icon: PhoneCall, hiddenForRoles: ['channel_partner'] },
+    { name: 'Site Visits', path: '/site-visits', icon: MapPin, hiddenForRoles: ['channel_partner'] },
+    { name: 'Projects', path: '/projects', icon: Building2, hiddenForRoles: ['channel_partner'] },
+    { name: 'Inventory', path: '/inventory', icon: Home, hiddenForRoles: ['channel_partner'] },
     { name: 'Bookings', path: '/bookings', icon: CalendarCheck },
     { name: 'Payments', path: '/payments', icon: CreditCard },
-    { name: 'Channel Partners', path: '/channel-partners', icon: Users },
-    { name: 'CP Outreach', path: '/cp-outreach', icon: Handshake },
-    { name: 'Marketing', path: '/marketing', icon: Megaphone },
+    { name: 'Channel Partners', path: '/channel-partners', icon: Users, hiddenForRoles: ['channel_partner'] },
+    { name: 'CP Outreach', path: '/cp-outreach', icon: Handshake, hiddenForRoles: ['channel_partner'] },
+    { name: 'Marketing', path: '/marketing', icon: Megaphone, hiddenForRoles: ['channel_partner'] },
     { name: 'Employees', path: '/employees', icon: Briefcase, allowedRoles: ['super_admin'] },
-    { name: 'Attendance', path: '/attendance', icon: ClipboardCheck },
-    { name: 'Tasks', path: '/tasks', icon: CheckSquare },
+    { name: 'Attendance', path: '/attendance', icon: ClipboardCheck, hiddenForRoles: ['channel_partner'] },
+    { name: 'Tasks', path: '/tasks', icon: CheckSquare, hiddenForRoles: ['channel_partner'] },
     { name: 'Reports', path: '/reports', icon: BarChart3 },
     { name: 'Expenses', path: '/expenses', icon: Wallet, allowedRoles: ['super_admin'] },
-    { name: 'Settings', path: '/settings', icon: Settings },
+    { name: 'Settings', path: '/settings', icon: Settings, hiddenForRoles: ['channel_partner'] },
   ].filter(item => {
     if (item.name === 'Expenses' && profile?.email === 'anilhiwale17@gmail.com') {
       return false;
@@ -118,7 +129,10 @@ export const AppLayout: React.FC = () => {
         {/* Sidebar Navigation */}
         <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
           {navigationItems
-            .filter((item) => !item.allowedRoles || (role && item.allowedRoles.includes(role)))
+            .filter((item) =>
+              (!item.allowedRoles || (role && item.allowedRoles.includes(role))) &&
+              (!('hiddenForRoles' in item) || !role || !item.hiddenForRoles?.includes(role))
+            )
             .map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;

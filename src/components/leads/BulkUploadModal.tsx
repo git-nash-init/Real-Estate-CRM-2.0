@@ -11,7 +11,15 @@ interface BulkUploadModalProps {
 }
 
 export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClose, onUploadComplete }) => {
-  const { user } = useAuth();
+  const { user, role } = useAuth();
+  // A channel partner uploading their own batch isn't "assigning to a CP"
+  // (they ARE the CP) and has no business picking which internal
+  // telecaller follows up -- that's a staff decision. Both sections below
+  // are hidden for them; their own channel_partners.id is resolved and
+  // attached automatically instead of showing a dropdown of every partner
+  // (which RLS scopes to just their own row anyway, so it'd be a
+  // dropdown with exactly one option -- confusing, not useful).
+  const isChannelPartner = role === 'channel_partner';
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [file, setFile] = useState<File | null>(null);
@@ -49,6 +57,16 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
       // Fetch Projects
       const { data: projData } = await supabase.from('projects').select('id, project_name');
       if (projData) setProjects(projData.map(p => ({ id: p.id, name: p.project_name })));
+
+      if (isChannelPartner) {
+        // Resolve their own channel_partners.id directly -- not filtered
+        // by status='active', since a partner uploading for themselves
+        // should work regardless of that flag; RLS already scopes this
+        // query to their own row (user_id = auth.uid()) regardless.
+        const { data: ownCp } = await supabase.from('channel_partners').select('id').eq('user_id', user?.id).maybeSingle();
+        if (ownCp) setChannelPartnerId(ownCp.id);
+        return; // no telecaller list needed -- that section is hidden for them
+      }
 
       // Fetch Channel Partners
       const { data: cpData } = await supabase.from('channel_partners').select('id, name').eq('status', 'active');
@@ -116,7 +134,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
     setError(null);
     setSuccess(null);
 
-    if (telecallerIds.length === 0) {
+    if (!isChannelPartner && telecallerIds.length === 0) {
       setError('Please select at least one telecaller before uploading.');
       setLoading(false);
       return;
@@ -285,40 +303,48 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
               </select>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Channel Partner (Optional)</label>
-              <select
-                value={channelPartnerId}
-                onChange={(e) => setChannelPartnerId(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-              >
-                <option value="">No specific partner</option>
-                {partners.map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Assign Telecallers (Round-Robin)</label>
-              <div className="border border-slate-300 rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
-                {telecallers.length === 0 ? (
-                  <p className="text-sm text-slate-500">No telecallers found.</p>
-                ) : (
-                  telecallers.map(tc => (
-                    <label key={tc.id} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={telecallerIds.includes(tc.id)}
-                        onChange={() => toggleTelecaller(tc.id)}
-                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                      />
-                      {tc.name}
-                    </label>
-                  ))
-                )}
+            {isChannelPartner ? (
+              <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-4 text-sm text-indigo-800">
+                These leads will be attributed to you automatically as the referring Channel Partner. Staff will assign a telecaller after review.
               </div>
-            </div>
+            ) : (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Channel Partner (Optional)</label>
+                  <select
+                    value={channelPartnerId}
+                    onChange={(e) => setChannelPartnerId(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                  >
+                    <option value="">No specific partner</option>
+                    {partners.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Assign Telecallers (Round-Robin)</label>
+                  <div className="border border-slate-300 rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
+                    {telecallers.length === 0 ? (
+                      <p className="text-sm text-slate-500">No telecallers found.</p>
+                    ) : (
+                      telecallers.map(tc => (
+                        <label key={tc.id} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={telecallerIds.includes(tc.id)}
+                            onChange={() => toggleTelecaller(tc.id)}
+                            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          />
+                          {tc.name}
+                        </label>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
 

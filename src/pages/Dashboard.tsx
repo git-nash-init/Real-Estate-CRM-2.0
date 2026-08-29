@@ -124,9 +124,31 @@ const MyTasksPanel: React.FC<{ userId: string | undefined }> = ({ userId }) => {
 };
 
 export const Dashboard: React.FC = () => {
-  const { profile, user } = useAuth();
+  const { profile, user, role } = useAuth();
   const navigate = useNavigate();
-  
+  const isChannelPartner = role === 'channel_partner';
+
+  // Brokerage summary for a channel partner. leads/bookings counts above
+  // already come out correctly scoped to just their own records now that
+  // leads_select/bookings_select include the channel_partner_id branch
+  // (see migration scope_channel_partner_data_access) -- RLS filters what
+  // the unfiltered queries below can even return, so no query change was
+  // needed there. This is the one number that table doesn't have: their
+  // own referral earnings.
+  const [brokerage, setBrokerage] = useState<{ pending: number; paid: number } | null>(null);
+  useEffect(() => {
+    if (!isChannelPartner) return;
+    supabase
+      .from('cp_commissions')
+      .select('commission_amount, status')
+      .then(({ data, error }) => {
+        if (error) return reportQueryError('Dashboard: brokerage summary', error);
+        const pending = (data || []).filter(c => c.status !== 'paid').reduce((s, c) => s + (c.commission_amount || 0), 0);
+        const paid = (data || []).filter(c => c.status === 'paid').reduce((s, c) => s + (c.commission_amount || 0), 0);
+        setBrokerage({ pending, paid });
+      });
+  }, [isChannelPartner]);
+
   // Filter states
   const [projectFilter, setProjectFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -290,7 +312,9 @@ export const Dashboard: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
         <div>
           <h2 className="text-2xl font-bold text-slate-900">Welcome, {profile?.full_name || 'Super Admin'}</h2>
-          <p className="text-slate-500 text-sm">CRM Overview & Live Operations Control Center.</p>
+          <p className="text-slate-500 text-sm">
+            {isChannelPartner ? 'Your referred leads, bookings and brokerage — nothing else.' : 'CRM Overview & Live Operations Control Center.'}
+          </p>
         </div>
         <div className="flex items-center space-x-3">
           <button
@@ -330,9 +354,9 @@ export const Dashboard: React.FC = () => {
         {/* Total Leads */}
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
           <div className="space-y-2">
-            <p className="text-slate-500 text-xs font-semibold tracking-wider uppercase">Total Leads</p>
+            <p className="text-slate-500 text-xs font-semibold tracking-wider uppercase">{isChannelPartner ? 'My Referred Leads' : 'Total Leads'}</p>
             <h3 className="text-3xl font-extrabold text-slate-900">{stats.totalLeads}</h3>
-            <p className="text-slate-400 text-xs font-medium">Synced from Supabase</p>
+            <p className="text-slate-400 text-xs font-medium">{isChannelPartner ? 'Leads you created or were assigned' : 'Synced from Supabase'}</p>
           </div>
           <div className="bg-indigo-50 p-4 rounded-xl text-indigo-600">
             <Users className="h-6 w-6" />
@@ -366,7 +390,7 @@ export const Dashboard: React.FC = () => {
         {/* Total Bookings / Collections */}
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
           <div className="space-y-2">
-            <p className="text-slate-500 text-xs font-semibold tracking-wider uppercase">Total Bookings</p>
+            <p className="text-slate-500 text-xs font-semibold tracking-wider uppercase">{isChannelPartner ? 'My Bookings' : 'Total Bookings'}</p>
             <h3 className="text-3xl font-extrabold text-slate-900">
               ₹{stats.totalBookingsValue.toLocaleString('en-IN')}
             </h3>
@@ -376,6 +400,24 @@ export const Dashboard: React.FC = () => {
             <IndianRupee className="h-6 w-6" />
           </div>
         </div>
+
+        {/* Brokerage — channel_partner only */}
+        {isChannelPartner && (
+          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+            <div className="space-y-2">
+              <p className="text-slate-500 text-xs font-semibold tracking-wider uppercase">My Brokerage</p>
+              <h3 className="text-3xl font-extrabold text-slate-900">
+                ₹{(brokerage?.paid ?? 0).toLocaleString('en-IN')}
+              </h3>
+              <p className="text-slate-400 text-xs font-medium">
+                {brokerage ? `₹${brokerage.pending.toLocaleString('en-IN')} pending payout` : 'Loading...'}
+              </p>
+            </div>
+            <div className="bg-emerald-50 p-4 rounded-xl text-emerald-600">
+              <IndianRupee className="h-6 w-6" />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* FILTER & SEARCH TOOLBAR */}
@@ -444,7 +486,7 @@ export const Dashboard: React.FC = () => {
                   <th className="py-3 px-5">Lead Name</th>
                   <th className="py-3 px-5">Contact</th>
                   <th className="py-3 px-5">Project</th>
-                  <th className="py-3 px-5">Sourcing Manager</th>
+                  {!isChannelPartner && <th className="py-3 px-5">Sourcing Manager</th>}
                   <th className="py-3 px-5">Status</th>
                   <th className="py-3 px-5">Created At</th>
                 </tr>
@@ -458,9 +500,11 @@ export const Dashboard: React.FC = () => {
                       <td className="py-3.5 px-5 text-sm text-slate-600">
                         {projectMap.get(lead.project_id || '') || 'N/A'}
                       </td>
-                      <td className="py-3.5 px-5 text-sm text-slate-600">
-                        {profileMap.get(lead.owner_id || '') || 'N/A'}
-                      </td>
+                      {!isChannelPartner && (
+                        <td className="py-3.5 px-5 text-sm text-slate-600">
+                          {profileMap.get(lead.owner_id || '') || 'N/A'}
+                        </td>
+                      )}
                       <td className="py-3.5 px-5">
                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${
                           lead.status?.toLowerCase() === 'booked' ? 'bg-emerald-50 text-emerald-700' :
@@ -478,7 +522,7 @@ export const Dashboard: React.FC = () => {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={6} className="py-16 text-center text-slate-400">
+                    <td colSpan={isChannelPartner ? 5 : 6} className="py-16 text-center text-slate-400">
                       <div className="flex flex-col items-center justify-center space-y-3">
                         <div className="bg-slate-50 p-4 rounded-full text-slate-300">
                           <Users className="h-8 w-8" />

@@ -353,12 +353,18 @@ export const Leads: React.FC = () => {
     if (window.confirm(`Are you sure you want to permanently delete lead "${lead.customer_name}"?`)) {
       setLoading(true);
       try {
-        const { error } = await supabase.from('leads').delete().eq('id', lead.id);
+        const { data, error } = await supabase.from('leads').delete().eq('id', lead.id).select();
         if (error) throw error;
+        
+        if (!data || data.length === 0) {
+          throw new Error('Permission denied. You do not have the required roles to delete this lead.');
+        }
+
         setNotification({ type: 'success', message: 'Lead deleted successfully.' });
         fetchLeads();
       } catch (err: any) {
         setNotification({ type: 'error', message: err.message || 'Failed to delete lead' });
+      } finally {
         setLoading(false);
       }
     }
@@ -586,13 +592,21 @@ export const Leads: React.FC = () => {
     setPage(0);
   };
 
-  // URL query parameter detector to open creation modal
+  // URL query parameter detector to open creation modal. Guarded by the
+  // same role check as the "+ New Lead" button itself -- without this,
+  // /leads?new=true (e.g. Dashboard's own "+ New Lead" button, or just
+  // typing the URL) opened the create modal for every role regardless of
+  // whether the button was even shown to them. Confirmed live as the real
+  // bypass a channel_partner could use to add leads manually, which the
+  // client explicitly wants blocked (bulk upload stays available to them;
+  // this is specifically about the one-by-one add path).
+  const canCreateLead = role === 'sourcing_manager' || role === 'sourcing_manager_tl' || role === 'super_admin' || role === 'site_head';
   useEffect(() => {
     if (searchParams.get('new') === 'true') {
-      setIsCreateOpen(true);
+      if (canCreateLead) setIsCreateOpen(true);
       setSearchParams({}, { replace: true });
     }
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, canCreateLead]);
 
   // Alert auto-dismiss timer
   useEffect(() => {
@@ -873,7 +887,7 @@ export const Leads: React.FC = () => {
             </button>
           )}
 
-          {(role === 'sourcing_manager' || role === 'sourcing_manager_tl' || role === 'super_admin' || role === 'site_head') && (
+          {(role === 'sourcing_manager' || role === 'sourcing_manager_tl' || role === 'super_admin' || role === 'site_head' || role === 'channel_partner') && (
             <button
               onClick={() => setIsBulkUploadOpen(true)}
               className="flex items-center gap-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-4 py-2 rounded-xl text-sm font-semibold transition-all focus:outline-none shadow-sm"
@@ -883,12 +897,14 @@ export const Leads: React.FC = () => {
             </button>
           )}
 
-          <button
-            onClick={() => setIsCreateOpen(true)}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
-          >
-            + New Lead
-          </button>
+          {canCreateLead && (
+            <button
+              onClick={() => setIsCreateOpen(true)}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
+            >
+              + New Lead
+            </button>
+          )}
         </div>
       </div>
 

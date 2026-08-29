@@ -62,16 +62,24 @@ function App() {
 
             {/* Sidebar navigation stubs */}
             <Route path="leads" element={<Leads />} />
-            <Route path="follow-ups" element={<Followups />} />
-            <Route path="site-visits" element={<SiteVisits />} />
-            <Route path="projects" element={<Projects />} />
-            <Route path="inventory" element={<Inventory />} />
+            {/* Channel Partner scoping (client's explicit "nothing else"
+                requirement): these routes were reachable by a CP via direct
+                URL even though the sidebar hid them (route-level guards
+                previously only existed for Employees/Expenses). RLS is the
+                real data boundary, but Follow-ups/Site Visits/Projects/
+                Inventory/the full Channel Partners directory/CP Outreach/
+                Marketing carry no meaningful CP-scoped view, so they're
+                excluded outright rather than rendered empty. */}
+            <Route path="follow-ups" element={<ProtectedRoute excludedRoles={['channel_partner']}><Followups /></ProtectedRoute>} />
+            <Route path="site-visits" element={<ProtectedRoute excludedRoles={['channel_partner']}><SiteVisits /></ProtectedRoute>} />
+            <Route path="projects" element={<ProtectedRoute excludedRoles={['channel_partner']}><Projects /></ProtectedRoute>} />
+            <Route path="inventory" element={<ProtectedRoute excludedRoles={['channel_partner']}><Inventory /></ProtectedRoute>} />
             <Route path="bookings" element={<Bookings />} />
             <Route path="payments" element={<Payments />} />
-            <Route path="channel-partners" element={<ChannelPartners />} />
-            <Route path="channel-partners/:id" element={<ChannelPartnerDetails />} />
-            <Route path="cp-outreach" element={<CPOutreach />} />
-            <Route path="marketing" element={<Marketing />} />
+            <Route path="channel-partners" element={<ProtectedRoute excludedRoles={['channel_partner']}><ChannelPartners /></ProtectedRoute>} />
+            <Route path="channel-partners/:id" element={<ProtectedRoute excludedRoles={['channel_partner']}><ChannelPartnerDetails /></ProtectedRoute>} />
+            <Route path="cp-outreach" element={<ProtectedRoute excludedRoles={['channel_partner']}><CPOutreach /></ProtectedRoute>} />
+            <Route path="marketing" element={<ProtectedRoute excludedRoles={['channel_partner']}><Marketing /></ProtectedRoute>} />
             {/* Account/credential management — restricted to super_admin
                 only per the client's explicit request: creating logins,
                 sharing credentials, and activating/deactivating accounts
@@ -95,8 +103,8 @@ function App() {
                 </ProtectedRoute>
               }
             />
-            <Route path="attendance" element={<Attendance />} />
-            <Route path="tasks" element={<Tasks />} />
+            <Route path="attendance" element={<ProtectedRoute excludedRoles={['channel_partner']}><Attendance /></ProtectedRoute>} />
+            <Route path="tasks" element={<ProtectedRoute excludedRoles={['channel_partner']}><Tasks /></ProtectedRoute>} />
             {/* Open to every role now — Reports.tsx itself decides what a
                 given user sees (full business view for admins, a
                 bifurcated team view for site_head/TLs, a personal view for
@@ -107,7 +115,7 @@ function App() {
             />
             <Route
               path="settings"
-              element={<Settings />}
+              element={<ProtectedRoute excludedRoles={['channel_partner']}><Settings /></ProtectedRoute>}
             />
             <Route
               path="bulk-uploads"

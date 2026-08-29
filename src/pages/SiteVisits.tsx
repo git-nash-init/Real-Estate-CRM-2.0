@@ -106,7 +106,14 @@ export const SiteVisits: React.FC = () => {
   const [quickCreateError, setQuickCreateError] = useState<string | null>(null);
   const [quickCustomerName, setQuickCustomerName] = useState('');
   const [quickCustomerMobile, setQuickCustomerMobile] = useState('');
-  const [quickVisitAt, setQuickVisitAt] = useState('');
+  // Split into date + 12-hour time + AM/PM rather than a single
+  // <input type="datetime-local">, which renders in whatever 12h/24h
+  // format the visitor's OS is set to -- there's no HTML/CSS way to force
+  // AM/PM display on that input. This guarantees AM/PM every time.
+  const [quickVisitDate, setQuickVisitDate] = useState('');
+  const [quickVisitHour, setQuickVisitHour] = useState('12');
+  const [quickVisitMinute, setQuickVisitMinute] = useState('00');
+  const [quickVisitAmPm, setQuickVisitAmPm] = useState<'AM' | 'PM'>('PM');
   const [quickChannelPartnerId, setQuickChannelPartnerId] = useState('');
   const [quickProjectId, setQuickProjectId] = useState('');
   const [quickReferencedBy, setQuickReferencedBy] = useState('');
@@ -166,7 +173,10 @@ export const SiteVisits: React.FC = () => {
   const resetQuickForm = () => {
     setQuickCustomerName('');
     setQuickCustomerMobile('');
-    setQuickVisitAt('');
+    setQuickVisitDate('');
+    setQuickVisitHour('12');
+    setQuickVisitMinute('00');
+    setQuickVisitAmPm('PM');
     setQuickChannelPartnerId('');
     setQuickProjectId('');
     setQuickReferencedBy('');
@@ -180,9 +190,29 @@ export const SiteVisits: React.FC = () => {
     return `${day}-${month}-${d.getFullYear()}`;
   };
 
+  // Combines the date + 12-hour time + AM/PM fields into a real Date,
+  // converting to 24-hour internally (JS Date always works in 24h).
+  const buildQuickVisitDateTime = (): Date | null => {
+    if (!quickVisitDate) return null;
+    let hour24 = parseInt(quickVisitHour, 10) % 12;
+    if (quickVisitAmPm === 'PM') hour24 += 12;
+    const [year, month, day] = quickVisitDate.split('-').map(Number);
+    return new Date(year, month - 1, day, hour24, parseInt(quickVisitMinute, 10));
+  };
+
+  // 12-hour label for the WhatsApp message, e.g. "02:30 PM".
+  const formatTime12h = (d: Date) => {
+    let h = d.getHours() % 12;
+    if (h === 0) h = 12;
+    const m = String(d.getMinutes()).padStart(2, '0');
+    const ampm = d.getHours() >= 12 ? 'PM' : 'AM';
+    return `${String(h).padStart(2, '0')}:${m} ${ampm}`;
+  };
+
   const handleQuickCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!quickCustomerName.trim() || !quickCustomerMobile.trim() || !quickVisitAt || !quickChannelPartnerId || !quickProjectId || !quickReferencedBy.trim()) {
+    const visitDateTime = buildQuickVisitDateTime();
+    if (!quickCustomerName.trim() || !quickCustomerMobile.trim() || !visitDateTime || !quickChannelPartnerId || !quickProjectId || !quickReferencedBy.trim()) {
       setQuickCreateError('All fields are required.');
       return;
     }
@@ -209,7 +239,7 @@ export const SiteVisits: React.FC = () => {
         .insert([{
           customer_name: quickCustomerName.trim(),
           customer_mobile: customerPhone,
-          visit_at: new Date(quickVisitAt).toISOString(),
+          visit_at: visitDateTime.toISOString(),
           channel_partner_id: quickChannelPartnerId,
           project_id: quickProjectId,
           verification_code: verificationCode,
@@ -223,7 +253,7 @@ export const SiteVisits: React.FC = () => {
 
       const cp = channelPartners.find(c => c.id === quickChannelPartnerId);
       const projectName = projectMap.get(quickProjectId) || 'the project';
-      const visitDateLabel = formatDDMMYYYY(new Date(quickVisitAt));
+      const visitDateLabel = formatDDMMYYYY(visitDateTime);
 
       // Exact template requested — identical text sent to both the
       // customer and the Channel Partner, merge fields filled in:
@@ -579,7 +609,7 @@ export const SiteVisits: React.FC = () => {
                         <div className="font-semibold text-slate-900">{v.customer_name}</div>
                         <div className="text-xs text-slate-500">{v.customer_mobile}</div>
                       </td>
-                      <td className="py-3 px-6 text-slate-600">{new Date(v.visit_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</td>
+                      <td className="py-3 px-6 text-slate-600">{formatDDMMYYYY(new Date(v.visit_at))} · {formatTime12h(new Date(v.visit_at))}</td>
                       <td className="py-3 px-6 text-slate-600">{projectMap.get(v.project_id) || 'N/A'}</td>
                       <td className="py-3 px-6 text-slate-600">{cp ? `${cp.cp_code} - ${cp.name}` : 'N/A'}</td>
                       <td className="py-3 px-6">
@@ -953,13 +983,43 @@ export const SiteVisits: React.FC = () => {
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Site Visit Date &amp; Time *</label>
-                  <input
-                    type="datetime-local"
-                    required
-                    value={quickVisitAt}
-                    onChange={(e) => setQuickVisitAt(e.target.value)}
-                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
-                  />
+                  <div className="grid grid-cols-4 gap-2">
+                    <input
+                      type="date"
+                      required
+                      value={quickVisitDate}
+                      onChange={(e) => setQuickVisitDate(e.target.value)}
+                      className="col-span-2 block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                    />
+                    <select
+                      value={quickVisitHour}
+                      onChange={(e) => setQuickVisitHour(e.target.value)}
+                      className="block w-full px-2 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                    >
+                      {Array.from({ length: 12 }, (_, i) => i + 1).map(h => (
+                        <option key={h} value={String(h)}>{String(h).padStart(2, '0')}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={quickVisitAmPm}
+                      onChange={(e) => setQuickVisitAmPm(e.target.value as 'AM' | 'PM')}
+                      className="block w-full px-2 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                    >
+                      <option value="AM">AM</option>
+                      <option value="PM">PM</option>
+                    </select>
+                  </div>
+                  <div className="mt-2">
+                    <select
+                      value={quickVisitMinute}
+                      onChange={(e) => setQuickVisitMinute(e.target.value)}
+                      className="block w-28 px-2 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                    >
+                      {['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55'].map(m => (
+                        <option key={m} value={m}>:{m}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 <div>

@@ -233,12 +233,21 @@ async function processOutboxOnce() {
     return;
   }
 
+  // Fetch a batch, not just the single oldest row. Sessions are per-sender
+  // (see the `sessions` map keyed by created_by) -- if the oldest queued
+  // message's sender isn't connected, a single-row fetch would return
+  // *only* that row, we'd skip it, and return without ever looking at
+  // newer messages from OTHER senders who are connected right now. That
+  // starves the whole queue behind one disconnected account indefinitely.
+  // Confirmed live: two messages from an account that never scanned its QR
+  // sat at the front of the queue for hours, blocking every message
+  // queued after them from a different, fully-connected sender.
   const { data: rows, error } = await supabase
     .from('whatsapp_outbox')
     .select('*')
     .eq('status', 'queued')
     .order('created_at', { ascending: true })
-    .limit(1);
+    .limit(20);
 
   if (error) {
     logger.error({ error }, 'Failed to poll outbox');
@@ -246,20 +255,26 @@ async function processOutboxOnce() {
   }
   if (!rows || rows.length === 0) return;
 
-  const row = rows[0];
+  // Fail fast: any row with no sender can never be sent by anyone.
+  const orphaned = rows.filter((r) => !r.created_by);
+  for (const r of orphaned) {
+    logger.error({ id: r.id }, 'Message has no created_by user_id, marking as failed');
+    await supabase.from('whatsapp_outbox').update({ status: 'failed', error: 'No sender (created_by) assigned' }).eq('id', r.id);
+  }
+
+  const row = rows.find((r) => {
+    if (!r.created_by) return false;
+    const s = sessions.get(r.created_by);
+    return s && s.connectionState === 'open' && s.sock;
+  });
+
+  if (!row) {
+    logger.warn({ pending: rows.length }, 'No queued message has a currently-connected sender, skipping this cycle');
+    return;
+  }
+
   const senderUserId = row.created_by;
-
-  if (!senderUserId) {
-    logger.error({ id: row.id }, 'Message has no created_by user_id, marking as failed');
-    await supabase.from('whatsapp_outbox').update({ status: 'failed', error: 'No sender (created_by) assigned' }).eq('id', row.id);
-    return;
-  }
-
   const session = sessions.get(senderUserId);
-  if (!session || session.connectionState !== 'open' || !session.sock) {
-    logger.warn({ id: row.id, senderUserId }, 'Sender session is not open, skipping message for now');
-    return;
-  }
 
   const { data: claimed, error: claimErr } = await supabase
     .from('whatsapp_outbox')
