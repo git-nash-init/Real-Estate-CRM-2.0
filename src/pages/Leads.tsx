@@ -48,6 +48,7 @@ interface Lead {
   project_id: string | null;
   owner_id: string | null;
   channel_partner_id: string | null;
+  telecaller_id: string | null;
 }
 
 export const Leads: React.FC = () => {
