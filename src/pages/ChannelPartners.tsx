@@ -1087,17 +1087,19 @@ export const ChannelPartners: React.FC = () => {
                               >
                                 <Edit className="h-3.5 w-3.5" />
                               </button>
-                               <button
-                                onClick={() => setConfirmToggleCp(cp)}
-                                title={cp.status === 'active' || cp.status === 'ACTIVE' ? 'Deactivate' : 'Activate'}
-                                className={`p-1 border border-slate-200 rounded-lg transition-all ${
-                                  cp.status === 'active' || cp.status === 'ACTIVE' 
-                                    ? 'text-slate-400 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-100' 
-                                    : 'text-emerald-500 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-100'
-                                }`}
-                              >
-                                {cp.status === 'active' || cp.status === 'ACTIVE' ? <UserX className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}
-                              </button>
+                              {isSuperAdmin && (
+                                <button
+                                  onClick={() => setConfirmToggleCp(cp)}
+                                  title={cp.status === 'active' || cp.status === 'ACTIVE' ? 'Deactivate' : 'Activate'}
+                                  className={`p-1 border border-slate-200 rounded-lg transition-all ${
+                                    cp.status === 'active' || cp.status === 'ACTIVE'
+                                      ? 'text-slate-400 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-100'
+                                      : 'text-emerald-500 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-100'
+                                  }`}
+                                >
+                                  {cp.status === 'active' || cp.status === 'ACTIVE' ? <UserX className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}
+                                </button>
+                              )}
                             {isSuperAdmin && (
                                 <button
                                   onClick={() => handleDeleteCP(cp.id)}

@@ -27,6 +27,13 @@ export const isAdminLevel = (role: Role) =>
 export const canManageProjects = (role: Role) => isAdminLevel(role);
 export const canBulkAddUnits = (role: Role) => role === 'super_admin';
 
+// Creating a brand-new project is narrower than canManageProjects (which
+// still governs editing towers/floors/units for project_admin/site_head).
+// Client's explicit instruction: only super_admin can add a new project --
+// closing_manager and presales were both reaching this via an ungated
+// empty-state "+ Create Project" button the audit found.
+export const canCreateProject = (role: Role) => role === 'super_admin';
+
 // A2, A3: Financial & Booking destructive actions
 export const canCancelBooking = (role: Role) => role === 'super_admin';
 export const canEditPayment = (role: Role) => isAdminLevel(role);
@@ -37,8 +44,8 @@ export const canSendMarketingBlast = (role: Role) =>
   ['super_admin', 'closing_manager', 'marketing_head'].includes(role as string);
 
 // A5: Leads
-export const canCreateLead = (role: Role) => 
-  ['sourcing_manager', 'sourcing_manager_tl', 'super_admin', 'site_head'].includes(role as string);
+export const canCreateLead = (role: Role) =>
+  ['sourcing_manager', 'sourcing_manager_tl', 'super_admin', 'site_head', 'presales'].includes(role as string);
 
 export const canEditLead = (
   role: Role,

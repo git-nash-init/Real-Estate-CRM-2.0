@@ -138,6 +138,26 @@ export const SiteVisits: React.FC = () => {
   const [quickProjectId, setQuickProjectId] = useState('');
   const [quickReferencedBy, setQuickReferencedBy] = useState('');
 
+  // For presales specifically, "Referenced By" becomes a Sourcing Manager
+  // picker instead of free text -- per the client, a presales user logging
+  // a walk-in visit is crediting the Sourcing Manager who brought the lead
+  // in, not typing an arbitrary name. quickReferencedBy still just holds a
+  // name string underneath (unchanged DB column / WhatsApp message), only
+  // how it's populated differs.
+  const [sourcingManagers, setSourcingManagers] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    if (role !== 'presales') return;
+    (async () => {
+      const { data: roleRow } = await supabase.from('roles').select('id').eq('name', 'sourcing_manager').maybeSingle();
+      if (!roleRow) return;
+      const { data: userRoles } = await supabase.from('user_roles').select('user_id').eq('role_id', roleRow.id);
+      const userIds = (userRoles || []).map(ur => ur.user_id);
+      if (userIds.length === 0) return;
+      const { data: profiles } = await supabase.from('user_profiles').select('id, full_name').in('id', userIds);
+      setSourcingManagers((profiles || []).map(p => ({ id: p.id, name: p.full_name || 'Unnamed' })));
+    })();
+  }, [role]);
+
   const fetchQuickVisits = useCallback(async () => {
     const { data, error } = await supabase
       .from('quick_site_visits')
@@ -1087,15 +1107,31 @@ export const SiteVisits: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Referenced By *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Name of the person who referred this visit"
-                    value={quickReferencedBy}
-                    onChange={(e) => setQuickReferencedBy(e.target.value)}
-                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
-                  />
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                    {role === 'presales' ? 'Sourcing Manager *' : 'Referenced By *'}
+                  </label>
+                  {role === 'presales' ? (
+                    <select
+                      required
+                      value={quickReferencedBy}
+                      onChange={(e) => setQuickReferencedBy(e.target.value)}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
+                    >
+                      <option value="">Select Sourcing Manager...</option>
+                      {sourcingManagers.map(sm => (
+                        <option key={sm.id} value={sm.name}>{sm.name}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      required
+                      placeholder="Name of the person who referred this visit"
+                      value={quickReferencedBy}
+                      onChange={(e) => setQuickReferencedBy(e.target.value)}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
+                    />
+                  )}
                   <p className="text-[10px] text-slate-400 mt-1">Appears in the WhatsApp message as "Referred by {'{'}name{'}'}".</p>
                 </div>
 

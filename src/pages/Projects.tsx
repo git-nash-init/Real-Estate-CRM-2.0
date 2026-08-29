@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../hooks/useAuth';
-import { canManageProjects, canBulkAddUnits, isSuperAdmin } from '../utils/permissions';
+import { canManageProjects, canCreateProject, canBulkAddUnits, isSuperAdmin } from '../utils/permissions';
 import {
   Search,
   RefreshCw,
@@ -808,7 +808,7 @@ export const Projects: React.FC = () => {
                 <RefreshCw className={`h-4 w-4 text-slate-500 ${syncing ? 'animate-spin' : ''}`} />
                 <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
               </button>
-              {canManageProjects(role) && (
+              {canCreateProject(role) && (
                 <button
                   onClick={openNewProject}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
@@ -969,12 +969,14 @@ export const Projects: React.FC = () => {
                               <p className="text-xs text-slate-400 max-w-sm">
                                 Create a master project to begin scheduling towers, layout inventories, and logging client bookings.
                               </p>
-                              <button
-                                onClick={openNewProject}
-                                className="mt-2 bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-semibold shadow-sm focus:outline-none"
-                              >
-                                + Create Project
-                              </button>
+                              {canCreateProject(role) && (
+                                <button
+                                  onClick={openNewProject}
+                                  className="mt-2 bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-semibold shadow-sm focus:outline-none"
+                                >
+                                  + Create Project
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>

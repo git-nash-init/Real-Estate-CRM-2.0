@@ -11,7 +11,9 @@ import {
   IndianRupee,
   AlertCircle,
   Plus,
-  X
+  X,
+  Edit,
+  Trash2
 } from 'lucide-react';
 
 interface ChannelPartner {
@@ -211,6 +213,9 @@ export const ChannelPartnerDetails: React.FC = () => {
   const [structNotes, setStructNotes] = useState('');
   const [structLoading, setStructLoading] = useState(false);
   const [structError, setStructError] = useState<string | null>(null);
+  const [editingStructureId, setEditingStructureId] = useState<string | null>(null);
+  const [deletingStructure, setDeletingStructure] = useState<CommissionStructure | null>(null);
+  const [structDeleteLoading, setStructDeleteLoading] = useState(false);
 
   // Manual Referral Fee Obligation Modal States
   const [isManualCommOpen, setIsManualCommOpen] = useState(false);
@@ -710,7 +715,42 @@ export const ChannelPartnerDetails: React.FC = () => {
     }
   };
 
-  // Create Referral Fee Structure submission
+  // Populate the shared modal from an existing structure and open it in edit mode.
+  const openEditStructure = (s: CommissionStructure) => {
+    setEditingStructureId(s.id);
+    setStructProjectId(s.project_id || '');
+    setStructType(s.structure_type);
+    setStructPercentage(s.commission_percentage !== null ? String(s.commission_percentage) : '');
+    setStructFixedAmount(s.fixed_amount !== null ? String(s.fixed_amount) : '');
+    setStructSlabMin(s.slab_min !== null ? String(s.slab_min) : '');
+    setStructSlabMax(s.slab_max !== null ? String(s.slab_max) : '');
+    setStructEffectiveFrom(s.effective_from);
+    setStructEffectiveTo(s.effective_to || '');
+    setStructStatus(s.status);
+    setStructNotes(s.notes || '');
+    setStructError(null);
+    setIsStructOpen(true);
+  };
+
+  const resetStructForm = () => {
+    setEditingStructureId(null);
+    setStructProjectId('');
+    setStructType('PERCENTAGE');
+    setStructPercentage('');
+    setStructFixedAmount('');
+    setStructSlabMin('');
+    setStructSlabMax('');
+    setStructEffectiveFrom(new Date().toISOString().split('T')[0]);
+    setStructEffectiveTo('');
+    setStructStatus('active');
+    setStructNotes('');
+    setStructError(null);
+  };
+
+  // Create OR update a Referral Fee Structure — same modal/form serves both,
+  // branching on editingStructureId. Previously this table was create-only:
+  // there was no way to fix a typo'd rate or retire a structure short of
+  // leaving it there forever.
   const handleCreateStructure = async (e: React.FormEvent) => {
     e.preventDefault();
     setStructLoading(true);
@@ -719,7 +759,7 @@ export const ChannelPartnerDetails: React.FC = () => {
       const { data: userData } = await supabase.auth.getUser();
       const userId = userData?.user?.id || null;
 
-      // 1. Check for overlapping active structures
+      // 1. Check for overlapping active structures (excluding the row being edited)
       if (structStatus === 'active') {
         const query = supabase
           .from('commission_structures')
@@ -731,6 +771,9 @@ export const ChannelPartnerDetails: React.FC = () => {
         } else {
           query.is('project_id', null);
         }
+        if (editingStructureId) {
+          query.neq('id', editingStructureId);
+        }
         const { data: overlapData, error: checkErr } = await query;
         if (checkErr) throw checkErr;
         if (overlapData && overlapData.length > 0) {
@@ -738,46 +781,59 @@ export const ChannelPartnerDetails: React.FC = () => {
         }
       }
 
-      // 2. Insert structure
-      const { error: insertErr } = await supabase
-        .from('commission_structures')
-        .insert([
-          {
-            cp_id: id,
-            project_id: structProjectId || null,
-            structure_type: structType,
-            commission_percentage: structType === 'PERCENTAGE' || structType === 'SLAB' ? parseFloat(structPercentage) || 0 : null,
-            fixed_amount: structType === 'FIXED' ? parseFloat(structFixedAmount) || 0 : null,
-            slab_min: structType === 'SLAB' ? parseFloat(structSlabMin) || 0 : null,
-            slab_max: structType === 'SLAB' ? parseFloat(structSlabMax) || 0 : null,
-            effective_from: structEffectiveFrom,
-            effective_to: structEffectiveTo || null,
-            status: structStatus,
-            notes: structNotes.trim() || null,
-            created_by: userId
-          }
-        ]);
+      const payload = {
+        cp_id: id,
+        project_id: structProjectId || null,
+        structure_type: structType,
+        commission_percentage: structType === 'PERCENTAGE' || structType === 'SLAB' ? parseFloat(structPercentage) || 0 : null,
+        fixed_amount: structType === 'FIXED' ? parseFloat(structFixedAmount) || 0 : null,
+        slab_min: structType === 'SLAB' ? parseFloat(structSlabMin) || 0 : null,
+        slab_max: structType === 'SLAB' ? parseFloat(structSlabMax) || 0 : null,
+        effective_from: structEffectiveFrom,
+        effective_to: structEffectiveTo || null,
+        status: structStatus,
+        notes: structNotes.trim() || null,
+      };
 
-      if (insertErr) throw insertErr;
+      if (editingStructureId) {
+        const { error: updateErr } = await supabase
+          .from('commission_structures')
+          .update(payload)
+          .eq('id', editingStructureId);
+        if (updateErr) throw updateErr;
+        setNotification({ type: 'success', message: 'Referral Fee structure updated successfully!' });
+      } else {
+        const { error: insertErr } = await supabase
+          .from('commission_structures')
+          .insert([{ ...payload, created_by: userId }]);
+        if (insertErr) throw insertErr;
+        setNotification({ type: 'success', message: 'Referral Fee structure created successfully!' });
+      }
 
-      setNotification({ type: 'success', message: 'Referral Fee structure created successfully!' });
       setIsStructOpen(false);
-      setStructProjectId('');
-      setStructType('PERCENTAGE');
-      setStructPercentage('');
-      setStructFixedAmount('');
-      setStructSlabMin('');
-      setStructSlabMax('');
-      setStructEffectiveFrom(new Date().toISOString().split('T')[0]);
-      setStructEffectiveTo('');
-      setStructStatus('active');
-      setStructNotes('');
+      resetStructForm();
       await fetchPartnerDetails();
     } catch (err: any) {
-      console.error('Failed to create referral fee structure:', err);
-      setStructError(err.message || 'Failed to create referral fee structure.');
+      console.error('Failed to save referral fee structure:', err);
+      setStructError(err.message || 'Failed to save referral fee structure.');
     } finally {
       setStructLoading(false);
+    }
+  };
+
+  const handleDeleteStructure = async () => {
+    if (!deletingStructure) return;
+    setStructDeleteLoading(true);
+    try {
+      const { error } = await supabase.from('commission_structures').delete().eq('id', deletingStructure.id);
+      if (error) throw error;
+      setNotification({ type: 'success', message: 'Referral Fee structure deleted.' });
+      setDeletingStructure(null);
+      await fetchPartnerDetails();
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to delete referral fee structure.' });
+    } finally {
+      setStructDeleteLoading(false);
     }
   };
 
@@ -1627,20 +1683,7 @@ export const ChannelPartnerDetails: React.FC = () => {
               <h4 className="text-xs font-bold text-indigo-650 uppercase tracking-wider">Referral Fee Structures</h4>
               {isAuthorized && (
                 <button
-                  onClick={() => {
-                    setIsStructOpen(true);
-                    setStructProjectId('');
-                    setStructType('PERCENTAGE');
-                    setStructPercentage('');
-                    setStructFixedAmount('');
-                    setStructSlabMin('');
-                    setStructSlabMax('');
-                    setStructEffectiveFrom(new Date().toISOString().split('T')[0]);
-                    setStructEffectiveTo('');
-                    setStructStatus('active');
-                    setStructNotes('');
-                    setStructError(null);
-                  }}
+                  onClick={() => { resetStructForm(); setIsStructOpen(true); }}
                   className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
                 >
                   <Plus className="h-3.5 w-3.5" />
@@ -1661,6 +1704,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                     <th className="py-2.5 px-4">Effective Date</th>
                     <th className="py-2.5 px-4">Status</th>
                     <th className="py-2.5 px-4">Notes</th>
+                    {isAuthorized && <th className="py-2.5 px-4 text-right">Actions</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -1691,12 +1735,32 @@ export const ChannelPartnerDetails: React.FC = () => {
                             </span>
                           </td>
                           <td className="py-3 px-4 text-slate-500 text-xs max-w-[150px] truncate" title={s.notes || ''}>{s.notes || '—'}</td>
+                          {isAuthorized && (
+                            <td className="py-3 px-4 text-right">
+                              <div className="inline-flex items-center gap-1">
+                                <button
+                                  onClick={() => openEditStructure(s)}
+                                  title="Edit"
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50"
+                                >
+                                  <Edit className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => setDeletingStructure(s)}
+                                  title="Delete"
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
                         </tr>
                       );
                     })
                   ) : (
                     <tr>
-                      <td colSpan={8} className="py-10 text-center text-slate-400 italic">No referral fee structures assigned.</td>
+                      <td colSpan={isAuthorized ? 9 : 8} className="py-10 text-center text-slate-400 italic">No referral fee structures assigned.</td>
                     </tr>
                   )}
                 </tbody>
@@ -2032,8 +2096,8 @@ export const ChannelPartnerDetails: React.FC = () => {
           
           <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-left">
             <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">Add Referral Fee Structure</span>
-              <button type="button" onClick={() => setIsStructOpen(false)} className="p-1 rounded-lg text-indigo-100 hover:text-white focus:outline-none">
+              <span className="font-bold tracking-tight">{editingStructureId ? 'Edit' : 'Add'} Referral Fee Structure</span>
+              <button type="button" onClick={() => { setIsStructOpen(false); resetStructForm(); }} className="p-1 rounded-lg text-indigo-100 hover:text-white focus:outline-none">
                 <X className="h-5 w-5" />
               </button>
             </div>
@@ -2196,7 +2260,7 @@ export const ChannelPartnerDetails: React.FC = () => {
               <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-2 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setIsStructOpen(false)}
+                  onClick={() => { setIsStructOpen(false); resetStructForm(); }}
                   className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
                 >
                   Cancel
@@ -2206,10 +2270,29 @@ export const ChannelPartnerDetails: React.FC = () => {
                   disabled={structLoading}
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow disabled:opacity-50 transition-all focus:outline-none"
                 >
-                  {structLoading ? 'Saving...' : 'Add Structure'}
+                  {structLoading ? 'Saving...' : editingStructureId ? 'Save Changes' : 'Add Structure'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE REFERRAL FEE STRUCTURE CONFIRMATION */}
+      {deletingStructure && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setDeletingStructure(null)} />
+          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+            <h3 className="text-lg font-bold text-slate-800 mb-2">Delete Referral Fee Structure</h3>
+            <p className="text-sm text-slate-500 mb-6">This cannot be undone. Bookings already using this structure to compute a frozen commission snapshot are not affected.</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setDeletingStructure(null)} className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg">
+                Cancel
+              </button>
+              <button onClick={handleDeleteStructure} disabled={structDeleteLoading} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
+                {structDeleteLoading ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
           </div>
         </div>
       )}
