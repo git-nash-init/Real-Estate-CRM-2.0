@@ -9,7 +9,6 @@ import {
   formatBytes,
   type UploadedAttachment,
 } from '../services/whatsappAttachments';
-import { BulkUploadModal } from '../components/leads/BulkUploadModal';
 import {
   Search,
   RefreshCw,
@@ -33,7 +32,6 @@ import {
   Paperclip,
   Pencil,
   Trash2,
-  FileSpreadsheet
 } from 'lucide-react';
 
 interface Lead {
@@ -122,7 +120,6 @@ export const Leads: React.FC = () => {
 
   // Create Lead modal & notification states
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -887,16 +884,6 @@ export const Leads: React.FC = () => {
             </button>
           )}
 
-          {(role === 'sourcing_manager' || role === 'sourcing_manager_tl' || role === 'super_admin' || role === 'site_head' || role === 'channel_partner') && (
-            <button
-              onClick={() => setIsBulkUploadOpen(true)}
-              className="flex items-center gap-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-4 py-2 rounded-xl text-sm font-semibold transition-all focus:outline-none shadow-sm"
-            >
-              <FileSpreadsheet className="w-4 h-4" />
-              Upload Bulk Leads
-            </button>
-          )}
-
           {canCreateLead && (
             <button
               onClick={() => setIsCreateOpen(true)}
@@ -1085,13 +1072,15 @@ export const Leads: React.FC = () => {
                             >
                               <MessageCircle className="h-3.5 w-3.5" />
                             </button>
-                            <button
-                              onClick={() => openEditLead(lead)}
-                              title="Edit lead"
-                              className="inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-indigo-600 transition-colors focus:outline-none"
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </button>
+                            {role !== 'channel_partner' && (
+                              <button
+                                onClick={() => openEditLead(lead)}
+                                title="Edit lead"
+                                className="inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-indigo-600 transition-colors focus:outline-none"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                            )}
                             {role === 'super_admin' && (
                               <button
                                 onClick={() => handleDeleteLead(lead)}
@@ -1331,12 +1320,14 @@ export const Leads: React.FC = () => {
 
             {/* Modal Footer */}
             <div className="bg-slate-50 px-6 py-4 flex justify-end gap-2 border-t border-slate-100">
-              <button
-                onClick={() => { openEditLead(selectedLead); setSelectedLead(null); }}
-                className="flex items-center gap-1.5 px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
-              >
-                <Pencil className="h-3.5 w-3.5" /> Edit
-              </button>
+              {role !== 'channel_partner' && (
+                <button
+                  onClick={() => { openEditLead(selectedLead); setSelectedLead(null); }}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
+                >
+                  <Pencil className="h-3.5 w-3.5" /> Edit
+                </button>
+              )}
               <button
                 onClick={() => openWhatsApp(selectedLead)}
                 disabled={!selectedLead.mobile}
@@ -1794,7 +1785,12 @@ export const Leads: React.FC = () => {
                         required
                         disabled={!!editingLead && !canEditSource}
                         value={selectedSource}
-                        onChange={(e) => setSelectedSource(e.target.value)}
+                        onChange={(e) => {
+                          setSelectedSource(e.target.value);
+                          // Don't let a stale CP attribution silently ride
+                          // along once the field hiding above hides it from view.
+                          if (e.target.value !== 'channel_partner') setSelectedChannelPartnerId('');
+                        }}
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all disabled:opacity-60 disabled:cursor-not-allowed"
                       >
                         <option value="">Select Source...</option>
@@ -1891,22 +1887,26 @@ export const Leads: React.FC = () => {
                       />
                     </div>
 
-                    {/* Channel Partner Select */}
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Channel Partner</label>
-                      <select
-                        value={selectedChannelPartnerId}
-                        onChange={(e) => setSelectedChannelPartnerId(e.target.value)}
-                        className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
-                      >
-                        <option value="">Select Channel Partner (Optional)...</option>
-                        {channelPartners.map(cp => (
-                          <option key={cp.id} value={cp.id}>
-                            {cp.partner_code || ''} - {cp.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                    {/* Channel Partner Select — only relevant, and only
+                        shown, when Source Of Inquiry is Channel Partner. */}
+                    {selectedSource === 'channel_partner' && (
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Channel Partner *</label>
+                        <select
+                          required
+                          value={selectedChannelPartnerId}
+                          onChange={(e) => setSelectedChannelPartnerId(e.target.value)}
+                          className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
+                        >
+                          <option value="">Select Channel Partner...</option>
+                          {channelPartners.map(cp => (
+                            <option key={cp.id} value={cp.id}>
+                              {cp.partner_code || ''} - {cp.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1944,14 +1944,6 @@ export const Leads: React.FC = () => {
           </div>
         </div>
       )}
-      <BulkUploadModal 
-        isOpen={isBulkUploadOpen}
-        onClose={() => setIsBulkUploadOpen(false)}
-        onUploadComplete={() => {
-          setPage(0);
-          fetchLeads();
-        }}
-      />
     </div>
   );
 };

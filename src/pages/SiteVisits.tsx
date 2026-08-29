@@ -42,12 +42,27 @@ interface Lead {
 }
 
 export const SiteVisits: React.FC = () => {
-  const { role } = useAuth();
+  const { role, user } = useAuth();
   // Delete is restricted to super_admin — both DB tables' DELETE RLS
   // policies already enforce this independently (site_visits_delete /
   // quick_site_visits_delete both check is_super_admin()), this only
   // decides whether to show the button.
   const canDelete = role === 'super_admin';
+
+  // A channel partner's Project dropdown in the Walk-in Visit form is
+  // limited to the projects actually assigned to them
+  // (channel_partner_projects) -- previously showed every project in the
+  // company regardless of assignment.
+  const [myCpProjectIds, setMyCpProjectIds] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (role !== 'channel_partner' || !user?.id) return;
+    (async () => {
+      const { data: cp } = await supabase.from('channel_partners').select('id').eq('user_id', user.id).maybeSingle();
+      if (!cp) { setMyCpProjectIds([]); return; }
+      const { data: assignments } = await supabase.from('channel_partner_projects').select('project_id').eq('channel_partner_id', cp.id);
+      setMyCpProjectIds((assignments || []).map(a => a.project_id));
+    })();
+  }, [role, user?.id]);
 
   // Query & state filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -64,6 +79,10 @@ export const SiteVisits: React.FC = () => {
   const [leadsMap, setLeadsMap] = useState<Map<string, Lead>>(new Map());
   const [projectMap, setProjectMap] = useState<Map<string, string>>(new Map());
   const [profileMap, setProfileMap] = useState<Map<string, string>>(new Map());
+
+  const visibleProjectEntries = Array.from(projectMap.entries()).filter(
+    ([id]) => role !== 'channel_partner' || !myCpProjectIds || myCpProjectIds.includes(id)
+  );
 
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -1049,10 +1068,13 @@ export const SiteVisits: React.FC = () => {
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                   >
                     <option value="">Select Project...</option>
-                    {Array.from(projectMap.entries()).map(([id, name]) => (
+                    {visibleProjectEntries.map(([id, name]) => (
                       <option key={id} value={id}>{name}</option>
                     ))}
                   </select>
+                  {role === 'channel_partner' && myCpProjectIds && myCpProjectIds.length === 0 && (
+                    <p className="text-[10px] text-amber-600 mt-1">No projects are assigned to you yet — contact an admin.</p>
+                  )}
                 </div>
 
                 <div>

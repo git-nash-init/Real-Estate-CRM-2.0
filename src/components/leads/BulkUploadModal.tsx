@@ -54,19 +54,26 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
 
   const fetchDropdownData = async () => {
     try {
-      // Fetch Projects
-      const { data: projData } = await supabase.from('projects').select('id, project_name');
-      if (projData) setProjects(projData.map(p => ({ id: p.id, name: p.project_name })));
-
       if (isChannelPartner) {
         // Resolve their own channel_partners.id directly -- not filtered
         // by status='active', since a partner uploading for themselves
         // should work regardless of that flag; RLS already scopes this
         // query to their own row (user_id = auth.uid()) regardless.
         const { data: ownCp } = await supabase.from('channel_partners').select('id').eq('user_id', user?.id).maybeSingle();
-        if (ownCp) setChannelPartnerId(ownCp.id);
+        if (ownCp) {
+          setChannelPartnerId(ownCp.id);
+          // Project dropdown limited to projects actually assigned to
+          // this partner (channel_partner_projects), not every project
+          // in the company.
+          const { data: assignments } = await supabase.from('channel_partner_projects').select('project_id, projects(project_name)').eq('channel_partner_id', ownCp.id);
+          setProjects((assignments || []).map((a: any) => ({ id: a.project_id, name: a.projects?.project_name || 'Unknown' })));
+        }
         return; // no telecaller list needed -- that section is hidden for them
       }
+
+      // Fetch Projects
+      const { data: projData } = await supabase.from('projects').select('id, project_name');
+      if (projData) setProjects(projData.map(p => ({ id: p.id, name: p.project_name })));
 
       // Fetch Channel Partners
       const { data: cpData } = await supabase.from('channel_partners').select('id, name').eq('status', 'active');

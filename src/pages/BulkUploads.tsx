@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { Upload, FileSpreadsheet, User, Calendar, ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../hooks/useAuth';
+import { BulkUploadModal } from '../components/leads/BulkUploadModal';
 
 interface BulkUploadRecord {
   id: string;
@@ -19,7 +21,12 @@ export const BulkUploads: React.FC = () => {
   const [uploads, setUploads] = useState<BulkUploadRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isUploadOpen, setIsUploadOpen] = useState(false);
   const navigate = useNavigate();
+  const { role } = useAuth();
+  const canUpload = role === 'super_admin' || role === 'site_head'
+    || role === 'sourcing_manager' || role === 'sourcing_manager_tl'
+    || role === 'channel_partner';
 
   useEffect(() => {
     fetchUploads();
@@ -78,7 +85,22 @@ export const BulkUploads: React.FC = () => {
             Directory of all Excel lead uploads. Click an upload to view its leads.
           </p>
         </div>
+        {canUpload && (
+          <button
+            onClick={() => setIsUploadOpen(true)}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-sm transition-all focus:outline-none"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            Upload Bulk Leads
+          </button>
+        )}
       </div>
+
+      <BulkUploadModal
+        isOpen={isUploadOpen}
+        onClose={() => setIsUploadOpen(false)}
+        onUploadComplete={fetchUploads}
+      />
 
       {error && (
         <div className="mb-6 p-4 bg-red-50 text-red-700 rounded-lg text-sm border border-red-200">
