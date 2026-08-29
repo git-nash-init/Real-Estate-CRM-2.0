@@ -1053,6 +1053,13 @@ export const Leads: React.FC = () => {
                         </td>
                         <td className="py-4 px-6 text-right">
                           <div className="inline-flex items-center gap-1.5">
+                            <a
+                              href={lead.mobile ? `tel:${lead.mobile}` : undefined}
+                              title={lead.mobile ? 'Call directly' : 'No mobile number on record'}
+                              className={`inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg transition-colors focus:outline-none ${lead.mobile ? 'text-blue-600 hover:bg-blue-50 hover:border-blue-200' : 'opacity-40 cursor-not-allowed text-slate-400'}`}
+                            >
+                              <Phone className="h-3.5 w-3.5" />
+                            </a>
                             <button
                               onClick={() => openWhatsApp(lead)}
                               disabled={!lead.mobile}

@@ -55,16 +55,13 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
       if (cpData) setPartners(cpData.map(c => ({ id: c.id, name: c.name })));
 
       // Fetch Telecallers (Role = telecaller)
-      const { data: roles } = await supabase.from('roles').select('id, name');
-      const tcRoleId = roles?.find(r => r.name === 'telecaller')?.id;
+      const { data: profiles } = await supabase
+        .from('user_profiles')
+        .select('id, full_name')
+        .eq('role', 'telecaller');
       
-      if (tcRoleId) {
-        const { data: userRoles } = await supabase.from('user_roles').select('user_id').eq('role_id', tcRoleId);
-        if (userRoles && userRoles.length > 0) {
-          const userIds = userRoles.map(ur => ur.user_id);
-          const { data: profiles } = await supabase.from('user_profiles').select('id, full_name').in('id', userIds);
-          if (profiles) setTelecallers(profiles.map(p => ({ id: p.id, name: p.full_name || 'Unknown' })));
-        }
+      if (profiles) {
+        setTelecallers(profiles.map(p => ({ id: p.id, name: p.full_name || 'Unknown' })));
       }
     } catch (err) {
       console.error('Failed to fetch dropdown data for bulk upload', err);
@@ -113,6 +110,12 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
     setLoading(true);
     setError(null);
     setSuccess(null);
+
+    if (telecallerIds.length === 0) {
+      setError('Please select at least one telecaller before uploading.');
+      setLoading(false);
+      return;
+    }
 
     try {
       // 1. Read Excel file
