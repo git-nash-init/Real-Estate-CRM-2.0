@@ -1117,24 +1117,28 @@ export const Leads: React.FC = () => {
                               <button onClick={() => setSelectedLead(lead)} className="px-3 py-1.5 border border-slate-200 bg-white text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-100 transition-colors">
                                 DETAILS
                               </button>
-                              <button onClick={() => updateLeadStatus(lead, 'call_back')} className="px-3 py-1.5 border border-orange-500 bg-orange-500 text-black rounded-lg text-xs font-bold hover:bg-orange-600 transition-colors">
-                                CALL BACK
-                              </button>
-                              <button onClick={() => handleLostStatus(lead)} className="px-3 py-1.5 border border-red-600 bg-red-600 text-black rounded-lg text-xs font-bold hover:bg-red-700 transition-colors">
-                                LOST
-                              </button>
-                              <button onClick={() => updateLeadStatus(lead, 'booked')} className="px-3 py-1.5 border border-[#00FF00] bg-[#00FF00] text-black rounded-lg text-xs font-bold hover:bg-[#00cc00] transition-colors">
-                                BOOKED
-                              </button>
-                              <button onClick={() => updateLeadStatus(lead, 'planed')} className="px-3 py-1.5 border border-cyan-400 bg-cyan-400 text-black rounded-lg text-xs font-bold hover:bg-cyan-500 transition-colors">
-                                PLANED
-                              </button>
-                              <button onClick={() => updateLeadStatus(lead, 'other_lead')} className="px-3 py-1.5 border border-black bg-black text-red-600 rounded-lg text-xs font-bold hover:bg-gray-900 transition-colors">
-                                OTHER LEAD
-                              </button>
-                              <button onClick={() => updateLeadStatus(lead, 'visit_done')} className="px-3 py-1.5 border border-[#5AB7B7] bg-[#5AB7B7] text-black rounded-lg text-xs font-bold hover:bg-[#4a9f9f] transition-colors">
-                                VISIT DONE
-                              </button>
+                              {lead.telecaller_id === user?.id && (
+                                <>
+                                  <button onClick={() => updateLeadStatus(lead, 'call_back')} className="px-3 py-1.5 border border-orange-500 bg-orange-500 text-black rounded-lg text-xs font-bold hover:bg-orange-600 transition-colors">
+                                    CALL BACK
+                                  </button>
+                                  <button onClick={() => handleLostStatus(lead)} className="px-3 py-1.5 border border-red-600 bg-red-600 text-black rounded-lg text-xs font-bold hover:bg-red-700 transition-colors">
+                                    LOST
+                                  </button>
+                                  <button onClick={() => updateLeadStatus(lead, 'booked')} className="px-3 py-1.5 border border-[#00FF00] bg-[#00FF00] text-black rounded-lg text-xs font-bold hover:bg-[#00cc00] transition-colors">
+                                    BOOKED
+                                  </button>
+                                  <button onClick={() => updateLeadStatus(lead, 'planed')} className="px-3 py-1.5 border border-cyan-400 bg-cyan-400 text-black rounded-lg text-xs font-bold hover:bg-cyan-500 transition-colors">
+                                    PLANED
+                                  </button>
+                                  <button onClick={() => updateLeadStatus(lead, 'other_lead')} className="px-3 py-1.5 border border-black bg-black text-red-600 rounded-lg text-xs font-bold hover:bg-gray-900 transition-colors">
+                                    OTHER LEAD
+                                  </button>
+                                  <button onClick={() => updateLeadStatus(lead, 'visit_done')} className="px-3 py-1.5 border border-[#5AB7B7] bg-[#5AB7B7] text-black rounded-lg text-xs font-bold hover:bg-[#4a9f9f] transition-colors">
+                                    VISIT DONE
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </td>
                         </tr>
