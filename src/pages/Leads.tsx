@@ -49,6 +49,7 @@ interface Lead {
   channel_partner_id: string | null;
   telecaller_id: string | null;
   sourcing_manager_id: string | null;
+  bulk_upload_id: string | null;
 }
 
 export const Leads: React.FC = () => {
@@ -372,9 +373,18 @@ export const Leads: React.FC = () => {
   const updateLeadStatus = async (lead: Lead, newStatus: string) => {
     setLoading(true);
     try {
-      const { error } = await supabase.from('leads').update({ status: newStatus }).eq('id', lead.id);
-      if (error) throw error;
-      setNotification({ type: 'success', message: 'Status updated successfully.' });
+      if (newStatus === 'lost') {
+        const { data, error } = await supabase.from('leads').delete().eq('id', lead.id).select();
+        if (error) throw error;
+        if (!data || data.length === 0) {
+          throw new Error('Permission denied. You do not have the required roles to delete this lead.');
+        }
+        setNotification({ type: 'success', message: 'Lead permanently deleted.' });
+      } else {
+        const { error } = await supabase.from('leads').update({ status: newStatus }).eq('id', lead.id);
+        if (error) throw error;
+        setNotification({ type: 'success', message: 'Status updated successfully.' });
+      }
       fetchLeads();
     } catch (err: any) {
       setNotification({ type: 'error', message: err.message || 'Failed to update status' });
@@ -1074,7 +1084,7 @@ export const Leads: React.FC = () => {
                             >
                               <MessageCircle className="h-3.5 w-3.5" />
                             </button>
-                            {canEditLead(role, user?.id, lead.owner_id, lead.sourcing_manager_id, lead.telecaller_id) && (
+                            {canEditLead(role, user?.id, lead.owner_id, lead.sourcing_manager_id, lead.telecaller_id, lead.bulk_upload_id) && (
                               <button
                                 onClick={() => openEditLead(lead)}
                                 title="Edit lead"

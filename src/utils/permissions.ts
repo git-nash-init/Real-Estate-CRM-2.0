@@ -45,8 +45,13 @@ export const canEditLead = (
   currentUserId: Id,
   ownerId: Id,
   sourcingManagerId: Id,
-  telecallerId: Id
+  telecallerId: Id,
+  bulkUploadId?: Id
 ) => {
+  if (bulkUploadId) {
+    return currentUserId ? currentUserId === telecallerId : false;
+  }
+
   if (isSuperAdmin(role)) return true;
   if (['site_head', 'sourcing_manager_tl', 'project_admin'].includes(role as string)) return true;
   
