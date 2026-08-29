@@ -88,7 +88,10 @@ export const Followups: React.FC = () => {
   const [editError, setEditError] = useState<string | null>(null);
 
   // Status updating loader
-  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  // Value is intentionally unread — the row-level spinner that consumed it
+  // was removed, but the setter still brackets the async status update and
+  // is worth keeping for the next time a loading indicator is added.
+  const [, setUpdatingId] = useState<string | null>(null);
 
   // Fetch lookups (projects, profiles, leads)
   const fetchLookups = useCallback(async () => {
