@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
+import { canEditTask, canAssignTasksToOthers } from '../utils/permissions';
 import {
   CheckSquare,
   Plus,
@@ -340,7 +341,7 @@ export const Tasks: React.FC = () => {
                       <select
                         value={t.status || 'pending'}
                         onChange={(e) => handleStatusChange(t, e.target.value)}
-                        disabled={t.assigned_to !== user?.id && t.assigned_by !== user?.id}
+                        disabled={!canEditTask(role, user?.id || null, t.assigned_to, t.assigned_by)}
                         className={`text-xxs font-semibold rounded-full px-2 py-1 border-0 capitalize cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${statusColors[t.status || 'pending']}`}
                       >
                         {statusOptions.map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
@@ -407,10 +408,17 @@ export const Tasks: React.FC = () => {
                     <select
                       value={assignedTo}
                       onChange={(e) => setAssignedTo(e.target.value)}
-                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                      disabled={!canAssignTasksToOthers(role)}
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400 disabled:opacity-50"
                     >
-                      <option value="">Unassigned</option>
-                      {users.map(u => <option key={u.id} value={u.id}>{u.full_name || 'Unnamed'}</option>)}
+                      {canAssignTasksToOthers(role) ? (
+                        <>
+                          <option value="">Unassigned</option>
+                          {users.map(u => <option key={u.id} value={u.id}>{u.full_name || 'Unnamed'}</option>)}
+                        </>
+                      ) : (
+                        <option value={user?.id || ''}>{user?.email || 'Me'}</option>
+                      )}
                     </select>
                   </div>
                   <div>

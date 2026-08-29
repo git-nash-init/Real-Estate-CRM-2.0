@@ -80,18 +80,25 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
       if (cpData) setPartners(cpData.map(c => ({ id: c.id, name: c.name })));
 
       // Fetch Telecallers (Role = telecaller)
-      const { data: roles } = await supabase.from('roles').select('id, name');
+      const { data: roles, error: rErr } = await supabase.from('roles').select('id, name');
+      if (rErr) console.error('Error fetching roles:', rErr);
       const tcRoleId = roles?.find(r => r.name === 'telecaller')?.id;
       
       if (tcRoleId) {
-        const { data: userRoles } = await supabase.from('user_roles').select('user_id').eq('role_id', tcRoleId);
+        const { data: userRoles, error: urErr } = await supabase.from('user_roles').select('user_id').eq('role_id', tcRoleId);
+        if (urErr) console.error('Error fetching user_roles:', urErr);
         if (userRoles && userRoles.length > 0) {
           const userIds = userRoles.map(ur => ur.user_id);
-          const { data: profiles } = await supabase.from('user_profiles').select('id, full_name').in('id', userIds);
+          const { data: profiles, error: pErr } = await supabase.from('user_profiles').select('id, full_name').in('id', userIds);
+          if (pErr) console.error('Error fetching user_profiles:', pErr);
           if (profiles) {
             setTelecallers(profiles.map(p => ({ id: p.id, name: p.full_name || 'Unknown' })));
           }
+        } else {
+          console.log('No user_roles found for telecaller role ID:', tcRoleId);
         }
+      } else {
+        console.log('Telecaller role ID not found in roles table.');
       }
     } catch (err) {
       console.error('Failed to fetch dropdown data for bulk upload', err);

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
+import { canEditLead } from '../utils/permissions';
 import {
   Search,
   RefreshCw,
@@ -715,15 +716,19 @@ export const SiteVisits: React.FC = () => {
                           <td className="py-4 px-6 text-right">
                             <div className="flex items-center justify-end space-x-2">
                               {/* Complete Site Visit Quick Action */}
-                              {v.status?.toLowerCase() === 'planned' && (
-                                <button
-                                  onClick={() => handleUpdateStatus(v.id, 'completed')}
-                                  disabled={updatingId === v.id}
-                                  className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-emerald-50 border border-emerald-100 text-emerald-700 hover:bg-emerald-100 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50"
-                                >
-                                  {updatingId === v.id ? '...' : 'Complete'}
-                                </button>
-                              )}
+                              {(() => {
+                                const lead = leadsMap.get(v.lead_id || '');
+                                const canManage = canEditLead(role, user?.id, lead?.owner_id || null, null, null);
+                                return canManage && v.status?.toLowerCase() === 'planned' && (
+                                  <button
+                                    onClick={() => handleUpdateStatus(v.id, 'completed')}
+                                    disabled={updatingId === v.id}
+                                    className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-emerald-50 border border-emerald-100 text-emerald-700 hover:bg-emerald-100 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50"
+                                  >
+                                    {updatingId === v.id ? '...' : 'Complete'}
+                                  </button>
+                                );
+                              })()}
                               
                               <button
                                 onClick={() => setSelectedVisit(v)}
@@ -919,22 +924,26 @@ export const SiteVisits: React.FC = () => {
             {/* Footer */}
             <div className="bg-slate-50 px-6 py-4 flex justify-between items-center border-t border-slate-100">
               <div className="flex items-center space-x-2">
-                {selectedVisit.status?.toLowerCase() === 'planned' && (
-                  <>
-                    <button
-                      onClick={() => handleUpdateStatus(selectedVisit.id, 'completed')}
-                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all"
-                    >
-                      Complete Visit
-                    </button>
-                    <button
-                      onClick={() => handleUpdateStatus(selectedVisit.id, 'cancelled')}
-                      className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-semibold transition-all"
-                    >
-                      Cancel Visit
-                    </button>
-                  </>
-                )}
+                {(() => {
+                  const lead = leadsMap.get(selectedVisit.lead_id || '');
+                  const canManage = canEditLead(role, user?.id, lead?.owner_id || null, null, null);
+                  return canManage && selectedVisit.status?.toLowerCase() === 'planned' && (
+                    <>
+                      <button
+                        onClick={() => handleUpdateStatus(selectedVisit.id, 'completed')}
+                        className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all"
+                      >
+                        Complete Visit
+                      </button>
+                      <button
+                        onClick={() => handleUpdateStatus(selectedVisit.id, 'cancelled')}
+                        className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-semibold transition-all"
+                      >
+                        Cancel Visit
+                      </button>
+                    </>
+                  );
+                })()}
               </div>
               <button
                 onClick={() => setSelectedVisit(null)}

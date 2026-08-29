@@ -5,6 +5,7 @@ import { useNotifications } from '../hooks/useNotifications';
 import { useWhatsAppSentToast } from '../hooks/useWhatsAppSentToast';
 import { QueryFailureOverlay } from '../components/QueryFailureOverlay';
 import { GlobalSearch } from '../components/GlobalSearch';
+import { canAccessBulkUploadPage } from '../utils/permissions';
 import {
   LayoutDashboard,
   UserCheck,
@@ -56,7 +57,7 @@ export const AppLayout: React.FC = () => {
   const navigationItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     { name: 'Leads', path: '/leads', icon: UserCheck },
-    { name: 'Bulk Uploads', path: '/bulk-uploads', icon: FileSpreadsheet, allowedRoles: ['super_admin', 'site_head', 'sourcing_manager', 'sourcing_manager_tl', 'telecaller', 'channel_partner'] },
+    { name: 'Bulk Uploads', path: '/bulk-uploads', icon: FileSpreadsheet, isVisible: canAccessBulkUploadPage },
     { name: 'Follow-ups', path: '/follow-ups', icon: PhoneCall, hiddenForRoles: ['channel_partner'] },
     { name: 'Site Visits', path: '/site-visits', icon: MapPin, hiddenForRoles: ['channel_partner'] },
     { name: 'Projects', path: '/projects', icon: Building2, hiddenForRoles: ['channel_partner'] },
@@ -129,10 +130,13 @@ export const AppLayout: React.FC = () => {
         {/* Sidebar Navigation */}
         <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
           {navigationItems
-            .filter((item) =>
-              (!item.allowedRoles || (role && item.allowedRoles.includes(role))) &&
-              (!('hiddenForRoles' in item) || !role || !item.hiddenForRoles?.includes(role))
-            )
+            .filter((item) => {
+              if ('isVisible' in item && item.isVisible) {
+                return item.isVisible(role);
+              }
+              return (!item.allowedRoles || (role && item.allowedRoles.includes(role))) &&
+                     (!('hiddenForRoles' in item) || !role || !item.hiddenForRoles?.includes(role));
+            })
             .map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;

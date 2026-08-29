@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
+import { useAuth } from '../hooks/useAuth';
+import { canSendMarketingBlast } from '../utils/permissions';
 import {
   uploadWhatsAppAttachment,
   removeWhatsAppAttachment,
@@ -54,6 +56,7 @@ const leadStatusOptions = [
 ];
 
 export const Marketing: React.FC = () => {
+  const { role } = useAuth();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [outboxCountsByCampaign, setOutboxCountsByCampaign] = useState<Map<string, OutboxCounts>>(new Map());
   const [projectsMap, setProjectsMap] = useState<Map<string, string>>(new Map());
@@ -323,13 +326,15 @@ export const Marketing: React.FC = () => {
           >
             <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
           </button>
-          <button
-            onClick={() => { resetForm(); setIsCreateOpen(true); }}
-            className="flex items-center space-x-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold shadow-sm"
-          >
-            <Plus className="h-4 w-4" />
-            <span>New Campaign</span>
-          </button>
+          {canSendMarketingBlast(role) && (
+            <button
+              onClick={() => { resetForm(); setIsCreateOpen(true); }}
+              className="flex items-center space-x-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold shadow-sm"
+            >
+              <Plus className="h-4 w-4" />
+              <span>New Campaign</span>
+            </button>
+          )}
         </div>
       </div>
 

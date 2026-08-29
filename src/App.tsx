@@ -25,6 +25,7 @@ import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import { Expenses } from './pages/Expenses';
 import { BulkUploads } from './pages/BulkUploads';
+import { canAccessBulkUploadPage } from './utils/permissions';
 
 function App() {
   return (
@@ -119,7 +120,7 @@ function App() {
             />
             <Route
               path="bulk-uploads"
-              element={<BulkUploads />}
+              element={<ProtectedRoute isAllowed={canAccessBulkUploadPage}><BulkUploads /></ProtectedRoute>}
             />
 
             {/* Catch-all redirected back to dashboard */}

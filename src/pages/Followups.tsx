@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
+import { useAuth } from '../hooks/useAuth';
+import { canEditLead } from '../utils/permissions';
 import { reportQueryError } from '../services/queryLogger';
 import {
   Search,
@@ -38,6 +40,8 @@ interface Lead {
 }
 
 export const Followups: React.FC = () => {
+  const { role, user } = useAuth();
+
   // Query & state filters
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -597,8 +601,9 @@ export const Followups: React.FC = () => {
                   {filteredFollowups.length > 0 ? (
                     filteredFollowups.map((f) => {
                       const lead = leadsMap.get(f.lead_id || '');
+                      const canManage = canEditLead(role, user?.id, lead?.owner_id || null, null, null);
                       return (
-                        <tr key={f.id} className="hover:bg-slate-50/50 transition-colors">
+                        <tr key={f.id} className="hover:bg-slate-50/50 transition-colors group">
                           <td className="py-4 px-6">
                             <span className="block font-semibold text-slate-900">{lead?.customer_name || 'N/A'}</span>
                             <span className="block text-xs text-slate-400">{lead?.mobile || 'No contact'}</span>
@@ -625,39 +630,44 @@ export const Followups: React.FC = () => {
                             </span>
                           </td>
                           <td className="py-4 px-6 text-right">
-                            <div className="flex items-center justify-end space-x-2">
-                              {/* Quick Action Toggle Status */}
-                              {f.status?.toLowerCase() === 'pending' && (
-                                <button
-                                  onClick={() => handleUpdateStatus(f.id, 'completed')}
-                                  disabled={updatingId === f.id}
-                                  className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-indigo-50 border border-indigo-100 text-indigo-700 hover:bg-indigo-100 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50"
-                                >
-                                  {updatingId === f.id ? '...' : 'Complete'}
-                                </button>
+                            <div className="flex items-center justify-end space-x-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                              {canManage && f.status === 'pending' && (
+                                <>
+                                  <button
+                                    onClick={() => handleUpdateStatus(f.id, 'completed')}
+                                    className="p-1.5 rounded-lg border border-slate-200 bg-white text-emerald-600 hover:bg-emerald-50 hover:border-emerald-200 focus:outline-none transition-colors"
+                                    title="Mark as completed"
+                                  >
+                                    <CheckCircle className="h-3.5 w-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setEditingFollowup(f);
+                                      const isoStr = f.due_at || new Date().toISOString();
+                                      const d = new Date(isoStr);
+                                      const tzoffset = d.getTimezoneOffset() * 60000;
+                                      const localISOTime = (new Date(d.getTime() - tzoffset)).toISOString().slice(0, 16);
+                                      setEditDueAt(localISOTime);
+                                      
+                                      if (f.reminder_at) {
+                                        const rd = new Date(f.reminder_at);
+                                        const rtz = rd.getTimezoneOffset() * 60000;
+                                        setEditReminderAt((new Date(rd.getTime() - rtz)).toISOString().slice(0, 16));
+                                      } else {
+                                        setEditReminderAt('');
+                                      }
+                                      setEditNotes(f.notes || '');
+                                      setEditStatus(f.status || 'pending');
+                                      setIsEditOpen(true);
+                                    }}
+                                    className="flex items-center space-x-1 p-1.5 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-indigo-600 focus:outline-none transition-colors"
+                                    title="Edit or Reschedule"
+                                  >
+                                    <Calendar className="h-3.5 w-3.5" />
+                                    <span className="text-xs font-semibold">Edit</span>
+                                  </button>
+                                </>
                               )}
-                              
-                              <button
-                                onClick={() => {
-                                  setEditingFollowup(f);
-                                  const formatDateTimeLocal = (isoStr: string | null) => {
-                                    if (!isoStr) return '';
-                                    const d = new Date(isoStr);
-                                    const tzoffset = d.getTimezoneOffset() * 60000;
-                                    const localISOTime = (new Date(d.getTime() - tzoffset)).toISOString().slice(0, 16);
-                                    return localISOTime;
-                                  };
-                                  setEditDueAt(formatDateTimeLocal(f.due_at));
-                                  setEditReminderAt(formatDateTimeLocal(f.reminder_at));
-                                  setEditNotes(f.notes || '');
-                                  setEditStatus(f.status || 'pending');
-                                  setIsEditOpen(true);
-                                }}
-                                className="inline-flex items-center space-x-1 px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition-colors"
-                              >
-                                <span>Edit</span>
-                              </button>
-
                               <button
                                 onClick={() => setSelectedFollowup(f)}
                                 className="inline-flex items-center space-x-1 px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition-colors"
@@ -823,26 +833,30 @@ export const Followups: React.FC = () => {
             {/* Footer */}
             <div className="bg-slate-50 px-6 py-4 flex justify-between items-center border-t border-slate-100">
               <div className="flex items-center space-x-2">
-                {selectedFollowup.status?.toLowerCase() === 'pending' && (
-                  <>
-                    <button
-                      onClick={() => {
-                        handleUpdateStatus(selectedFollowup.id, 'completed');
-                      }}
-                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all"
-                    >
-                      Complete Call
-                    </button>
-                    <button
-                      onClick={() => {
-                        handleUpdateStatus(selectedFollowup.id, 'cancelled');
-                      }}
-                      className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-semibold transition-all"
-                    >
-                      Cancel Callback
-                    </button>
-                  </>
-                )}
+                {(() => {
+                  const lead = leadsMap.get(selectedFollowup.lead_id || '');
+                  const canManage = canEditLead(role, user?.id, lead?.owner_id || null, null, null);
+                  return canManage && selectedFollowup.status?.toLowerCase() === 'pending' && (
+                    <>
+                      <button
+                        onClick={() => {
+                          handleUpdateStatus(selectedFollowup.id, 'completed');
+                        }}
+                        className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all"
+                      >
+                        Complete Call
+                      </button>
+                      <button
+                        onClick={() => {
+                          handleUpdateStatus(selectedFollowup.id, 'cancelled');
+                        }}
+                        className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-semibold transition-all"
+                      >
+                        Cancel Callback
+                      </button>
+                    </>
+                  );
+                })()}
               </div>
               <button
                 onClick={() => setSelectedFollowup(null)}

@@ -9,9 +9,10 @@ interface ProtectedRouteProps {
       one (e.g. channel_partner) must not reach it via direct URL, even
       though it isn't shown in their sidebar. */
   excludedRoles?: string[];
+  isAllowed?: (role: string | null) => boolean;
 }
 
-export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowedRoles, excludedRoles }) => {
+export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowedRoles, excludedRoles, isAllowed }) => {
   const { user, profile, role, loading } = useAuth();
   const location = useLocation();
 
@@ -40,7 +41,11 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowe
   // short-circuited to "allow" for any user whose role lookup came back
   // empty (no user_roles row, an RLS hiccup, etc.), letting them straight
   // through every role-gated route including Reports and Settings.
-  if ((allowedRoles && !(role && allowedRoles.includes(role))) || (excludedRoles && role && excludedRoles.includes(role))) {
+  if (
+    (isAllowed && !isAllowed(role)) ||
+    (allowedRoles && !(role && allowedRoles.includes(role))) ||
+    (excludedRoles && role && excludedRoles.includes(role))
+  ) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="max-w-md w-full bg-white p-8 rounded-xl shadow-lg text-center border border-slate-100">

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../hooks/useAuth';
+import { canEditPayment, canCancelPayment, isSuperAdmin } from '../utils/permissions';
 import {
   Search,
   RefreshCw,
@@ -96,8 +97,6 @@ export const Payments: React.FC = () => {
   const [pageSize] = useState(10);
 
   const { role } = useAuth();
-  const isSuperAdmin = role === 'super_admin';
-  const isAuthorized = role === 'super_admin' || role === 'project_admin';
 
   // Tab view selector: 'customer' | 'referral fee'
   const [activeView, setActiveView] = useState<'customer' | 'referral fee'>('customer');
@@ -711,7 +710,7 @@ export const Payments: React.FC = () => {
               <span>New Payment</span>
             </button>
           ) : (
-            isAuthorized && (
+            canEditPayment(role) && (
               <button
                 onClick={() => {
                   setSelectedCommissionId('');
@@ -998,30 +997,34 @@ export const Payments: React.FC = () => {
                             </button>
                             {p.status?.toLowerCase() !== 'cancelled' && p.status?.toLowerCase() !== 'refunded' && (
                               <>
-                                <button
-                                  onClick={() => openEditModal(p)}
-                                  className="inline-flex p-1.5 text-slate-400 hover:text-amber-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
-                                  title="Edit"
-                                >
-                                  <Edit className="h-4.5 w-4.5" />
-                                </button>
-                                <button
-                                  onClick={() => setCancellingPayment(p)}
-                                  className="inline-flex p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
-                                  title="Cancel Transaction"
-                                >
-                                  <Trash2 className="h-4.5 w-4.5" />
-                                </button>
-                              {isSuperAdmin && (
-                                <button
-                                  onClick={() => handleDeletePayment(p.id)}
-                                  className="inline-flex p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
-                                  title="Delete Payment Permanently"
-                                >
-                                  <Trash2 className="h-4.5 w-4.5" />
-                                </button>
-                              )}
-</>
+                                {canEditPayment(role) && (
+                                  <button
+                                    onClick={() => openEditModal(p)}
+                                    className="inline-flex p-1.5 text-slate-400 hover:text-amber-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
+                                    title="Edit"
+                                  >
+                                    <Edit className="h-4.5 w-4.5" />
+                                  </button>
+                                )}
+                                {canCancelPayment(role) && (
+                                  <button
+                                    onClick={() => setCancellingPayment(p)}
+                                    className="inline-flex p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
+                                    title="Cancel Transaction"
+                                  >
+                                    <Trash2 className="h-4.5 w-4.5" />
+                                  </button>
+                                )}
+                              </>
+                            )}
+                            {isSuperAdmin(role) && (
+                              <button
+                                onClick={() => handleDeletePayment(p.id)}
+                                className="inline-flex p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
+                                title="Delete Payment Permanently"
+                              >
+                                <Trash2 className="h-4.5 w-4.5" />
+                              </button>
                             )}
                           </td>
                         </tr>

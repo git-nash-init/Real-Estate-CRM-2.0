@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { canCreateLead, canEditLead, isSuperAdmin } from '../utils/permissions';
 import { reportQueryError } from '../services/queryLogger';
 import { supabase } from '../services/supabaseClient';
 import {
@@ -47,6 +48,7 @@ interface Lead {
   owner_id: string | null;
   channel_partner_id: string | null;
   telecaller_id: string | null;
+  sourcing_manager_id: string | null;
 }
 
 export const Leads: React.FC = () => {
@@ -206,10 +208,10 @@ export const Leads: React.FC = () => {
               if (rName === 'sourcing_manager' || rName === 'sourcing_manager_tl') {
                 smMap.set(ur.user_id, pName);
               }
-              if (rName === 'telecaller' || rName === 'telecaller_tl') {
+              if (rName === 'telecaller') {
                 tcMap.set(ur.user_id, pName);
               }
-              if (rName === 'closing_manager' || rName === 'closing_tl' || rName === 'site_head') {
+              if (rName === 'closing_manager' || rName === 'closing_manager_tl' || rName === 'site_head') {
                 cmMap.set(ur.user_id, pName);
               }
             }
@@ -597,13 +599,13 @@ export const Leads: React.FC = () => {
   // bypass a channel_partner could use to add leads manually, which the
   // client explicitly wants blocked (bulk upload stays available to them;
   // this is specifically about the one-by-one add path).
-  const canCreateLead = role === 'sourcing_manager' || role === 'sourcing_manager_tl' || role === 'super_admin' || role === 'site_head';
+  const hasCreateAccess = canCreateLead(role);
   useEffect(() => {
     if (searchParams.get('new') === 'true') {
-      if (canCreateLead) setIsCreateOpen(true);
+      if (hasCreateAccess) setIsCreateOpen(true);
       setSearchParams({}, { replace: true });
     }
-  }, [searchParams, setSearchParams, canCreateLead]);
+  }, [searchParams, setSearchParams, hasCreateAccess]);
 
   // Alert auto-dismiss timer
   useEffect(() => {
@@ -884,7 +886,7 @@ export const Leads: React.FC = () => {
             </button>
           )}
 
-          {canCreateLead && (
+          {hasCreateAccess && (
             <button
               onClick={() => setIsCreateOpen(true)}
               className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
@@ -1072,7 +1074,7 @@ export const Leads: React.FC = () => {
                             >
                               <MessageCircle className="h-3.5 w-3.5" />
                             </button>
-                            {role !== 'channel_partner' && (
+                            {canEditLead(role, user?.id, lead.owner_id, lead.sourcing_manager_id, lead.telecaller_id) && (
                               <button
                                 onClick={() => openEditLead(lead)}
                                 title="Edit lead"
@@ -1081,7 +1083,7 @@ export const Leads: React.FC = () => {
                                 <Pencil className="h-3.5 w-3.5" />
                               </button>
                             )}
-                            {role === 'super_admin' && (
+                            {isSuperAdmin(role) && (
                               <button
                                 onClick={() => handleDeleteLead(lead)}
                                 title="Delete lead"

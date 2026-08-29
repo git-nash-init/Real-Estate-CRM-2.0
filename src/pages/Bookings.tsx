@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
+import { canCreateBooking, canCancelBooking, isSuperAdmin } from '../utils/permissions';
 import {
   Search,
   RefreshCw,
@@ -86,7 +87,6 @@ interface Tower {
 
 export const Bookings: React.FC = () => {
   const { role, assignedProjects } = useAuth();
-  const isSuperAdmin = role === 'super_admin';
   
   const canApproveBooking = useCallback((booking: Booking | null) => {
     if (!booking) return false;
@@ -1251,12 +1251,14 @@ export const Bookings: React.FC = () => {
             <RefreshCw className={`h-4 w-4 text-slate-500 ${syncing ? 'animate-spin' : ''}`} />
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
-          <button
-            onClick={() => setIsCreateOpen(true)}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
-          >
-            + New Booking
-          </button>
+          {canCreateBooking(role) && (
+            <button
+              onClick={() => setIsCreateOpen(true)}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
+            >
+              + New Booking
+            </button>
+          )}
         </div>
       </div>
 
@@ -1410,7 +1412,7 @@ export const Bookings: React.FC = () => {
                               )}
                               
                               {/* Cancel Booking Action */}
-                              {(b.status?.toLowerCase() === 'draft' || b.status?.toLowerCase() === 'confirmed') && (
+                              {canCancelBooking(role) && (b.status?.toLowerCase() === 'draft' || b.status?.toLowerCase() === 'confirmed') && (
                                 <button
                                   onClick={() => { setCancellingBooking(b); setCancelReason(''); setCancelRefundAmount(String(b.token_amount || 0)); setCancelError(null); }}
                                   disabled={updatingId === b.id}
@@ -1427,7 +1429,7 @@ export const Bookings: React.FC = () => {
                                 <Eye className="h-3.5 w-3.5" />
                                 <span>View</span>
                               </button>
-                              {isSuperAdmin && (
+                              {isSuperAdmin(role) && (
                                 <button
                                   onClick={() => handleDeleteBooking(b)}
                                   className="p-1.5 border border-slate-200 rounded-lg text-rose-500 hover:bg-rose-50 transition-colors"

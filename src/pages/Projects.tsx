@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../hooks/useAuth';
+import { canManageProjects, canBulkAddUnits, isSuperAdmin } from '../utils/permissions';
 import {
   Search,
   RefreshCw,
@@ -107,7 +108,6 @@ const serializeDescription = (developer: string, rera: string, website: string, 
 
 export const Projects: React.FC = () => {
   const { role } = useAuth();
-  const isSuperAdmin = role === 'super_admin';
   // Navigation & View Mode
   // 'list' or 'details'
   const [viewMode, setViewMode] = useState<'list' | 'details'>('list');
@@ -808,12 +808,14 @@ export const Projects: React.FC = () => {
                 <RefreshCw className={`h-4 w-4 text-slate-500 ${syncing ? 'animate-spin' : ''}`} />
                 <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
               </button>
-              <button
-                onClick={openNewProject}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
-              >
-                + New Project
-              </button>
+              {canManageProjects(role) && (
+                <button
+                  onClick={openNewProject}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
+                >
+                  + New Project
+                </button>
+              )}
             </div>
           </div>
 
@@ -935,20 +937,22 @@ export const Projects: React.FC = () => {
                                     <Settings className="h-3.5 w-3.5" />
                                     <span>Manage</span>
                                   </button>
-                                  <button
-                                    onClick={() => openEditProject(proj)}
-                                    className="p-1.5 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-amber-600 transition-colors"
-                                  >
-                                    <Edit2 className="h-3.5 w-3.5" />
-                                  </button>
-                                  {isSuperAdmin && (
-                                  <button
-                                    onClick={() => handleDeleteProject(proj.id)}
-                                    className="p-1.5 border border-slate-200 rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
+                                  {canManageProjects(role) && (
+                                    <button
+                                      onClick={() => openEditProject(proj)}
+                                      className="p-1.5 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-indigo-600 transition-colors focus:outline-none"
+                                    >
+                                      <Edit2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                                  {isSuperAdmin(role) && (
+                                    <button
+                                      onClick={() => handleDeleteProject(proj.id)}
+                                      className="p-1.5 border border-slate-200 rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors focus:outline-none"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
                                 </div>
                               </td>
                             </tr>
@@ -1156,12 +1160,14 @@ export const Projects: React.FC = () => {
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <h3 className="text-base font-bold text-slate-900">Towers Listing</h3>
-                <button
-                  onClick={openNewTower}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-xl text-xs font-semibold shadow-sm focus:outline-none"
-                >
-                  + Add Tower
-                </button>
+                {canManageProjects(role) && (
+                  <button
+                    onClick={openNewTower}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-xl text-xs font-semibold shadow-sm focus:outline-none"
+                  >
+                    + Add Tower
+                  </button>
+                )}
               </div>
 
               <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
@@ -1195,13 +1201,15 @@ export const Projects: React.FC = () => {
                             </td>
                             <td className="py-3.5 px-6 text-right">
                               <div className="flex items-center justify-end space-x-1.5">
-                                <button
-                                  onClick={() => openEditTower(tow)}
-                                  className="p-1 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-indigo-600 transition-colors"
-                                >
-                                  <Edit2 className="h-3.5 w-3.5" />
-                                </button>
-                                {isSuperAdmin && (
+                                {canManageProjects(role) && (
+                                  <button
+                                    onClick={() => openEditTower(tow)}
+                                    className="p-1 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-indigo-600 transition-colors"
+                                  >
+                                    <Edit2 className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
+                                {isSuperAdmin(role) && (
                                   <button
                                   onClick={() => handleDeleteTower(tow.id)}
                                   className="p-1 border border-slate-200 rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
@@ -1220,12 +1228,14 @@ export const Projects: React.FC = () => {
                           <div className="flex flex-col items-center justify-center space-y-2">
                             <Layers className="h-6 w-6 text-slate-300" />
                             <p className="text-slate-500 font-semibold text-xs">No towers added to this project.</p>
-                            <button
-                              onClick={openNewTower}
-                              className="mt-1 bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-xl text-xxs font-semibold shadow-sm focus:outline-none"
-                            >
-                              + Add Tower
-                            </button>
+                            {canManageProjects(role) && (
+                              <button
+                                onClick={openNewTower}
+                                className="mt-1 bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-xl text-xxs font-semibold shadow-sm focus:outline-none"
+                              >
+                                + Add Tower
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1242,32 +1252,36 @@ export const Projects: React.FC = () => {
               <div className="flex justify-between items-center">
                 <h3 className="text-base font-bold text-slate-900">Inventory Units</h3>
                 <div className="flex items-center space-x-2">
-                  <button
-                    onClick={() => {
-                      if (projectTowers.length === 0) {
-                        setNotification({ type: 'error', message: 'You must add at least one tower first before generating units.' });
-                        return;
-                      }
-                      setBulkTowerId(projectTowers[0]?.id || '');
-                      setBulkError(null);
-                      setIsBulkModalOpen(true);
-                    }}
-                    className="bg-indigo-50 border border-indigo-100 hover:bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors focus:outline-none"
-                  >
-                    + Bulk Add Units
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (projectTowers.length === 0) {
-                        setNotification({ type: 'error', message: 'You must add at least one tower first before creating units.' });
-                        return;
-                      }
-                      openNewUnit();
-                    }}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-xl text-xs font-semibold shadow-sm focus:outline-none"
-                  >
-                    + Add Unit
-                  </button>
+                  {canBulkAddUnits(role) && (
+                    <button
+                      onClick={() => {
+                        if (projectTowers.length === 0) {
+                          setNotification({ type: 'error', message: 'You must add at least one tower first before generating units.' });
+                          return;
+                        }
+                        setBulkTowerId(projectTowers[0]?.id || '');
+                        setBulkError(null);
+                        setIsBulkModalOpen(true);
+                      }}
+                      className="bg-indigo-50 border border-indigo-100 hover:bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors focus:outline-none"
+                    >
+                      + Bulk Add Units
+                    </button>
+                  )}
+                  {canManageProjects(role) && (
+                    <button
+                      onClick={() => {
+                        if (projectTowers.length === 0) {
+                          setNotification({ type: 'error', message: 'You must add at least one tower first before creating units.' });
+                          return;
+                        }
+                        openNewUnit();
+                      }}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-xl text-xs font-semibold shadow-sm focus:outline-none"
+                    >
+                      + Add Unit
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1314,13 +1328,15 @@ export const Projects: React.FC = () => {
                             </td>
                             <td className="py-3.5 px-6 text-right">
                               <div className="flex items-center justify-end space-x-1.5">
-                                <button
-                                  onClick={() => openEditUnit(unit)}
-                                  className="p-1 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-indigo-600 transition-colors"
-                                >
-                                  <Edit2 className="h-3.5 w-3.5" />
-                                </button>
-                                {isSuperAdmin && (
+                                {canManageProjects(role) && (
+                                  <button
+                                    onClick={() => openEditUnit(unit)}
+                                    className="p-1 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-indigo-600 transition-colors"
+                                  >
+                                    <Edit2 className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
+                                {isSuperAdmin(role) && (
                                   <button
                                   onClick={() => handleDeleteUnit(unit.id)}
                                   className="p-1 border border-slate-200 rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
@@ -1339,12 +1355,14 @@ export const Projects: React.FC = () => {
                           <div className="flex flex-col items-center justify-center space-y-2">
                             <Home className="h-6 w-6 text-slate-300" />
                             <p className="text-slate-500 font-semibold text-xs">No units added yet.</p>
-                            <button
-                              onClick={openNewUnit}
-                              className="mt-1 bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-xl text-xxs font-semibold shadow-sm focus:outline-none"
-                            >
-                              + Add Unit
-                            </button>
+                            {canManageProjects(role) && (
+                              <button
+                                onClick={openNewUnit}
+                                className="mt-1 bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-xl text-xxs font-semibold shadow-sm focus:outline-none"
+                              >
+                                + Add Unit
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
