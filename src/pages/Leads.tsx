@@ -1117,22 +1117,22 @@ export const Leads: React.FC = () => {
                               <button onClick={() => setSelectedLead(lead)} className="px-3 py-1.5 border border-slate-200 bg-white text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-100 transition-colors">
                                 DETAILS
                               </button>
-                              <button onClick={() => updateLeadStatus(lead, 'call_back')} className="px-3 py-1.5 border border-indigo-200 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-100 transition-colors">
+                              <button onClick={() => updateLeadStatus(lead, 'call_back')} className="px-3 py-1.5 border border-orange-500 bg-orange-500 text-black rounded-lg text-xs font-bold hover:bg-orange-600 transition-colors">
                                 CALL BACK
                               </button>
-                              <button onClick={() => handleLostStatus(lead)} className="px-3 py-1.5 border border-rose-200 bg-rose-50 text-rose-700 rounded-lg text-xs font-bold hover:bg-rose-100 transition-colors">
+                              <button onClick={() => handleLostStatus(lead)} className="px-3 py-1.5 border border-red-600 bg-red-600 text-black rounded-lg text-xs font-bold hover:bg-red-700 transition-colors">
                                 LOST
                               </button>
-                              <button onClick={() => updateLeadStatus(lead, 'booked')} className="px-3 py-1.5 border border-emerald-200 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-bold hover:bg-emerald-100 transition-colors">
+                              <button onClick={() => updateLeadStatus(lead, 'booked')} className="px-3 py-1.5 border border-[#00FF00] bg-[#00FF00] text-black rounded-lg text-xs font-bold hover:bg-[#00cc00] transition-colors">
                                 BOOKED
                               </button>
-                              <button onClick={() => updateLeadStatus(lead, 'planed')} className="px-3 py-1.5 border border-amber-200 bg-amber-50 text-amber-700 rounded-lg text-xs font-bold hover:bg-amber-100 transition-colors">
+                              <button onClick={() => updateLeadStatus(lead, 'planed')} className="px-3 py-1.5 border border-cyan-400 bg-cyan-400 text-black rounded-lg text-xs font-bold hover:bg-cyan-500 transition-colors">
                                 PLANED
                               </button>
-                              <button onClick={() => updateLeadStatus(lead, 'other_lead')} className="px-3 py-1.5 border border-purple-200 bg-purple-50 text-purple-700 rounded-lg text-xs font-bold hover:bg-purple-100 transition-colors">
+                              <button onClick={() => updateLeadStatus(lead, 'other_lead')} className="px-3 py-1.5 border border-black bg-black text-red-600 rounded-lg text-xs font-bold hover:bg-gray-900 transition-colors">
                                 OTHER LEAD
                               </button>
-                              <button onClick={() => updateLeadStatus(lead, 'visit_done')} className="px-3 py-1.5 border border-sky-200 bg-sky-50 text-sky-700 rounded-lg text-xs font-bold hover:bg-sky-100 transition-colors">
+                              <button onClick={() => updateLeadStatus(lead, 'visit_done')} className="px-3 py-1.5 border border-[#5AB7B7] bg-[#5AB7B7] text-black rounded-lg text-xs font-bold hover:bg-[#4a9f9f] transition-colors">
                                 VISIT DONE
                               </button>
                             </div>

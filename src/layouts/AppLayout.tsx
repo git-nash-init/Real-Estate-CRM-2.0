@@ -45,7 +45,7 @@ export const AppLayout: React.FC = () => {
   const navigationItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     { name: 'Leads', path: '/leads', icon: UserCheck },
-    { name: 'Bulk Uploads', path: '/bulk-uploads', icon: FileSpreadsheet },
+    { name: 'Bulk Uploads', path: '/bulk-uploads', icon: FileSpreadsheet, allowedRoles: ['super_admin', 'site_head', 'sourcing_manager', 'sourcing_manager_tl', 'telecaller', 'channel_partner'] },
     { name: 'Follow-ups', path: '/follow-ups', icon: PhoneCall },
     { name: 'Site Visits', path: '/site-visits', icon: MapPin },
     { name: 'Projects', path: '/projects', icon: Building2 },
