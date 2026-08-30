@@ -702,13 +702,15 @@ export const Payments: React.FC = () => {
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
           {activeView === 'customer' ? (
-            <button
-              onClick={openCreateModal}
-              className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span>New Payment</span>
-            </button>
+            role !== 'channel_partner' && (
+              <button
+                onClick={openCreateModal}
+                className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>New Payment</span>
+              </button>
+            )
           ) : (
             canEditPayment(role) && (
               <button

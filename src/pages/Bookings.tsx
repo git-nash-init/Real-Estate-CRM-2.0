@@ -50,6 +50,8 @@ interface Booking {
   refund_amount?: number | null;
   cancellation_reason?: string | null;
   cancelled_at?: string | null;
+  sales_owner?: string | null;
+  closing_manager?: string | null;
 }
 
 interface Lead {
@@ -1645,6 +1647,16 @@ export const Bookings: React.FC = () => {
                             <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Sourcing Manager Assigned</span>
                             <span className="text-sm font-semibold text-slate-850">
                               {profileMap.get(lead?.owner_id || '') || 'N/A'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-start space-x-2 text-slate-700">
+                          <User className="h-4 w-4 text-slate-400 mt-1 flex-shrink-0" />
+                          <div>
+                            <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Allocated To</span>
+                            <span className="text-sm font-semibold text-slate-850">
+                              {profileMap.get(selectedBooking.sales_owner || '') || profileMap.get(selectedBooking.closing_manager || '') || 'N/A'}
                             </span>
                           </div>
                         </div>

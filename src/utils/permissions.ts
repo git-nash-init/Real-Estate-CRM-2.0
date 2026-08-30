@@ -45,7 +45,7 @@ export const canSendMarketingBlast = (role: Role) =>
 
 // A5: Leads
 export const canCreateLead = (role: Role) =>
-  ['sourcing_manager', 'sourcing_manager_tl', 'super_admin', 'site_head', 'presales'].includes(role as string);
+  ['sourcing_manager', 'sourcing_manager_tl', 'super_admin', 'site_head', 'presales', 'channel_partner'].includes(role as string);
 
 export const canEditLead = (
   role: Role,
@@ -116,8 +116,9 @@ export const canEditTask = (
 // channel_partner is included deliberately -- the client explicitly asked
 // for bulk upload to be available to channel partners, and the supporting
 // RLS (can_manage_leads / bulk_lead_uploads insert policy) was widened to
-// allow it. Note this is the ONE lead-creation path a CP has: they still
-// cannot create leads one-by-one (see canCreateLead below).
+// allow it. A CP can also add a single lead one-by-one (see canCreateLead
+// above) -- Leads.tsx scopes that form to their own CP record and assigned
+// projects when the role is channel_partner.
 export const canAccessBulkUploadPage = (role: Role) =>
   ['super_admin', 'site_head', 'sourcing_manager', 'sourcing_manager_tl', 'telecaller', 'channel_partner'].includes(role as string);
 

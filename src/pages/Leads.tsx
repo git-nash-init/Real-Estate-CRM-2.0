@@ -85,6 +85,7 @@ export const Leads: React.FC = () => {
 
   // Auth and Routing hooks
   const { user, role } = useAuth();
+  const isChannelPartner = role === 'channel_partner';
   const [searchParams, setSearchParams] = useSearchParams();
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | null>(null);
   const [isLogCallOpen, setIsLogCallOpen] = useState(false);
@@ -163,6 +164,12 @@ export const Leads: React.FC = () => {
   const [channelPartners, setChannelPartners] = useState<{ id: string; name: string; partner_code: string }[]>([]);
   const [channelPartnerMap, setChannelPartnerMap] = useState<Map<string, string>>(new Map());
 
+  // A channel partner adding their own lead: their own CP id and the
+  // projects they're assigned to (channel_partner_projects), not every
+  // project -- same scoping already used in BulkUploadModal/SiteVisits.
+  const [myCpId, setMyCpId] = useState<string | null>(null);
+  const [myCpProjectMap, setMyCpProjectMap] = useState<Map<string, string>>(new Map());
+
   // Fetch filter options (projects, profiles, unique statuses/sources)
   const fetchFilterOptions = useCallback(async () => {
     // 1. Load Projects from public.projects
@@ -209,7 +216,7 @@ export const Leads: React.FC = () => {
               if (rName === 'sourcing_manager' || rName === 'sourcing_manager_tl') {
                 smMap.set(ur.user_id, pName);
               }
-              if (rName === 'telecaller') {
+              if (rName === 'telecaller' || rName === 'presales' || rName === 'presales_tl') {
                 tcMap.set(ur.user_id, pName);
               }
               if (rName === 'closing_manager' || rName === 'closing_manager_tl' || rName === 'site_head') {
@@ -331,6 +338,27 @@ export const Leads: React.FC = () => {
         else setCurrentEmployeeId(data?.id || null);
       });
   }, [user]);
+
+  // Channel partner adding their own lead: resolve their own CP id, then
+  // scope the Project dropdown to their channel_partner_projects assignments.
+  useEffect(() => {
+    if (!isChannelPartner || !user?.id) return;
+    supabase.from('channel_partners').select('id').eq('user_id', user.id).maybeSingle()
+      .then(({ data: ownCp, error }) => {
+        if (error) { reportQueryError('Leads: own channel partner lookup', error); return; }
+        if (!ownCp) return;
+        setMyCpId(ownCp.id);
+        supabase.from('channel_partner_projects').select('project_id, projects(project_name)').eq('channel_partner_id', ownCp.id)
+          .then(({ data: assignments, error: assignErr }) => {
+            if (assignErr) { reportQueryError('Leads: CP project assignments', assignErr); return; }
+            const m = new Map<string, string>();
+            (assignments || []).forEach((a: any) => {
+              if (a.project_id) m.set(a.project_id, a.projects?.project_name || 'Unnamed Project');
+            });
+            setMyCpProjectMap(m);
+          });
+      });
+  }, [isChannelPartner, user?.id]);
 
   // Load configuration and data
   useEffect(() => {
@@ -604,18 +632,21 @@ export const Leads: React.FC = () => {
   // URL query parameter detector to open creation modal. Guarded by the
   // same role check as the "+ New Lead" button itself -- without this,
   // /leads?new=true (e.g. Dashboard's own "+ New Lead" button, or just
-  // typing the URL) opened the create modal for every role regardless of
-  // whether the button was even shown to them. Confirmed live as the real
-  // bypass a channel_partner could use to add leads manually, which the
-  // client explicitly wants blocked (bulk upload stays available to them;
-  // this is specifically about the one-by-one add path).
+  // typing the URL) would open the create modal for every role regardless
+  // of whether the button was even shown to them.
   const hasCreateAccess = canCreateLead(role);
   useEffect(() => {
     if (searchParams.get('new') === 'true') {
-      if (hasCreateAccess) setIsCreateOpen(true);
+      if (hasCreateAccess) {
+        if (isChannelPartner) {
+          setSelectedSource('channel_partner');
+          setSelectedChannelPartnerId(myCpId || '');
+        }
+        setIsCreateOpen(true);
+      }
       setSearchParams({}, { replace: true });
     }
-  }, [searchParams, setSearchParams, hasCreateAccess]);
+  }, [searchParams, setSearchParams, hasCreateAccess, isChannelPartner, myCpId]);
 
   // Alert auto-dismiss timer
   useEffect(() => {
@@ -898,7 +929,13 @@ export const Leads: React.FC = () => {
 
           {hasCreateAccess && (
             <button
-              onClick={() => setIsCreateOpen(true)}
+              onClick={() => {
+                if (isChannelPartner) {
+                  setSelectedSource('channel_partner');
+                  setSelectedChannelPartnerId(myCpId || '');
+                }
+                setIsCreateOpen(true);
+              }}
               className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
             >
               + New Lead
@@ -1740,10 +1777,10 @@ export const Leads: React.FC = () => {
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
                         <option value="">Select Project...</option>
-                        {projectMap.size === 0 ? (
+                        {(isChannelPartner ? myCpProjectMap : projectMap).size === 0 ? (
                           <option value="" disabled>No projects available</option>
                         ) : (
-                          Array.from(projectMap.entries()).map(([id, name]) => (
+                          Array.from((isChannelPartner ? myCpProjectMap : projectMap).entries()).map(([id, name]) => (
                             <option key={id} value={id}>{name}</option>
                           ))
                         )}
@@ -1795,7 +1832,7 @@ export const Leads: React.FC = () => {
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Source Of Inquiry *</label>
                       <select
                         required
-                        disabled={!!editingLead && !canEditSource}
+                        disabled={isChannelPartner || (!!editingLead && !canEditSource)}
                         value={selectedSource}
                         onChange={(e) => {
                           setSelectedSource(e.target.value);
@@ -1825,7 +1862,13 @@ export const Leads: React.FC = () => {
                   <div className="space-y-4">
                     <h4 className="font-bold text-xs text-indigo-600 border-b border-slate-100 pb-1.5 uppercase tracking-wider">Follow-up & Allocation</h4>
 
-                    {/* Sourcing Manager */}
+                    {/* Sourcing Manager, Presales (Telecaller), Allocated To,
+                        Status and Follow-up Date are internal staff
+                        allocation fields -- a channel partner adding their
+                        own lead has no one to assign here; admin staff
+                        triage and allocate it after it lands. */}
+                    {!isChannelPartner && (
+                      <>
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager</label>
                       <select
@@ -1840,22 +1883,20 @@ export const Leads: React.FC = () => {
                       </select>
                     </div>
 
-                    {/* Telecaller */}
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Telecaller</label>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Presales (Telecaller)</label>
                       <select
                         value={telecallerId}
                         onChange={(e) => setTelecallerId(e.target.value)}
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
-                        <option value="">Select Telecaller...</option>
+                        <option value="">Select Presales (Telecaller)...</option>
                         {Array.from(telecallerMap.entries()).map(([id, name]) => (
                           <option key={id} value={id}>{name}</option>
                         ))}
                       </select>
                     </div>
 
-                    {/* Allocated To */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Allocated To *</label>
                       <select
@@ -1871,7 +1912,6 @@ export const Leads: React.FC = () => {
                       </select>
                     </div>
 
-                    {/* Status */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Status *</label>
                       <select
@@ -1888,7 +1928,6 @@ export const Leads: React.FC = () => {
                       </select>
                     </div>
 
-                    {/* Follow-up Date */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Follow-up Date</label>
                       <input
@@ -1898,17 +1937,22 @@ export const Leads: React.FC = () => {
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-850 text-sm focus:bg-white focus:outline-none transition-all"
                       />
                     </div>
+                      </>
+                    )}
 
                     {/* Channel Partner Select — only relevant, and only
-                        shown, when Source Of Inquiry is Channel Partner. */}
+                        shown, when Source Of Inquiry is Channel Partner.
+                        Locked to their own record when a CP is adding
+                        their own lead (source is force-set above). */}
                     {selectedSource === 'channel_partner' && (
                       <div>
                         <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Channel Partner *</label>
                         <select
                           required
+                          disabled={isChannelPartner}
                           value={selectedChannelPartnerId}
                           onChange={(e) => setSelectedChannelPartnerId(e.target.value)}
-                          className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
+                          className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all disabled:opacity-60 disabled:cursor-not-allowed"
                         >
                           <option value="">Select Channel Partner...</option>
                           {channelPartners.map(cp => (
