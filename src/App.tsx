@@ -72,7 +72,10 @@ function App() {
                 Marketing carry no meaningful CP-scoped view, so they're
                 excluded outright rather than rendered empty. */}
             <Route path="follow-ups" element={<ProtectedRoute excludedRoles={['channel_partner']}><Followups /></ProtectedRoute>} />
-            <Route path="site-visits" element={<ProtectedRoute excludedRoles={['channel_partner']}><SiteVisits /></ProtectedRoute>} />
+            {/* Channel partners get in here for the Walk-in Visits section
+                only -- SiteVisits.tsx itself hides the formal scheduled
+                Site Visits directory for that role. */}
+            <Route path="site-visits" element={<SiteVisits />} />
             <Route path="projects" element={<ProtectedRoute excludedRoles={['channel_partner']}><Projects /></ProtectedRoute>} />
             <Route path="inventory" element={<ProtectedRoute excludedRoles={['channel_partner']}><Inventory /></ProtectedRoute>} />
             <Route path="bookings" element={<Bookings />} />

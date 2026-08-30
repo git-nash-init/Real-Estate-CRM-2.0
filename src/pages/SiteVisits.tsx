@@ -42,8 +42,14 @@ interface Lead {
   channel_partner_id: string | null;
 }
 
+// Walk-in visit codes for a channel-partner-submitted visit always send
+// from the super admin's own connected WhatsApp number, not the CP's --
+// channel partners don't get their own WhatsApp login for this feature.
+const SWAPNIL_USER_ID = 'ccfd55b7-36a2-4ab0-964e-a7e8403a9504';
+
 export const SiteVisits: React.FC = () => {
   const { role, user } = useAuth();
+  const isChannelPartner = role === 'channel_partner';
   // Delete is restricted to super_admin — both DB tables' DELETE RLS
   // policies already enforce this independently (site_visits_delete /
   // quick_site_visits_delete both check is_super_admin()), this only
@@ -53,13 +59,17 @@ export const SiteVisits: React.FC = () => {
   // A channel partner's Project dropdown in the Walk-in Visit form is
   // limited to the projects actually assigned to them
   // (channel_partner_projects) -- previously showed every project in the
-  // company regardless of assignment.
+  // company regardless of assignment. Also resolve their own CP id/name so
+  // the Channel Partner and Referenced By fields can auto-fill to
+  // themselves instead of offering a picker.
+  const [myCpId, setMyCpId] = useState<string | null>(null);
   const [myCpProjectIds, setMyCpProjectIds] = useState<string[] | null>(null);
   useEffect(() => {
     if (role !== 'channel_partner' || !user?.id) return;
     (async () => {
       const { data: cp } = await supabase.from('channel_partners').select('id').eq('user_id', user.id).maybeSingle();
       if (!cp) { setMyCpProjectIds([]); return; }
+      setMyCpId(cp.id);
       const { data: assignments } = await supabase.from('channel_partner_projects').select('project_id').eq('channel_partner_id', cp.id);
       setMyCpProjectIds((assignments || []).map(a => a.project_id));
     })();
@@ -138,6 +148,14 @@ export const SiteVisits: React.FC = () => {
   const [quickProjectId, setQuickProjectId] = useState('');
   const [quickSourcingManagerName, setQuickSourcingManagerName] = useState('');
   const [quickReferencedBy, setQuickReferencedBy] = useState('');
+
+  // A channel partner logging their own walk-in visit doesn't pick a
+  // Channel Partner or type who referred it -- both are themselves.
+  useEffect(() => {
+    if (!isQuickCreateOpen || !isChannelPartner) return;
+    if (myCpId) setQuickChannelPartnerId(myCpId);
+    setQuickReferencedBy(profileMap.get(user?.id || '') || '');
+  }, [isQuickCreateOpen, isChannelPartner, myCpId, user?.id, profileMap]);
 
   // Sourcing Manager picker for the Walk-in Visit form. Not tied to any
   // one role -- the client wants every walk-in visit to be able to credit
@@ -257,6 +275,24 @@ export const SiteVisits: React.FC = () => {
       return;
     }
 
+    // A channel-partner-submitted visit always sends via the super admin's
+    // WhatsApp session -- if it isn't connected, don't save the visit at
+    // all, since the verification code would never reach anyone.
+    if (isChannelPartner) {
+      const { data: waSession } = await supabase
+        .from('whatsapp_session')
+        .select('status, last_heartbeat_at')
+        .eq('id', SWAPNIL_USER_ID)
+        .maybeSingle();
+      const fresh = waSession?.last_heartbeat_at
+        ? Date.now() - new Date(waSession.last_heartbeat_at).getTime() < 20000
+        : false;
+      if (!fresh || waSession?.status !== 'open') {
+        setQuickCreateError('Kindly ask the super admin (Swapnil) to log in to WhatsApp in order to send the message and add the site visit.');
+        return;
+      }
+    }
+
     setQuickCreateError(null);
     setQuickCreateLoading(true);
     try {
@@ -311,8 +347,12 @@ export const SiteVisits: React.FC = () => {
         const cpPhone = normalizePhone(cp.mobile);
         outboxRows.push({ to_phone: cpPhone, message });
       }
+      // Channel-partner submissions always send from the super admin's
+      // number (already confirmed connected above); everyone else sends
+      // from their own connected session as before.
+      const outboxSenderId = isChannelPartner ? SWAPNIL_USER_ID : (user?.id || null);
       const { error: outboxErr } = await supabase.from('whatsapp_outbox').insert(
-        outboxRows.map(r => ({ ...r, status: 'queued', quick_visit_id: inserted.id, created_by: user?.id || null }))
+        outboxRows.map(r => ({ ...r, status: 'queued', quick_visit_id: inserted.id, created_by: outboxSenderId }))
       );
       if (outboxErr) {
         // Visit itself is already saved — a failed notification shouldn't
@@ -538,8 +578,10 @@ export const SiteVisits: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900">Site Visits Directory</h2>
-          <p className="text-slate-500 text-sm">Schedule, manage, and log client site inspect visits.</p>
+          <h2 className="text-2xl font-bold text-slate-900">{isChannelPartner ? 'Walk-in Visits' : 'Site Visits Directory'}</h2>
+          <p className="text-slate-500 text-sm">
+            {isChannelPartner ? 'Log walk-in visits from your customers and track their verification status.' : 'Schedule, manage, and log client site inspect visits.'}
+          </p>
         </div>
         <div className="flex items-center space-x-3">
           <button
@@ -586,7 +628,10 @@ export const SiteVisits: React.FC = () => {
         </div>
       )}
 
-      {/* TOOLBAR */}
+      {/* TOOLBAR — the formal Site Visits directory below isn't relevant to
+          a channel partner (it's the internal scheduled-visit workflow off
+          leads); they only get the Walk-in Visits section. */}
+      {!isChannelPartner && (
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4">
         {/* Search */}
         <div className="relative md:col-span-2">
@@ -628,6 +673,7 @@ export const SiteVisits: React.FC = () => {
           </select>
         </div>
       </div>
+      )}
 
       {/* WALK-IN VISITS — standalone, no lead relation. Shows the
           verification code and live WhatsApp delivery status per visit. */}
@@ -694,7 +740,9 @@ export const SiteVisits: React.FC = () => {
         </div>
       )}
 
-      {/* TABLE DIRECTORY */}
+      {/* TABLE DIRECTORY — formal scheduled visits off leads; not relevant
+          to a channel partner, who only works with Walk-in Visits above. */}
+      {!isChannelPartner && (
       <div className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden flex flex-col">
         {loading ? (
           <div className="py-24 text-center">
@@ -835,6 +883,7 @@ export const SiteVisits: React.FC = () => {
           </>
         )}
       </div>
+      )}
 
       {/* VIEW DETAIL MODAL */}
       {selectedVisit && (
@@ -1082,22 +1131,31 @@ export const SiteVisits: React.FC = () => {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Channel Partner</label>
-                  <select
-                    value={quickChannelPartnerId}
-                    onChange={(e) => setQuickChannelPartnerId(e.target.value)}
-                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
-                  >
-                    <option value="">Select Channel Partner... (optional)</option>
-                    {channelPartners.map(cp => (
-                      <option key={cp.id} value={cp.id}>{cp.cp_code} - {cp.name}</option>
-                    ))}
-                  </select>
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Leave blank if this visit isn't from a Channel Partner — e.g. a personal referral. Their number is taken automatically from their Channel Partner record when selected.
-                  </p>
-                </div>
+                {isChannelPartner ? (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Channel Partner</label>
+                    <div className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-100 text-slate-500 text-sm">
+                      {channelPartners.find(cp => cp.id === myCpId)?.name || 'You'}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Channel Partner</label>
+                    <select
+                      value={quickChannelPartnerId}
+                      onChange={(e) => setQuickChannelPartnerId(e.target.value)}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
+                    >
+                      <option value="">Select Channel Partner... (optional)</option>
+                      {channelPartners.map(cp => (
+                        <option key={cp.id} value={cp.id}>{cp.cp_code} - {cp.name}</option>
+                      ))}
+                    </select>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Leave blank if this visit isn't from a Channel Partner — e.g. a personal referral. Their number is taken automatically from their Channel Partner record when selected.
+                    </p>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Project *</label>
@@ -1131,17 +1189,26 @@ export const SiteVisits: React.FC = () => {
                   </select>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Referenced By</label>
-                  <input
-                    type="text"
-                    placeholder="Name of the person who referred this visit (optional)"
-                    value={quickReferencedBy}
-                    onChange={(e) => setQuickReferencedBy(e.target.value)}
-                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
-                  />
-                  <p className="text-[10px] text-slate-400 mt-1">Appears in the WhatsApp message as "Referred by {'{'}name{'}'}" when filled in.</p>
-                </div>
+                {isChannelPartner ? (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Referenced By</label>
+                    <div className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-100 text-slate-500 text-sm">
+                      {quickReferencedBy || 'You'}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Referenced By</label>
+                    <input
+                      type="text"
+                      placeholder="Name of the person who referred this visit (optional)"
+                      value={quickReferencedBy}
+                      onChange={(e) => setQuickReferencedBy(e.target.value)}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">Appears in the WhatsApp message as "Referred by {'{'}name{'}'}" when filled in.</p>
+                  </div>
+                )}
 
                 <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 text-xxs text-slate-500">
                   A unique verification code will be generated and sent via WhatsApp to the customer, and to the Channel Partner if one is selected. This visit stays <span className="font-semibold">active for 24 hours</span>, after which it automatically expires.
