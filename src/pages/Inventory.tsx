@@ -17,6 +17,12 @@ import {
   List
 } from 'lucide-react';
 
+// Sorts unit numbers the way a person reads them (302, 402, 1501, 1502)
+// regardless of upload order -- a plain string sort would put "1501"
+// before "302" since '1' < '3', and no sort at all just shows DB
+// insertion order, which is what was happening before.
+const unitNumberCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
 // Interfaces mapping database columns
 interface Project {
   id: string;
@@ -643,7 +649,7 @@ export const Inventory: React.FC = () => {
         : true;
 
       return matchesSearch && matchesProject && matchesTower && matchesFloor && matchesConfig && matchesStatus;
-    });
+    }).sort((a, b) => unitNumberCollator.compare(a.unit_number, b.unit_number));
   };
 
   // Bulk Units generator preview handler
@@ -1271,7 +1277,9 @@ export const Inventory: React.FC = () => {
             const projectTowers = towers.filter(t => t.project_id === projectFilter);
             const activeTower = projectTowers.find(t => t.id === explorerTowerId) || projectTowers[0];
             const activeTowerFloors = floors.filter(f => f.tower_id === (activeTower?.id || ''));
-            const activeFloorUnits = inventoryList.filter(u => u.tower_id === (activeTower?.id || '') && u.floor_id === explorerFloorId);
+            const activeFloorUnits = inventoryList
+              .filter(u => u.tower_id === (activeTower?.id || '') && u.floor_id === explorerFloorId)
+              .sort((a, b) => unitNumberCollator.compare(a.unit_number, b.unit_number));
             
             return (
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
