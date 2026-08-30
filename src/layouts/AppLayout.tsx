@@ -61,7 +61,7 @@ export const AppLayout: React.FC = () => {
     { name: 'Follow-ups', path: '/follow-ups', icon: PhoneCall, hiddenForRoles: ['channel_partner'] },
     // Channel partners now log their own Walk-in Visits here -- SiteVisits.tsx
     // hides the formal scheduled Site Visits directory for that role.
-    { name: 'Site Visits', path: '/site-visits', icon: MapPin },
+    { name: 'Pre Tagging', path: '/site-visits', icon: MapPin },
     { name: 'Projects', path: '/projects', icon: Building2, hiddenForRoles: ['channel_partner'] },
     { name: 'Inventory', path: '/inventory', icon: Home, hiddenForRoles: ['channel_partner'] },
     { name: 'Bookings', path: '/bookings', icon: CalendarCheck },

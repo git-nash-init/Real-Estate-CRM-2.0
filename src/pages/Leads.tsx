@@ -611,10 +611,13 @@ export const Leads: React.FC = () => {
   // /leads?new=true (e.g. Dashboard's own "+ New Lead" button, or just
   // typing the URL) would open the create modal for every role regardless
   // of whether the button was even shown to them.
-  // channel_partner keeps its own separate, already-built cut-down path
-  // through this same button/form -- canCreateLead deliberately excludes
-  // it since that function now governs the full form specifically.
-  const hasCreateAccess = canCreateLead(role) || isChannelPartner;
+  // channel_partner explicitly does NOT get lead creation at all anymore
+  // (reversed per the client) -- they only ever see leads allocated to
+  // them. The CP-specific auto-fill branches further down (myCpId,
+  // myCpProjectMap, myCpSourcingManagerId, the isChannelPartner-conditional
+  // form fields) are now unreachable dead code from that earlier feature,
+  // left in place rather than ripped out in case this gets reversed again.
+  const hasCreateAccess = canCreateLead(role);
   useEffect(() => {
     if (searchParams.get('new') === 'true') {
       if (hasCreateAccess) {

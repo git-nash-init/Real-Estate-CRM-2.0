@@ -327,12 +327,14 @@ export const Dashboard: React.FC = () => {
             <RefreshCw className={`h-4 w-4 text-slate-500 ${syncing ? 'animate-spin' : ''}`} />
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
-          <button 
-            onClick={() => navigate('/leads?new=true')}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
-          >
-            + New Lead
-          </button>
+          {!isChannelPartner && (
+            <button
+              onClick={() => navigate('/leads?new=true')}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
+            >
+              + New Lead
+            </button>
+          )}
         </div>
       </div>
 

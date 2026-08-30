@@ -578,7 +578,7 @@ export const SiteVisits: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900">{isChannelPartner ? 'Walk-in Visits' : 'Site Visits Directory'}</h2>
+          <h2 className="text-2xl font-bold text-slate-900">{isChannelPartner ? 'Walk-in Visits' : 'Pre Tagging Directory'}</h2>
           <p className="text-slate-500 text-sm">
             {isChannelPartner ? 'Log walk-in visits from your customers and track their verification status.' : 'Schedule, manage, and log client site inspect visits.'}
           </p>
