@@ -44,8 +44,29 @@ export const canSendMarketingBlast = (role: Role) =>
   ['super_admin', 'closing_manager', 'marketing_head'].includes(role as string);
 
 // A5: Leads
-export const canCreateLead = (role: Role) =>
-  ['sourcing_manager', 'sourcing_manager_tl', 'super_admin', 'site_head', 'presales', 'channel_partner'].includes(role as string);
+// Every role can add a lead through the same main form super_admin uses
+// (channel_partner gets its own cut-down variant of that same form, built
+// separately in Leads.tsx) -- per the client's explicit "every role that
+// exists" instruction. Creating is intentionally wide open; editing and
+// visibility are the two things actually restricted (see canEditLeadRecord
+// and the leads_select/leads_update RLS policies).
+export const canCreateLead = (_role: Role) => true;
+
+// Editing an existing lead record (the pencil button on the Leads
+// directory / lead detail modal) is super_admin only, full stop -- per the
+// client's explicit "edit option should only be given to super admin...
+// they should not have the option to edit they should just have to add
+// data only." This replaces the earlier self-service model (site_head/
+// sourcing_manager_tl/project_admin, or a lead's own assignees, editing
+// their own leads) and also removes the bulk-upload-assigned telecaller's
+// ability to edit their own bulk lead's status through this same button --
+// that was a status-only update sharing this exact Edit control, so it
+// goes away as a direct consequence of "only super admin can edit."
+// Deliberately separate from canEditLead below, which Followups.tsx/
+// SiteVisits.tsx reuse for a different question (can this person manage
+// the follow-up/site-visit tied to a lead they're assigned to) that this
+// change was never meant to touch.
+export const canEditLeadRecord = (role: Role) => isSuperAdmin(role);
 
 export const canEditLead = (
   role: Role,
@@ -61,11 +82,11 @@ export const canEditLead = (
 
   if (isSuperAdmin(role)) return true;
   if (['site_head', 'sourcing_manager_tl', 'project_admin'].includes(role as string)) return true;
-  
+
   // Direct assignees can edit their own leads
   if (currentUserId && (
-    currentUserId === ownerId || 
-    currentUserId === sourcingManagerId || 
+    currentUserId === ownerId ||
+    currentUserId === sourcingManagerId ||
     currentUserId === telecallerId
   )) {
     return true;

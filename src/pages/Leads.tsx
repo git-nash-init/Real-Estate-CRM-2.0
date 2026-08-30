@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { canCreateLead, canEditLead, isSuperAdmin } from '../utils/permissions';
+import { canCreateLead, canEditLeadRecord, isSuperAdmin } from '../utils/permissions';
 import { reportQueryError } from '../services/queryLogger';
 import { supabase } from '../services/supabaseClient';
 import {
@@ -1135,7 +1135,7 @@ export const Leads: React.FC = () => {
                             >
                               <MessageCircle className="h-3.5 w-3.5" />
                             </button>
-                            {canEditLead(role, user?.id, lead.owner_id, lead.sourcing_manager_id, lead.telecaller_id, lead.bulk_upload_id) && (
+                            {canEditLeadRecord(role) && (
                               <button
                                 onClick={() => openEditLead(lead)}
                                 title="Edit lead"
@@ -1383,7 +1383,7 @@ export const Leads: React.FC = () => {
 
             {/* Modal Footer */}
             <div className="bg-slate-50 px-6 py-4 flex justify-end gap-2 border-t border-slate-100">
-              {role !== 'channel_partner' && (
+              {canEditLeadRecord(role) && (
                 <button
                   onClick={() => { openEditLead(selectedLead); setSelectedLead(null); }}
                   className="flex items-center gap-1.5 px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
