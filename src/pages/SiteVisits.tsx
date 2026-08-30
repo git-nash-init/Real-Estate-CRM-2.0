@@ -104,7 +104,7 @@ export const SiteVisits: React.FC = () => {
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Channel Partner lookups lists & map
-  const [channelPartners, setChannelPartners] = useState<{ id: string; name: string; cp_code: string; mobile: string | null }[]>([]);
+  const [channelPartners, setChannelPartners] = useState<{ id: string; name: string; cp_code: string; mobile: string | null; company_name: string | null }[]>([]);
   const [channelPartnerMap, setChannelPartnerMap] = useState<Map<string, string>>(new Map());
 
   // Status updating loader
@@ -381,7 +381,7 @@ export const SiteVisits: React.FC = () => {
         supabase.from('projects').select('id, project_name'),
         supabase.from('user_profiles').select('id, full_name'),
         supabase.from('leads').select('id, customer_name, mobile, email, project_id, owner_id, channel_partner_id'),
-        supabase.from('channel_partners').select('id, name, cp_code, mobile').eq('status', 'active')
+        supabase.from('channel_partners').select('id, name, cp_code, mobile, company_name').eq('status', 'active')
       ]);
 
       if (projectsRes.data) {
@@ -709,7 +709,7 @@ export const SiteVisits: React.FC = () => {
                       </td>
                       <td className="py-3 px-6 text-slate-600">{formatDDMMYYYY(new Date(v.visit_at))} · {formatTime12h(new Date(v.visit_at))}</td>
                       <td className="py-3 px-6 text-slate-600">{projectMap.get(v.project_id) || 'N/A'}</td>
-                      <td className="py-3 px-6 text-slate-600">{cp ? `${cp.cp_code} - ${cp.name}` : 'N/A'}</td>
+                      <td className="py-3 px-6 text-slate-600">{cp ? `${cp.cp_code} - ${cp.name}${cp.company_name ? ` (${cp.company_name})` : ''}` : 'N/A'}</td>
                       <td className="py-3 px-6">
                         <span className="font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-1 rounded-lg">{v.verification_code}</span>
                       </td>
@@ -1135,7 +1135,10 @@ export const SiteVisits: React.FC = () => {
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Channel Partner</label>
                     <div className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-100 text-slate-500 text-sm">
-                      {channelPartners.find(cp => cp.id === myCpId)?.name || 'You'}
+                      {(() => {
+                        const me = channelPartners.find(cp => cp.id === myCpId);
+                        return me ? `${me.name}${me.company_name ? ` (${me.company_name})` : ''}` : 'You';
+                      })()}
                     </div>
                   </div>
                 ) : (
@@ -1148,7 +1151,7 @@ export const SiteVisits: React.FC = () => {
                     >
                       <option value="">Select Channel Partner... (optional)</option>
                       {channelPartners.map(cp => (
-                        <option key={cp.id} value={cp.id}>{cp.cp_code} - {cp.name}</option>
+                        <option key={cp.id} value={cp.id}>{cp.cp_code} - {cp.name}{cp.company_name ? ` (${cp.company_name})` : ''}</option>
                       ))}
                     </select>
                     <p className="text-[10px] text-slate-400 mt-1">

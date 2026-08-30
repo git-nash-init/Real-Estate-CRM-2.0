@@ -161,7 +161,7 @@ export const Bookings: React.FC = () => {
   const [notes, setNotes] = useState('');
 
   // Channel Partner lookups lists & map
-  const [channelPartnersList, setChannelPartnersList] = useState<{ id: string; name: string; partner_code: string }[]>([]);
+  const [channelPartnersList, setChannelPartnersList] = useState<{ id: string; name: string; partner_code: string; company_name: string | null }[]>([]);
   const [channelPartnerMap, setChannelPartnerMap] = useState<Map<string, string>>(new Map());
 
   // Status updating loader
@@ -479,11 +479,11 @@ export const Bookings: React.FC = () => {
       // SiteVisits.tsx already filtered correctly; this was the one gap.
       const { data: cpData, error: cpError } = await supabase
         .from('channel_partners')
-        .select('id, name, partner_code')
+        .select('id, name, partner_code, company_name')
         .eq('status', 'active');
       if (!cpError && cpData) {
         setChannelPartnersList(cpData as any);
-        setChannelPartnerMap(new Map(cpData.map(c => [c.id, `${c.partner_code || ''} - ${c.name || ''}`])));
+        setChannelPartnerMap(new Map(cpData.map(c => [c.id, `${c.partner_code || ''} - ${c.name || ''}${c.company_name ? ` (${c.company_name})` : ''}`])));
       }
 
       // 4. Fetch Project Inventory
@@ -2167,7 +2167,7 @@ export const Bookings: React.FC = () => {
                     <option value="">Direct (No Channel Partner Referral)</option>
                     {channelPartnersList.map(cp => (
                       <option key={cp.id} value={cp.id}>
-                        {cp.partner_code || ''} - {cp.name}
+                        {cp.partner_code || ''} - {cp.name}{cp.company_name ? ` (${cp.company_name})` : ''}
                       </option>
                     ))}
                   </select>

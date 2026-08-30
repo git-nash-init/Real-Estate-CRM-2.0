@@ -28,7 +28,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
   const [telecallerIds, setTelecallerIds] = useState<string[]>([]);
 
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
-  const [partners, setPartners] = useState<{ id: string; name: string }[]>([]);
+  const [partners, setPartners] = useState<{ id: string; name: string; company_name: string | null }[]>([]);
   const [telecallers, setTelecallers] = useState<{ id: string; name: string }[]>([]);
 
   const [loading, setLoading] = useState(false);
@@ -76,8 +76,8 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
       if (projData) setProjects(projData.map(p => ({ id: p.id, name: p.project_name })));
 
       // Fetch Channel Partners
-      const { data: cpData } = await supabase.from('channel_partners').select('id, name').eq('status', 'active');
-      if (cpData) setPartners(cpData.map(c => ({ id: c.id, name: c.name })));
+      const { data: cpData } = await supabase.from('channel_partners').select('id, name, company_name').eq('status', 'active');
+      if (cpData) setPartners(cpData.map(c => ({ id: c.id, name: c.name, company_name: c.company_name })));
 
       // Fetch Telecallers (Role = telecaller)
       const { data: roles, error: rErr } = await supabase.from('roles').select('id, name');
@@ -332,7 +332,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
                   >
                     <option value="">No specific partner</option>
                     {partners.map(p => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
+                      <option key={p.id} value={p.id}>{p.name}{p.company_name ? ` — ${p.company_name}` : ''}</option>
                     ))}
                   </select>
                 </div>

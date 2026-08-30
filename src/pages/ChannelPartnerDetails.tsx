@@ -1029,7 +1029,6 @@ export const ChannelPartnerDetails: React.FC = () => {
   const code = partner.cp_code || partner.partner_code || '—';
   const name = partner.name || '—';
   const phoneVal = partner.phone || partner.mobile || '—';
-  const companyVal = partner.company_name || '—';
   const validFromVal = partner.rera_valid_from || partner.valid_from || '—';
   const validToVal = partner.rera_valid_to || partner.valid_to || '—';
   const commissionVal = partner.default_commission_rate || partner.commission_value || 0;
@@ -1114,7 +1113,7 @@ export const ChannelPartnerDetails: React.FC = () => {
             </div>
             <h3 className="text-xl font-bold text-slate-900 leading-tight">{name}</h3>
             <p className="text-slate-500 text-xs font-medium">
-              {companyVal ? `${companyVal} — ` : ''}{partner.partner_type || 'CHANNEL PARTNER'}
+              {partner.company_name ? `${partner.company_name} — ` : ''}{partner.partner_type || 'CHANNEL PARTNER'}
             </p>
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-slate-600 text-xs pt-1.5">
               <span>📞 {phoneVal}</span>
@@ -1226,6 +1225,10 @@ export const ChannelPartnerDetails: React.FC = () => {
             <div>
               <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-3">Partner Contact & Location</h4>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-sm text-slate-700">
+                <div>
+                  <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Company / Firm Name</span>
+                  <span className="font-semibold text-slate-800">{partner.company_name || '—'}</span>
+                </div>
                 <div>
                   <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Contact Person</span>
                   <span className="font-semibold text-slate-800">{partner.contact_person || '—'}</span>

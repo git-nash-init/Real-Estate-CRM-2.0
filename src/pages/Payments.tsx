@@ -1105,7 +1105,7 @@ export const Payments: React.FC = () => {
                       const comm = cpCommissions.find(c => c.id === p.commission_id);
                       const booking = comm ? bookingMap.get(comm.booking_id) : null;
                       const cp = comm ? cpMap.get(comm.cp_id) : null;
-                      const cpName = cp ? `${cp.name || cp.company_name}` : 'N/A';
+                      const cpName = cp ? `${cp.name || cp.company_name || ''}${cp.name && cp.company_name ? ` (${cp.company_name})` : ''}` : 'N/A';
                       const cpCode = cp ? `(${cp.partner_code || cp.cp_code || '—'})` : '';
                       const projName = booking ? projectMap.get(booking.project_id) : 'N/A';
                       const unitNumber = booking ? inventoryMap.get(booking.inventory_id)?.unit_number : '—';
@@ -1843,7 +1843,7 @@ export const Payments: React.FC = () => {
                       .map(c => {
                         const booking = bookingMap.get(c.booking_id);
                         const cp = cpMap.get(c.cp_id);
-                        const partnerLabel = cp ? `${cp.name || cp.company_name}` : 'CP';
+                        const partnerLabel = cp ? `${cp.name || cp.company_name || ''}${cp.name && cp.company_name ? ` (${cp.company_name})` : ''}` : 'CP';
                         return (
                           <option key={c.id} value={c.id}>
                             {booking?.booking_number || 'N/A'} — {partnerLabel} (Outstanding: ₹{(c.pending_amount || 0).toLocaleString('en-IN')})

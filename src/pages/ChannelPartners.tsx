@@ -531,6 +531,7 @@ export const ChannelPartners: React.FC = () => {
 
       const cpPayload: any = {
         name: req.partner_name,
+        company_name: req.company_name || null,
         mobile: req.phone,
         whatsapp_number: req.whatsapp_number || req.phone,
         email: req.email?.trim() || null,
@@ -671,6 +672,11 @@ export const ChannelPartners: React.FC = () => {
 
         const payload: any = {
           name: partnerName.trim(),
+          // Written to the real column now, not just embedded in notes as
+          // "Company: X" -- that embedding never actually reached
+          // company_name, which is why every existing partner's firm name
+          // was blank everywhere it's displayed despite being entered here.
+          company_name: companyName.trim() || null,
           mobile: phone.trim(),
           whatsapp_number: sameAsPhone ? phone.trim() : (whatsappNum.trim() || phone.trim()),
           email: email.trim() || null,

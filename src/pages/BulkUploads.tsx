@@ -154,10 +154,20 @@ export const BulkUploads: React.FC = () => {
 
   const updateBatchLeadStatus = async (lead: BatchLead, newStatus: string) => {
     if (!viewingUpload) return;
+    // LOST permanently deletes the lead, per the client -- everything else
+    // just updates status.
+    if (newStatus === 'lost' && !window.confirm('Marking this LOST will permanently delete the lead. Continue?')) {
+      return;
+    }
     setUpdatingId(lead.id);
     try {
-      const { error } = await supabase.from('leads').update({ status: newStatus }).eq('id', lead.id);
-      if (error) throw error;
+      if (newStatus === 'lost') {
+        const { error } = await supabase.from('leads').delete().eq('id', lead.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('leads').update({ status: newStatus }).eq('id', lead.id);
+        if (error) throw error;
+      }
       await fetchBatchLeads(viewingUpload.id);
     } catch (err: any) {
       setBatchError(err.message || 'Failed to update status.');
@@ -217,7 +227,16 @@ export const BulkUploads: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {batchLeads.map(lead => {
-                    const isMyLead = lead.telecaller_id === user?.id;
+                    // Matches the leads_update/leads_delete RLS carve-out:
+                    // super_admin/site_head unrestricted, the assigned
+                    // telecaller, the sourcing manager this lead is
+                    // attributed to, and a channel partner (RLS already
+                    // guarantees a CP only ever sees leads attributed to
+                    // them, so if they can see it here they can manage it).
+                    const canManageThisLead = role === 'super_admin' || role === 'site_head'
+                      || lead.telecaller_id === user?.id
+                      || (lead.sourcing_manager_id === user?.id && (role === 'sourcing_manager' || role === 'sourcing_manager_tl'))
+                      || role === 'channel_partner';
                     return (
                       <React.Fragment key={lead.id}>
                         <tr className="hover:bg-slate-50/50 transition-colors text-sm">
@@ -264,7 +283,7 @@ export const BulkUploads: React.FC = () => {
                             narrow leads_update RLS carve-out for bulk leads
                             (everyone else is view-only here; full editing is
                             super_admin-only in the main Leads directory). */}
-                        {isMyLead && (
+                        {canManageThisLead && (
                           <tr className="bg-slate-50/50 border-b border-slate-100">
                             <td colSpan={8} className="px-6 py-3">
                               <div className="flex flex-wrap gap-2 items-center">

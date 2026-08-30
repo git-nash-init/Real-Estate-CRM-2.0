@@ -161,7 +161,7 @@ export const Leads: React.FC = () => {
   const [nextFollowupAt, setNextFollowupAt] = useState('');
 
   // Channel partner list & lookup map
-  const [channelPartners, setChannelPartners] = useState<{ id: string; name: string; partner_code: string }[]>([]);
+  const [channelPartners, setChannelPartners] = useState<{ id: string; name: string; partner_code: string; company_name: string | null }[]>([]);
   const [channelPartnerMap, setChannelPartnerMap] = useState<Map<string, string>>(new Map());
 
   // A channel partner adding their own lead: their own CP id and the
@@ -255,14 +255,14 @@ export const Leads: React.FC = () => {
     try {
       const { data, error: cpError } = await supabase
         .from('channel_partners')
-        .select('id, name, partner_code')
+        .select('id, name, partner_code, company_name')
         .eq('status', 'active');
-      
+
       if (cpError) {
         console.error('Supabase Channel Partners API Error:', cpError.message);
       } else if (data) {
         setChannelPartners(data);
-        setChannelPartnerMap(new Map(data.map(c => [c.id, `${c.partner_code || ''} - ${c.name || ''}`])));
+        setChannelPartnerMap(new Map(data.map(c => [c.id, `${c.partner_code || ''} - ${c.name || ''}${c.company_name ? ` (${c.company_name})` : ''}`])));
       }
     } catch (err) {
       console.error('Unexpected Channel Partners fetch exception:', err);
@@ -2160,7 +2160,7 @@ export const Leads: React.FC = () => {
                           <option value="">Select Channel Partner...</option>
                           {channelPartners.map(cp => (
                             <option key={cp.id} value={cp.id}>
-                              {cp.partner_code || ''} - {cp.name}
+                              {cp.partner_code || ''} - {cp.name}{cp.company_name ? ` (${cp.company_name})` : ''}
                             </option>
                           ))}
                         </select>
