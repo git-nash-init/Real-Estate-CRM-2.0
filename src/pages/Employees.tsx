@@ -672,7 +672,20 @@ export const Employees: React.FC = () => {
         if (!matchedRole) {
           throw new Error(`Role "${selectedRole}" was not found in the roles table. The employee record was saved, but no access role was assigned — please assign one manually.`);
         }
-        const { error: roleError } = await supabase.from('user_roles').upsert({
+        // Delete-then-insert rather than upsert: user_roles has no unique
+        // constraint on user_id alone (only on the (user_id, role_id) pair),
+        // so a plain upsert always attempts an INSERT and fails with
+        // "duplicate key value violates ... user_roles_unique" whenever
+        // this exact user already has this exact role -- including on a
+        // second Save Employee attempt for the same person, or when
+        // re-registering someone whose auth account already exists. This
+        // also correctly replaces a changed role during edit instead of
+        // leaving the old role row behind alongside the new one.
+        const { error: clearRoleErr } = await supabase.from('user_roles').delete().eq('user_id', finalUserId);
+        if (clearRoleErr) {
+          throw new Error(`Employee saved, but clearing the previous role failed: ${clearRoleErr.message}`);
+        }
+        const { error: roleError } = await supabase.from('user_roles').insert({
           user_id: finalUserId,
           role_id: matchedRole.id
         });

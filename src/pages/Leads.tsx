@@ -1085,6 +1085,7 @@ export const Leads: React.FC = () => {
                     <th className="py-3.5 px-6">Project</th>
                     <th className="py-3.5 px-6">Lead Source</th>
                     <th className="py-3.5 px-6">Sourcing Manager</th>
+                    <th className="py-3.5 px-6">Allocated To</th>
                     <th className="py-3.5 px-6">Status</th>
                     <th className="py-3.5 px-6">Created Date</th>
                     <th className="py-3.5 px-6 text-right">Actions</th>
@@ -1107,6 +1108,9 @@ export const Leads: React.FC = () => {
                               {channelPartnerMap.get(lead.channel_partner_id) || 'CP'}
                             </span>
                           )}
+                        </td>
+                        <td className="py-4 px-6 text-sm text-slate-600">
+                          {profileMap.get(lead.sourcing_manager_id || '') || 'N/A'}
                         </td>
                         <td className="py-4 px-6 text-sm text-slate-600">
                           {profileMap.get(lead.owner_id || '') || 'N/A'}
@@ -1171,7 +1175,7 @@ export const Leads: React.FC = () => {
                       </tr>
                       {searchParams.get('bulk_upload_id') && (
                         <tr key={`${lead.id}-actions`} className="bg-slate-50/50 border-b border-slate-100">
-                          <td colSpan={8} className="py-3 px-6">
+                          <td colSpan={9} className="py-3 px-6">
                             <div className="flex flex-wrap gap-2 items-center">
                               <a 
                                 href={`tel:${lead.mobile}`} 
@@ -1222,7 +1226,7 @@ export const Leads: React.FC = () => {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={8} className="py-20 text-center text-slate-400">
+                      <td colSpan={9} className="py-20 text-center text-slate-400">
                         <div className="flex flex-col items-center justify-center space-y-3">
                           <div className="bg-slate-50 p-4 rounded-full text-slate-300">
                             <Users className="h-8 w-8" />
@@ -1338,6 +1342,17 @@ export const Leads: React.FC = () => {
                   <Users className="h-4 w-4 text-slate-400 mt-1 flex-shrink-0" />
                   <div>
                     <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Sourcing Manager</span>
+                    <span className="text-sm font-semibold">
+                      {profileMap.get((selectedLead as any).sourcing_manager_id || '') || 'N/A'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Allocated To (Closing Manager) */}
+                <div className="flex items-start space-x-2.5 text-slate-700">
+                  <Users className="h-4 w-4 text-slate-400 mt-1 flex-shrink-0" />
+                  <div>
+                    <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Allocated To</span>
                     <span className="text-sm font-semibold">
                       {profileMap.get(selectedLead.owner_id || '') || 'N/A'}
                     </span>
