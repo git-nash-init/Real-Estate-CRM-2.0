@@ -341,13 +341,19 @@ export const Leads: React.FC = () => {
 
   // Channel partner adding their own lead: resolve their own CP id, then
   // scope the Project dropdown to their channel_partner_projects assignments.
+  // Also resolve the Sourcing Manager allocated to them (channel_partners.
+  // sourcing_manager, set by super_admin/site_head on the CP record) so
+  // their New Lead form's Sourcing Manager field can auto-fill instead of
+  // being manually picked.
+  const [myCpSourcingManagerId, setMyCpSourcingManagerId] = useState<string | null>(null);
   useEffect(() => {
     if (!isChannelPartner || !user?.id) return;
-    supabase.from('channel_partners').select('id').eq('user_id', user.id).maybeSingle()
+    supabase.from('channel_partners').select('id, sourcing_manager').eq('user_id', user.id).maybeSingle()
       .then(({ data: ownCp, error }) => {
         if (error) { reportQueryError('Leads: own channel partner lookup', error); return; }
         if (!ownCp) return;
         setMyCpId(ownCp.id);
+        setMyCpSourcingManagerId(ownCp.sourcing_manager);
         supabase.from('channel_partner_projects').select('project_id, projects(project_name)').eq('channel_partner_id', ownCp.id)
           .then(({ data: assignments, error: assignErr }) => {
             if (assignErr) { reportQueryError('Leads: CP project assignments', assignErr); return; }
@@ -641,12 +647,13 @@ export const Leads: React.FC = () => {
         if (isChannelPartner) {
           setSelectedSource('channel_partner');
           setSelectedChannelPartnerId(myCpId || '');
+          setSourcingManagerId(myCpSourcingManagerId || '');
         }
         setIsCreateOpen(true);
       }
       setSearchParams({}, { replace: true });
     }
-  }, [searchParams, setSearchParams, hasCreateAccess, isChannelPartner, myCpId]);
+  }, [searchParams, setSearchParams, hasCreateAccess, isChannelPartner, myCpId, myCpSourcingManagerId]);
 
   // Alert auto-dismiss timer
   useEffect(() => {
@@ -725,8 +732,10 @@ export const Leads: React.FC = () => {
       setCreateError('Please select a project.');
       return;
     }
-    if (!isChannelPartner && !sourcingManagerId) {
-      setCreateError('Please select a Sourcing Manager.');
+    if (isChannelPartner ? !myCpSourcingManagerId : !sourcingManagerId) {
+      setCreateError(isChannelPartner
+        ? 'No Sourcing Manager is allocated to you yet — contact an admin.'
+        : 'Please select a Sourcing Manager.');
       return;
     }
 
@@ -937,6 +946,7 @@ export const Leads: React.FC = () => {
                 if (isChannelPartner) {
                   setSelectedSource('channel_partner');
                   setSelectedChannelPartnerId(myCpId || '');
+                  setSourcingManagerId(myCpSourcingManagerId || '');
                 }
                 setIsCreateOpen(true);
               }}
@@ -1866,13 +1876,22 @@ export const Leads: React.FC = () => {
                   <div className="space-y-4">
                     <h4 className="font-bold text-xs text-indigo-600 border-b border-slate-100 pb-1.5 uppercase tracking-wider">Follow-up & Allocation</h4>
 
-                    {/* Sourcing Manager, Presales (Telecaller), Allocated To,
-                        Status and Follow-up Date are internal staff
-                        allocation fields -- a channel partner adding their
-                        own lead has no one to assign here; admin staff
-                        triage and allocate it after it lands. */}
-                    {!isChannelPartner && (
-                      <>
+                    {/* Sourcing Manager is required for everyone, including
+                        a channel partner -- but a CP doesn't pick one, it's
+                        auto-filled from the Sourcing Manager allocated to
+                        them on their Channel Partner record (super_admin/
+                        site_head assign that during onboarding or later). */}
+                    {isChannelPartner ? (
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager *</label>
+                        <div className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-100 text-slate-500 text-sm">
+                          {sourcingManagerMap.get(myCpSourcingManagerId || '') || 'Not allocated yet'}
+                        </div>
+                        {!myCpSourcingManagerId && (
+                          <p className="text-[10px] text-amber-600 mt-1">No Sourcing Manager is allocated to you yet — contact an admin before adding a lead.</p>
+                        )}
+                      </div>
+                    ) : (
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager *</label>
                       <select
@@ -1887,7 +1906,15 @@ export const Leads: React.FC = () => {
                         ))}
                       </select>
                     </div>
+                    )}
 
+                    {/* Presales (Telecaller), Allocated To, Status and
+                        Follow-up Date are internal staff allocation fields
+                        -- a channel partner adding their own lead has no
+                        one to assign here; admin staff triage and allocate
+                        it after it lands. */}
+                    {!isChannelPartner && (
+                      <>
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Presales (Telecaller)</label>
                       <select

@@ -50,6 +50,7 @@ interface ChannelPartner {
   gst_number: string | null;
   status: string | null;
   notes: string | null;
+  sourcing_manager: string | null;
   created_at: string;
 }
 
@@ -92,6 +93,7 @@ interface CPRequest {
   gst_number: string | null;
   notes: string | null;
   project_ids: string[] | null;
+  sourcing_manager: string | null;
   status: string;  // pending | approved | rejected
   rejection_reason: string | null;
   created_at: string;
@@ -166,6 +168,8 @@ export const ChannelPartners: React.FC = () => {
   const [commissions, setCommissions] = useState<Commission[]>([]);
   const [projectsMap, setProjectsMap] = useState<Map<string, string>>(new Map());
   const [partnerProjectsList, setPartnerProjectsList] = useState<{ channel_partner_id: string; project_id: string }[]>([]);
+  const [sourcingManagers, setSourcingManagers] = useState<{ id: string; name: string }[]>([]);
+  const sourcingManagerMap = new Map(sourcingManagers.map(sm => [sm.id, sm.name]));
   const [cpRequests, setCpRequests] = useState<CPRequest[]>([]);
   const [requestsLoading, setRequestsLoading] = useState(false);
 
@@ -217,6 +221,7 @@ export const ChannelPartners: React.FC = () => {
   const [status, setStatus] = useState('active');
   const [notes, setNotes] = useState('');
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
+  const [formSourcingManagerId, setFormSourcingManagerId] = useState('');
 
   // Fetch all master and override mappings
   const fetchData = useCallback(async () => {
@@ -321,6 +326,23 @@ export const ChannelPartners: React.FC = () => {
       }
     } catch (err) {
       reportQueryError('Channel Partners: project mappings', err);
+    }
+
+    // 7. Fetch Sourcing Managers (for the "allocate a Sourcing Manager"
+    // field on the onboarding/edit form)
+    try {
+      const { data: roleRows } = await supabase.from('roles').select('id, name').in('name', ['sourcing_manager', 'sourcing_manager_tl']);
+      const roleIds = (roleRows || []).map(r => r.id);
+      if (roleIds.length > 0) {
+        const { data: userRoles } = await supabase.from('user_roles').select('user_id').in('role_id', roleIds);
+        const userIds = [...new Set((userRoles || []).map(ur => ur.user_id))];
+        if (userIds.length > 0) {
+          const { data: profiles } = await supabase.from('user_profiles').select('id, full_name').in('id', userIds);
+          setSourcingManagers((profiles || []).map(p => ({ id: p.id, name: p.full_name || 'Unnamed' })));
+        }
+      }
+    } catch (err) {
+      reportQueryError('Channel Partners: sourcing managers list', err);
     }
 
     setLoading(false);
@@ -519,6 +541,7 @@ export const ChannelPartners: React.FC = () => {
         gst_number: req.gst_number || null,
         status: 'active',
         notes: req.notes || null,
+        sourcing_manager: req.sourcing_manager || null,
         cp_code: generatedCode,
         partner_code: generatedCode,
         created_at: new Date().toISOString(),
@@ -659,6 +682,12 @@ export const ChannelPartners: React.FC = () => {
           notes: formattedNotes || null,
           updated_at: new Date().toISOString()
         };
+        // Sourcing manager reassignment is restricted to super_admin/site_head --
+        // enforced for real by a DB trigger (enforce_cp_sourcing_manager_change),
+        // this just avoids sending a no-op change attempt from other roles.
+        if (canApprove) {
+          payload.sourcing_manager = formSourcingManagerId || null;
+        }
 
         const { error: editErr } = await supabase.from('channel_partners').update(payload).eq('id', partnerId);
         if (editErr) throw editErr;
@@ -698,6 +727,7 @@ export const ChannelPartners: React.FC = () => {
         gst_number: gstNumber.trim() || null,
         notes: notes.trim() || null,
         project_ids: selectedProjects.length > 0 ? selectedProjects : null,
+        sourcing_manager: formSourcingManagerId || null,
         status: 'pending',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -744,6 +774,7 @@ export const ChannelPartners: React.FC = () => {
     setStatus('active');
     setNotes('');
     setSelectedProjects([]);
+    setFormSourcingManagerId('');
   };
 
   const openEditModal = (cp: ChannelPartner) => {
@@ -776,6 +807,7 @@ export const ChannelPartners: React.FC = () => {
       .filter(p => p.channel_partner_id === cp.id)
       .map(p => p.project_id);
     setSelectedProjects(assigned);
+    setFormSourcingManagerId(cp.sourcing_manager || '');
 
     setIsCreateOpen(true);
   };
@@ -1041,6 +1073,7 @@ export const ChannelPartners: React.FC = () => {
                     <th className="py-3.5 px-6">Email</th>
                     <th className="py-3.5 px-6">RERA Number</th>
                     <th className="py-3.5 px-6">Referral Fee Structure</th>
+                    <th className="py-3.5 px-6">Sourcing Manager</th>
                     <th className="py-3.5 px-6">Status</th>
                     <th className="py-3.5 px-6 text-right">Actions</th>
                   </tr>
@@ -1063,6 +1096,7 @@ export const ChannelPartners: React.FC = () => {
                           <td className="py-4 px-6 text-slate-600 text-xs truncate max-w-[150px]">{cp.email || '—'}</td>
                           <td className="py-4 px-6 text-slate-600 font-mono text-xs">{cp.rera_number || '—'}</td>
                           <td className="py-4 px-6 text-slate-700 font-semibold text-xs">{commLabel}</td>
+                          <td className="py-4 px-6 text-slate-600 text-xs">{sourcingManagerMap.get(cp.sourcing_manager || '') || '—'}</td>
                           <td className="py-4 px-6">
                             <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xxs font-bold uppercase tracking-wider ${
                               cp.status === 'active' || cp.status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-700' : 
@@ -1116,7 +1150,7 @@ export const ChannelPartners: React.FC = () => {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={9} className="py-20 text-center text-slate-400">
+                      <td colSpan={10} className="py-20 text-center text-slate-400">
                         <div className="flex flex-col items-center justify-center space-y-3">
                           <div className="bg-slate-50 p-4 rounded-full text-slate-300">
                             <Users className="h-8 w-8" />
@@ -1457,6 +1491,32 @@ export const ChannelPartners: React.FC = () => {
                       <p className="text-slate-400 text-xxs font-medium italic">No active projects available.</p>
                     )}
                   </div>
+                </div>
+
+                {/* SOURCING MANAGER ALLOCATION -- who this Channel Partner
+                    is assigned to. This is what a CP's own leads auto-fill
+                    their Sourcing Manager field from, so reassigning it
+                    here takes effect immediately, and is restricted to
+                    super_admin/site_head for real by a DB trigger, not just
+                    the disabled attribute below. */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Allocated Sourcing Manager</label>
+                  <select
+                    value={formSourcingManagerId}
+                    disabled={!canApprove}
+                    onChange={(e) => setFormSourcingManagerId(e.target.value)}
+                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    <option value="">Select Sourcing Manager...</option>
+                    {sourcingManagers.map(sm => (
+                      <option key={sm.id} value={sm.id}>{sm.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    {canApprove
+                      ? 'This Sourcing Manager auto-fills whenever this partner adds a lead.'
+                      : 'Only Super Admin or Site Head can allocate a Sourcing Manager.'}
+                  </p>
                 </div>
 
                 {/* STATUS & NOTES */}
