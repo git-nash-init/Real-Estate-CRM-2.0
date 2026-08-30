@@ -83,20 +83,21 @@ export const canConvertVisitToLead = (role: Role) =>
    'marketing_head', 'marketing', 'receptionist'].includes(role as string);
 
 // Editing an existing lead record (the pencil button on the Leads
-// directory / lead detail modal) is super_admin only, full stop -- per the
-// client's explicit "edit option should only be given to super admin...
-// they should not have the option to edit they should just have to add
-// data only." This replaces the earlier self-service model (site_head/
-// sourcing_manager_tl/project_admin, or a lead's own assignees, editing
-// their own leads) and also removes the bulk-upload-assigned telecaller's
-// ability to edit their own bulk lead's status through this same button --
-// that was a status-only update sharing this exact Edit control, so it
-// goes away as a direct consequence of "only super admin can edit."
+// directory / lead detail modal) is super_admin and receptionist only --
+// per the client's explicit "edit option should only be given to super
+// admin" (later extended to also give receptionist edit access, alongside
+// their existing full create/view access). This replaces the earlier
+// self-service model (site_head/sourcing_manager_tl/project_admin, or a
+// lead's own assignees, editing their own leads) and also removed the
+// bulk-upload-assigned telecaller's ability to edit their own bulk lead's
+// status through this same button -- that was a status-only update
+// sharing this exact Edit control, so it went away as a consequence of
+// narrowing this down from "everyone" in the first place.
 // Deliberately separate from canEditLead below, which Followups.tsx/
 // SiteVisits.tsx reuse for a different question (can this person manage
 // the follow-up/site-visit tied to a lead they're assigned to) that this
 // change was never meant to touch.
-export const canEditLeadRecord = (role: Role) => isSuperAdmin(role);
+export const canEditLeadRecord = (role: Role) => isSuperAdmin(role) || role === 'receptionist';
 
 export const canEditLead = (
   role: Role,
