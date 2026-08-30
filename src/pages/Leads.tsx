@@ -58,7 +58,7 @@ export const Leads: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('');
   const [projectFilter, setProjectFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
-  const [ownerFilter, setOwnerFilter] = useState('');
+  const [sourcingManagerFilter, setSourcingManagerFilter] = useState('');
 
   // Pagination states
   const [page, setPage] = useState(0);
@@ -298,8 +298,8 @@ export const Leads: React.FC = () => {
       if (sourceFilter) {
         query = query.eq('source', sourceFilter);
       }
-      if (ownerFilter) {
-        query = query.eq('owner_id', ownerFilter);
+      if (sourcingManagerFilter) {
+        query = query.eq('sourcing_manager_id', sourcingManagerFilter);
       }
 
       // Apply Pagination
@@ -322,7 +322,7 @@ export const Leads: React.FC = () => {
       setLoading(false);
       setSyncing(false);
     }
-  }, [searchQuery, statusFilter, projectFilter, sourceFilter, ownerFilter, page, pageSize]);
+  }, [searchQuery, statusFilter, projectFilter, sourceFilter, sourcingManagerFilter, page, pageSize]);
 
   // Resolve the current user's employee record, needed to attribute call logs.
   useEffect(() => {
@@ -1134,12 +1134,12 @@ export const Leads: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <div className="md:col-span-2">
             <select
-              value={ownerFilter}
-              onChange={handleFilterChange(setOwnerFilter)}
+              value={sourcingManagerFilter}
+              onChange={handleFilterChange(setSourcingManagerFilter)}
               className="border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all w-full"
             >
               <option value="">All Sourcing Managers</option>
-              {Array.from(profileMap.entries()).map(([id, name]) => (
+              {Array.from(sourcingManagerMap.entries()).map(([id, name]) => (
                 <option key={id} value={id}>{name}</option>
               ))}
             </select>

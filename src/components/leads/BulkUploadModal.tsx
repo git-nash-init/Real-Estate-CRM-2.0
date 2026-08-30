@@ -79,13 +79,14 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
       const { data: cpData } = await supabase.from('channel_partners').select('id, name, company_name').eq('status', 'active');
       if (cpData) setPartners(cpData.map(c => ({ id: c.id, name: c.name, company_name: c.company_name })));
 
-      // Fetch Telecallers (Role = telecaller)
+      // Fetch Telecallers (role = telecaller, presales, or presales_tl --
+      // matches the same "Presales (Telecaller)" bucketing used in Leads.tsx)
       const { data: roles, error: rErr } = await supabase.from('roles').select('id, name');
       if (rErr) console.error('Error fetching roles:', rErr);
-      const tcRoleId = roles?.find(r => r.name === 'telecaller')?.id;
-      
-      if (tcRoleId) {
-        const { data: userRoles, error: urErr } = await supabase.from('user_roles').select('user_id').eq('role_id', tcRoleId);
+      const tcRoleIds = (roles || []).filter(r => ['telecaller', 'presales', 'presales_tl'].includes(r.name)).map(r => r.id);
+
+      if (tcRoleIds.length > 0) {
+        const { data: userRoles, error: urErr } = await supabase.from('user_roles').select('user_id').in('role_id', tcRoleIds);
         if (urErr) console.error('Error fetching user_roles:', urErr);
         if (userRoles && userRoles.length > 0) {
           const userIds = userRoles.map(ur => ur.user_id);
@@ -95,7 +96,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
             setTelecallers(profiles.map(p => ({ id: p.id, name: p.full_name || 'Unknown' })));
           }
         } else {
-          console.log('No user_roles found for telecaller role ID:', tcRoleId);
+          console.log('No user_roles found for telecaller role IDs:', tcRoleIds);
         }
       } else {
         console.log('Telecaller role ID not found in roles table.');
