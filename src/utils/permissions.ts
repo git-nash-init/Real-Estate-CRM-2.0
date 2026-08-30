@@ -44,13 +44,33 @@ export const canSendMarketingBlast = (role: Role) =>
   ['super_admin', 'closing_manager', 'marketing_head'].includes(role as string);
 
 // A5: Leads
-// Every role can add a lead through the same main form super_admin uses
-// (channel_partner gets its own cut-down variant of that same form, built
-// separately in Leads.tsx) -- per the client's explicit "every role that
-// exists" instruction. Creating is intentionally wide open; editing and
-// visibility are the two things actually restricted (see canEditLeadRecord
-// and the leads_select/leads_update RLS policies).
-export const canCreateLead = (_role: Role) => true;
+// The full lead form (Fresh/Revisit, Sourcing Manager, Project, Presales/
+// Telecaller, Allocated To/Closing Manager, requirement details, budget,
+// follow-up, status -- the "official" leads directory) is only for the
+// roles who actually allocate leads to other people: super_admin,
+// site_head, receptionist, closing_manager, closing_manager_tl. Everyone
+// else adds leads for themselves through the separate, simpler "Own
+// Leads" form instead (see canAddOwnLead below) -- channel_partner keeps
+// its own pre-existing cut-down variant of this same full form, unrelated
+// to either of these.
+export const canCreateLead = (role: Role) =>
+  ['super_admin', 'site_head', 'receptionist', 'closing_manager', 'closing_manager_tl'].includes(role as string);
+
+// "Own Leads" -- a self-service lead list, separate from the main Leads
+// directory, for roles that don't allocate leads to others but still need
+// somewhere to log a lead they personally sourced. Excludes channel_partner
+// (has its own separate flow already) and the canCreateLead roles above
+// (they use the full form instead).
+export const canAddOwnLead = (role: Role) =>
+  role !== 'channel_partner' && !canCreateLead(role);
+
+// Who can see the Own Leads tab at all -- everyone who can add to it (to
+// see their own), plus super_admin/site_head for oversight of everyone
+// else's self-added leads (super_admin already sees everything via
+// leads_select; site_head gets a dedicated RLS carve-out for is_own_lead
+// rows specifically, since their normal visibility is allocation-based).
+export const canViewOwnLeadsTab = (role: Role) =>
+  canAddOwnLead(role) || role === 'super_admin' || role === 'site_head';
 
 // Editing an existing lead record (the pencil button on the Leads
 // directory / lead detail modal) is super_admin only, full stop -- per the

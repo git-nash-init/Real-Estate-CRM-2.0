@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { canCreateLead, canEditLeadRecord, isSuperAdmin } from '../utils/permissions';
+import { canCreateLead, canEditLeadRecord, canAddOwnLead, canViewOwnLeadsTab, isSuperAdmin } from '../utils/permissions';
 import { reportQueryError } from '../services/queryLogger';
 import { supabase } from '../services/supabaseClient';
 import {
@@ -611,7 +611,10 @@ export const Leads: React.FC = () => {
   // /leads?new=true (e.g. Dashboard's own "+ New Lead" button, or just
   // typing the URL) would open the create modal for every role regardless
   // of whether the button was even shown to them.
-  const hasCreateAccess = canCreateLead(role);
+  // channel_partner keeps its own separate, already-built cut-down path
+  // through this same button/form -- canCreateLead deliberately excludes
+  // it since that function now governs the full form specifically.
+  const hasCreateAccess = canCreateLead(role) || isChannelPartner;
   useEffect(() => {
     if (searchParams.get('new') === 'true') {
       if (hasCreateAccess) {
@@ -625,6 +628,93 @@ export const Leads: React.FC = () => {
       setSearchParams({}, { replace: true });
     }
   }, [searchParams, setSearchParams, hasCreateAccess, isChannelPartner, myCpId, myCpSourcingManagerId]);
+
+  // "Own Leads" -- a separate, simpler self-service list for roles that
+  // don't allocate leads to other people (sourcing_manager, telecaller,
+  // presales, marketing, project_admin, ...) but still need somewhere to
+  // log a lead they personally sourced. super_admin/site_head can also see
+  // this tab, but as an oversight view of everyone's self-added leads
+  // rather than just their own.
+  const showOwnLeadsTab = canViewOwnLeadsTab(role);
+  const [activeTab, setActiveTab] = useState<'directory' | 'own'>('directory');
+  const [ownLeads, setOwnLeads] = useState<Lead[]>([]);
+  const [ownLeadsLoading, setOwnLeadsLoading] = useState(false);
+  const fetchOwnLeads = useCallback(async () => {
+    if (!showOwnLeadsTab) return;
+    setOwnLeadsLoading(true);
+    try {
+      let query = supabase.from('leads').select('*').eq('is_own_lead', true).order('created_at', { ascending: false });
+      if (!(role === 'super_admin' || role === 'site_head')) {
+        query = query.eq('created_by', user?.id || '');
+      }
+      const { data, error } = await query;
+      if (error) reportQueryError('Leads: own leads', error);
+      else setOwnLeads(data || []);
+    } finally {
+      setOwnLeadsLoading(false);
+    }
+  }, [showOwnLeadsTab, role, user?.id]);
+  useEffect(() => { if (activeTab === 'own') fetchOwnLeads(); }, [activeTab, fetchOwnLeads]);
+
+  // Own Leads' quick-add form -- deliberately just a handful of fields,
+  // separate from the full Leads Directory form above.
+  const [isOwnLeadCreateOpen, setIsOwnLeadCreateOpen] = useState(false);
+  const [ownLeadName, setOwnLeadName] = useState('');
+  const [ownLeadMobile, setOwnLeadMobile] = useState('');
+  const [ownLeadProjectId, setOwnLeadProjectId] = useState('');
+  const [ownLeadBudget, setOwnLeadBudget] = useState('');
+  const [ownLeadNotes, setOwnLeadNotes] = useState('');
+  const [ownLeadError, setOwnLeadError] = useState<string | null>(null);
+  const [ownLeadSaving, setOwnLeadSaving] = useState(false);
+
+  const resetOwnLeadForm = () => {
+    setOwnLeadName('');
+    setOwnLeadMobile('');
+    setOwnLeadProjectId('');
+    setOwnLeadBudget('');
+    setOwnLeadNotes('');
+    setOwnLeadError(null);
+  };
+
+  const handleOwnLeadSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ownLeadName.trim()) { setOwnLeadError('Customer Name is required.'); return; }
+    if (!ownLeadMobile.trim()) { setOwnLeadError('Mobile Number is required.'); return; }
+    if (!ownLeadProjectId) { setOwnLeadError('Please select a project.'); return; }
+    setOwnLeadError(null);
+    setOwnLeadSaving(true);
+    try {
+      const { data: maxLeadData } = await supabase.from('leads').select('lead_number').order('lead_number', { ascending: false }).limit(1).maybeSingle();
+      const nextLeadNumber = generateLeadNumber(maxLeadData?.lead_number || null);
+      // Auto-attribute to whichever field matches this person's own role,
+      // so if it's later folded into the main directory the attribution is
+      // already correct -- everyone else just relies on created_by.
+      const isTelecallerLike = role === 'telecaller' || role === 'presales' || role === 'presales_tl';
+      const isSourcingLike = role === 'sourcing_manager' || role === 'sourcing_manager_tl';
+      const { error } = await supabase.from('leads').insert([{
+        customer_name: ownLeadName.trim(),
+        mobile: ownLeadMobile.trim(),
+        project_id: ownLeadProjectId,
+        budget: ownLeadBudget.trim() || null,
+        notes: ownLeadNotes.trim() || null,
+        status: 'new',
+        lead_number: nextLeadNumber,
+        created_by: user?.id || null,
+        is_own_lead: true,
+        telecaller_id: isTelecallerLike ? user?.id || null : null,
+        sourcing_manager_id: isSourcingLike ? user?.id || null : null,
+      }]);
+      if (error) throw error;
+      setIsOwnLeadCreateOpen(false);
+      resetOwnLeadForm();
+      await fetchOwnLeads();
+      setNotification({ type: 'success', message: 'Lead added to Own Leads.' });
+    } catch (err: any) {
+      setOwnLeadError(err.message || 'Failed to save lead.');
+    } finally {
+      setOwnLeadSaving(false);
+    }
+  };
 
   // Alert auto-dismiss timer
   useEffect(() => {
@@ -884,8 +974,14 @@ export const Leads: React.FC = () => {
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900">Leads Directory</h2>
-          <p className="text-slate-500 text-sm">View, search, filter, and audit live CRM lead entries.</p>
+          <h2 className="text-2xl font-bold text-slate-900">{activeTab === 'own' ? 'Own Leads' : 'Leads Directory'}</h2>
+          <p className="text-slate-500 text-sm">
+            {activeTab === 'own'
+              ? (role === 'super_admin' || role === 'site_head'
+                  ? 'Self-added leads logged by staff who don\'t allocate leads to others.'
+                  : 'Leads you\'ve personally sourced -- separate from the main Leads Directory.')
+              : 'View, search, filter, and audit live CRM lead entries.'}
+          </p>
         </div>
         <div className="flex items-center space-x-3">
           <button
@@ -896,8 +992,8 @@ export const Leads: React.FC = () => {
             <RefreshCw className={`h-4 w-4 text-slate-500 ${syncing ? 'animate-spin' : ''}`} />
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
-          
-          {hasCreateAccess && (
+
+          {activeTab === 'directory' && hasCreateAccess && (
             <button
               onClick={() => {
                 if (isChannelPartner) {
@@ -912,8 +1008,36 @@ export const Leads: React.FC = () => {
               + New Lead
             </button>
           )}
+
+          {activeTab === 'own' && canAddOwnLead(role) && (
+            <button
+              onClick={() => { resetOwnLeadForm(); setIsOwnLeadCreateOpen(true); }}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
+            >
+              + Add My Lead
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Tab switcher -- only shown to roles that actually have an Own
+          Leads tab to switch to (see canViewOwnLeadsTab). */}
+      {showOwnLeadsTab && (
+        <div className="flex gap-2 border-b border-slate-200">
+          <button
+            onClick={() => setActiveTab('directory')}
+            className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${activeTab === 'directory' ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+          >
+            Leads Directory
+          </button>
+          <button
+            onClick={() => setActiveTab('own')}
+            className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${activeTab === 'own' ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+          >
+            Own Leads
+          </button>
+        </div>
+      )}
 
       {/* Success/Error Notification toast */}
       {notification && (
@@ -930,6 +1054,8 @@ export const Leads: React.FC = () => {
         </div>
       )}
 
+      {activeTab === 'directory' && (
+      <>
       {/* Database Error State Display */}
       {error && (
         <div className="bg-rose-50 border border-rose-200 text-rose-900 rounded-xl p-4 flex items-start space-x-3">
@@ -1177,6 +1303,114 @@ export const Leads: React.FC = () => {
           </>
         )}
       </div>
+      </>
+      )}
+
+      {activeTab === 'own' && (
+        <div className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
+          {ownLeadsLoading ? (
+            <div className="py-24 text-center">
+              <div className="animate-spin rounded-full h-10 w-10 border-4 border-indigo-100 border-t-indigo-600 mx-auto mb-4"></div>
+              <p className="text-slate-500 font-medium">Loading own leads...</p>
+            </div>
+          ) : ownLeads.length === 0 ? (
+            <div className="py-20 text-center text-slate-400">
+              <Users className="h-8 w-8 mx-auto mb-3 text-slate-300" />
+              <p className="text-slate-500 font-semibold text-sm">No Own Leads Yet</p>
+              <p className="text-xs max-w-sm mx-auto mt-1">
+                {role === 'super_admin' || role === 'site_head'
+                  ? 'No self-added leads have been logged by staff yet.'
+                  : 'Use "+ Add My Lead" to log a lead you personally sourced.'}
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
+                    <th className="py-3.5 px-6">Customer</th>
+                    <th className="py-3.5 px-6">Mobile</th>
+                    <th className="py-3.5 px-6">Project</th>
+                    {(role === 'super_admin' || role === 'site_head') && <th className="py-3.5 px-6">Added By</th>}
+                    <th className="py-3.5 px-6">Status</th>
+                    <th className="py-3.5 px-6">Created</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {ownLeads.map(lead => (
+                    <tr key={lead.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="py-4 px-6 font-semibold text-slate-900">{lead.customer_name || 'Unnamed'}</td>
+                      <td className="py-4 px-6 text-sm text-slate-600">{lead.mobile || 'N/A'}</td>
+                      <td className="py-4 px-6 text-sm text-slate-600">{projectMap.get(lead.project_id || '') || 'N/A'}</td>
+                      {(role === 'super_admin' || role === 'site_head') && (
+                        <td className="py-4 px-6 text-sm text-slate-600">{profileMap.get((lead as any).created_by || '') || 'N/A'}</td>
+                      )}
+                      <td className="py-4 px-6">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700">
+                          {lead.status || 'new'}
+                        </span>
+                      </td>
+                      <td className="py-4 px-6 text-xs text-slate-400">{new Date(lead.created_at).toLocaleDateString('en-IN')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {isOwnLeadCreateOpen && (
+        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onClick={() => setIsOwnLeadCreateOpen(false)} />
+          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-md">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-indigo-600 rounded-t-2xl">
+              <span className="font-bold text-white">Add My Lead</span>
+              <button onClick={() => setIsOwnLeadCreateOpen(false)} className="text-white/80 hover:text-white">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <form onSubmit={handleOwnLeadSubmit} className="p-6 space-y-4">
+              {ownLeadError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl p-3">{ownLeadError}</div>
+              )}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Customer Name *</label>
+                <input type="text" required value={ownLeadName} onChange={(e) => setOwnLeadName(e.target.value)} className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Mobile Number *</label>
+                <input type="text" required placeholder="e.g. 9876543210" value={ownLeadMobile} onChange={(e) => setOwnLeadMobile(e.target.value)} className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Project *</label>
+                <select required value={ownLeadProjectId} onChange={(e) => setOwnLeadProjectId(e.target.value)} className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all">
+                  <option value="">Select Project...</option>
+                  {Array.from(projectMap.entries()).map(([id, name]) => (
+                    <option key={id} value={id}>{name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Budget</label>
+                <input type="text" placeholder="e.g. 50 Lakhs" value={ownLeadBudget} onChange={(e) => setOwnLeadBudget(e.target.value)} className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Notes</label>
+                <textarea rows={2} value={ownLeadNotes} onChange={(e) => setOwnLeadNotes(e.target.value)} className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all resize-none" />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={() => setIsOwnLeadCreateOpen(false)} className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors">
+                  Cancel
+                </button>
+                <button type="submit" disabled={ownLeadSaving} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-xs font-semibold shadow-md transition-all disabled:opacity-50">
+                  {ownLeadSaving ? 'Saving...' : 'Save Lead'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* READ-ONLY VIEW DETAIL MODAL */}
       {selectedLead && (
