@@ -217,6 +217,20 @@ export const Employees: React.FC = () => {
     }
   }, []);
 
+  // Directory-wide stats and filter-dropdown options — computed over every
+  // employee, not just the current paginated page (fetchEmployees only ever
+  // loads one page of 10 at a time).
+  const [allEmployeesLite, setAllEmployeesLite] = useState<{ department: string | null; designation: string | null; employment_status: string | null }[]>([]);
+  const fetchAllEmployeesLite = useCallback(async () => {
+    try {
+      const { data, error: liteError } = await supabase.from('employees').select('department, designation, employment_status');
+      if (liteError) throw liteError;
+      setAllEmployeesLite(data || []);
+    } catch (err) {
+      reportQueryError('Employees: directory-wide stats', err);
+    }
+  }, []);
+
   // Fetch Employees List
   const fetchEmployees = useCallback(async () => {
     setError(null);
@@ -224,7 +238,35 @@ export const Employees: React.FC = () => {
     try {
       let query = supabase.from('employees').select('*', { count: 'exact' });
 
-      // Apply in-memory search and filters later, or build query
+      // Search across name/employee id/official email. Each word is AND'd
+      // against the others (via a separate .or() call per word) so a
+      // multi-word query like "Yukta Devani" still matches a row whose
+      // first_name/last_name each only contain one of the words.
+      if (searchQuery.trim()) {
+        searchQuery.trim().split(/\s+/).forEach(word => {
+          const w = word.replace(/[%,]/g, '');
+          if (!w) return;
+          // official_email/personal_email on `employees` are often blank --
+          // the real login email lives on user_profiles, so also match an
+          // employee whose linked profile email contains this word.
+          const matchingProfileIds = profiles
+            .filter(p => p.email?.toLowerCase().includes(w.toLowerCase()))
+            .map(p => p.id);
+          const profileIdClause = matchingProfileIds.length ? `,user_id.in.(${matchingProfileIds.join(',')})` : '';
+          query = query.or(`first_name.ilike.%${w}%,last_name.ilike.%${w}%,employee_id.ilike.%${w}%,official_email.ilike.%${w}%,personal_email.ilike.%${w}%${profileIdClause}`);
+        });
+      }
+      if (deptFilter) query = query.eq('department', deptFilter);
+      if (desigFilter) query = query.eq('designation', desigFilter);
+      if (statusFilter) query = query.eq('employment_status', statusFilter);
+      if (roleFilter) {
+        const matchingUserIds = Array.from(userRolesMap.entries())
+          .filter(([, rName]) => rName === roleFilter)
+          .map(([uid]) => uid);
+        // No matches -> force an empty result rather than dropping the filter.
+        query = query.in('user_id', matchingUserIds.length ? matchingUserIds : ['00000000-0000-0000-0000-000000000000']);
+      }
+
       const fromVal = page * pageSize;
       const toVal = fromVal + pageSize - 1;
       query = query.range(fromVal, toVal).order('created_at', { ascending: false });
@@ -241,11 +283,15 @@ export const Employees: React.FC = () => {
       setLoading(false);
       setSyncing(false);
     }
-  }, [page, pageSize]);
+  }, [page, pageSize, searchQuery, deptFilter, desigFilter, statusFilter, roleFilter, userRolesMap, profiles]);
 
   useEffect(() => {
     fetchLookups();
   }, [fetchLookups]);
+
+  useEffect(() => {
+    fetchAllEmployeesLite();
+  }, [fetchAllEmployeesLite]);
 
   useEffect(() => {
     fetchEmployees();
@@ -255,6 +301,7 @@ export const Employees: React.FC = () => {
     if (syncing) return;
     setSyncing(true);
     await fetchLookups();
+    await fetchAllEmployeesLite();
     await fetchEmployees();
   };
 
@@ -266,6 +313,7 @@ export const Employees: React.FC = () => {
         if (error) throw error;
         setNotification({ type: 'success', message: 'Employee deleted successfully.' });
         fetchEmployees();
+        fetchAllEmployeesLite();
         setSelectedEmployee(null);
       } catch (err: any) {
         setNotification({ type: 'error', message: err.message || 'Failed to delete employee' });
@@ -686,6 +734,7 @@ export const Employees: React.FC = () => {
       resetForm();
       await fetchEmployees();
       await fetchLookups();
+      await fetchAllEmployeesLite();
 
       if (createdCredentials) {
         // Show the one-time password reveal
@@ -729,6 +778,7 @@ export const Employees: React.FC = () => {
       if (selectedEmployee && selectedEmployee.id === emp.id) {
         setSelectedEmployee(prev => prev ? { ...prev, employment_status: nextStatus } : null);
       }
+      fetchAllEmployeesLite();
 
       setNotification({
         type: 'success',
@@ -741,36 +791,21 @@ export const Employees: React.FC = () => {
   };
 
   // Filter and Search calculations
-  const getFilteredEmployees = () => {
-    return employees.filter(emp => {
-      const fullName = `${emp.first_name || ''} ${emp.last_name || ''}`.toLowerCase();
-      const matchesSearch = searchQuery
-        ? (fullName.includes(searchQuery.toLowerCase()) ||
-           emp.employee_id?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-           emp.official_email?.toLowerCase().includes(searchQuery.toLowerCase()))
-        : true;
+  // Search, department, designation, status and role filters are all
+  // applied server-side in fetchEmployees now, so the current page's rows
+  // are already the filtered set.
+  const filteredEmployees = employees;
 
-      const matchesDept = deptFilter ? emp.department === deptFilter : true;
-      const matchesDesig = desigFilter ? emp.designation === desigFilter : true;
-      const matchesStatus = statusFilter ? emp.employment_status === statusFilter : true;
-
-      const userRole = emp.user_id ? userRolesMap.get(emp.user_id) : '';
-      const matchesRole = roleFilter ? userRole === roleFilter : true;
-
-      return matchesSearch && matchesDept && matchesDesig && matchesStatus && matchesRole;
-    });
-  };
-
-  const filteredEmployees = getFilteredEmployees();
-
-  // Dynamic Statistics
+  // Directory-wide statistics -- computed from allEmployeesLite (every
+  // employee, unpaginated), not just the current page, so these totals
+  // don't silently shrink to the page size.
   const getStats = () => {
     let active = 0;
     let inactive = 0;
     let onLeave = 0;
     const depts = new Set<string>();
 
-    employees.forEach(emp => {
+    allEmployeesLite.forEach(emp => {
       const status = emp.employment_status?.toLowerCase();
       if (status === 'active') active++;
       else if (status === 'inactive' || status === 'terminated') inactive++;
@@ -779,7 +814,7 @@ export const Employees: React.FC = () => {
       if (emp.department) depts.add(emp.department);
     });
 
-    return { total: employees.length, active, inactive, onLeave, departments: depts.size };
+    return { total: allEmployeesLite.length, active, inactive, onLeave, departments: depts.size };
   };
 
   const stats = getStats();
@@ -885,7 +920,7 @@ export const Employees: React.FC = () => {
             className="border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all w-full"
           >
             <option value="">All Departments</option>
-            {Array.from(new Set(employees.map(e => e.department).filter(Boolean))).map(d => (
+            {Array.from(new Set(allEmployeesLite.map(e => e.department).filter(Boolean))).map(d => (
               <option key={d} value={d!}>{d}</option>
             ))}
           </select>
@@ -899,7 +934,7 @@ export const Employees: React.FC = () => {
             className="border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all w-full"
           >
             <option value="">All Designations</option>
-            {Array.from(new Set(employees.map(e => e.designation).filter(Boolean))).map(d => (
+            {Array.from(new Set(allEmployeesLite.map(e => e.designation).filter(Boolean))).map(d => (
               <option key={d} value={d!}>{d}</option>
             ))}
           </select>

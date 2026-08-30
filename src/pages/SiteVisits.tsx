@@ -376,6 +376,20 @@ export const SiteVisits: React.FC = () => {
         query = query.eq('project_id', projectFilter);
       }
 
+      // Search -- customer name/mobile live on leads, not site_visits, so
+      // match them via the full (unpaginated) leadsMap already loaded, then
+      // filter by the resulting lead_id. Without this, search only ever
+      // matched within the current page of results.
+      if (searchQuery.trim()) {
+        const term = searchQuery.trim().toLowerCase();
+        const matchingLeadIds = Array.from(leadsMap.entries())
+          .filter(([, l]) => l.customer_name?.toLowerCase().includes(term) || l.mobile?.includes(searchQuery.trim()))
+          .map(([id]) => id);
+        const orParts = [`remarks.ilike.%${term.replace(/[%,]/g, '')}%`];
+        if (matchingLeadIds.length) orParts.push(`lead_id.in.(${matchingLeadIds.join(',')})`);
+        query = query.or(orParts.join(','));
+      }
+
       // Apply Pagination
       const from = page * pageSize;
       const to = from + pageSize - 1;
@@ -396,7 +410,7 @@ export const SiteVisits: React.FC = () => {
       setLoading(false);
       setSyncing(false);
     }
-  }, [statusFilter, projectFilter, page, pageSize]);
+  }, [statusFilter, projectFilter, page, pageSize, searchQuery, leadsMap]);
 
   useEffect(() => {
     fetchLookups();
@@ -499,21 +513,15 @@ export const SiteVisits: React.FC = () => {
     }
   };
 
-  // Filter site visits in-memory by search Query (matching lead customer name or remarks)
+  // Search and project filter are both applied server-side in
+  // fetchSiteVisits now, so `visits` is already the filtered set.
   const getFilteredVisits = () => {
     return visits.filter(v => {
-      const lead = leadsMap.get(v.lead_id || '');
-      const matchesSearch = searchQuery
-        ? (lead?.customer_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-           lead?.mobile?.includes(searchQuery) ||
-           v.remarks?.toLowerCase().includes(searchQuery.toLowerCase()))
-        : true;
-
       const matchesProject = projectFilter
         ? v.project_id === projectFilter
         : true;
 
-      return matchesSearch && matchesProject;
+      return matchesProject;
     });
   };
 

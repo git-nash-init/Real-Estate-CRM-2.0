@@ -725,6 +725,10 @@ export const Leads: React.FC = () => {
       setCreateError('Please select a project.');
       return;
     }
+    if (!isChannelPartner && !sourcingManagerId) {
+      setCreateError('Please select a Sourcing Manager.');
+      return;
+    }
 
     setCreateError(null);
     setCreateLoading(true);
@@ -1870,8 +1874,9 @@ export const Leads: React.FC = () => {
                     {!isChannelPartner && (
                       <>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager</label>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager *</label>
                       <select
+                        required
                         value={sourcingManagerId}
                         onChange={(e) => setSourcingManagerId(e.target.value)}
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"

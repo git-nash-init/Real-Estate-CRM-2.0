@@ -61,6 +61,7 @@ interface Lead {
   email: string | null;
   project_id: string | null;
   owner_id: string | null;
+  sourcing_manager_id: string | null;
   channel_partner_id: string | null;
 }
 
@@ -463,7 +464,7 @@ export const Bookings: React.FC = () => {
       // 3. Fetch Leads
       const { data: leadData, error: leadsError } = await supabase
         .from('leads')
-        .select('id, customer_name, mobile, email, project_id, owner_id, channel_partner_id');
+        .select('id, customer_name, mobile, email, project_id, owner_id, sourcing_manager_id, channel_partner_id');
       if (leadsError) {
         console.error('Supabase Leads API Error:', leadsError.message, leadsError.details);
       } else if (leadData) {
@@ -536,7 +537,22 @@ export const Bookings: React.FC = () => {
       if (statusFilter) {
         query = query.eq('status', statusFilter);
       }
-      
+
+      // Search -- customer name and unit number live on leads/project_inventory,
+      // not on bookings itself, so match them via the full (unpaginated)
+      // leadsList/inventoryList lookups already loaded, then filter bookings
+      // by the resulting lead_id/inventory_id. Without this, search only
+      // ever matched within the current page of results.
+      if (searchQuery.trim()) {
+        const term = searchQuery.trim().toLowerCase();
+        const matchingLeadIds = leadsList.filter(l => l.customer_name?.toLowerCase().includes(term)).map(l => l.id);
+        const matchingUnitIds = inventoryList.filter((u: any) => u.unit_number?.toLowerCase().includes(term)).map(u => u.id);
+        const orParts = [`notes.ilike.%${term.replace(/[%,]/g, '')}%`];
+        if (matchingLeadIds.length) orParts.push(`lead_id.in.(${matchingLeadIds.join(',')})`);
+        if (matchingUnitIds.length) orParts.push(`inventory_id.in.(${matchingUnitIds.join(',')})`);
+        query = query.or(orParts.join(','));
+      }
+
       // Filter by Project / Role enforcement
       if (role === 'site_head') {
         if (assignedProjects && assignedProjects.length > 0) {
@@ -575,7 +591,7 @@ export const Bookings: React.FC = () => {
       setLoading(false);
       setSyncing(false);
     }
-  }, [statusFilter, projectFilter, page, pageSize, role, assignedProjects]);
+  }, [statusFilter, projectFilter, page, pageSize, role, assignedProjects, searchQuery, leadsList, inventoryList]);
 
   useEffect(() => {
     fetchLookups();
@@ -1156,23 +1172,15 @@ export const Bookings: React.FC = () => {
     }
   };
 
-  // Filter Bookings in memory
+  // Search and project filter are both applied server-side in fetchBookings
+  // now, so `bookings` is already the filtered set for the current page.
   const getFilteredBookings = () => {
     return bookings.filter(b => {
-      const lead = leadsMap.get(b.lead_id || '');
-      const unit = inventoryMap.get(b.inventory_id || '');
-      
-      const matchesSearch = searchQuery
-        ? (lead?.customer_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-           unit?.unit_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-           b.notes?.toLowerCase().includes(searchQuery.toLowerCase()))
-        : true;
-
       const matchesProject = projectFilter
         ? b.project_id === projectFilter
         : true;
 
-      return matchesSearch && matchesProject;
+      return matchesProject;
     });
   };
 
@@ -1646,7 +1654,7 @@ export const Bookings: React.FC = () => {
                           <div>
                             <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Sourcing Manager Assigned</span>
                             <span className="text-sm font-semibold text-slate-850">
-                              {profileMap.get(lead?.owner_id || '') || 'N/A'}
+                              {profileMap.get(lead?.sourcing_manager_id || '') || 'N/A'}
                             </span>
                           </div>
                         </div>
@@ -1656,7 +1664,7 @@ export const Bookings: React.FC = () => {
                           <div>
                             <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Allocated To</span>
                             <span className="text-sm font-semibold text-slate-850">
-                              {profileMap.get(selectedBooking.sales_owner || '') || profileMap.get(selectedBooking.closing_manager || '') || 'N/A'}
+                              {profileMap.get(selectedBooking.sales_owner || '') || profileMap.get(selectedBooking.closing_manager || '') || profileMap.get(lead?.owner_id || '') || 'N/A'}
                             </span>
                           </div>
                         </div>

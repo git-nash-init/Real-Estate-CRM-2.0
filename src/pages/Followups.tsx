@@ -131,6 +131,30 @@ export const Followups: React.FC = () => {
         query = query.eq('status', statusFilter);
       }
 
+      // Project filter -- followups has no project_id column of its own;
+      // it's reached through the lead. Same paginated-slice problem as
+      // search below, so resolve it via leadsMap first.
+      if (projectFilter) {
+        const projectLeadIds = Array.from(leadsMap.entries())
+          .filter(([, l]) => l.project_id === projectFilter)
+          .map(([id]) => id);
+        query = query.in('lead_id', projectLeadIds.length ? projectLeadIds : ['00000000-0000-0000-0000-000000000000']);
+      }
+
+      // Search -- customer name lives on leads, not followups, so match it
+      // via the full (unpaginated) leadsMap already loaded, then filter by
+      // the resulting lead_id. Without this, search only ever matched
+      // within the current page of results.
+      if (searchQuery.trim()) {
+        const term = searchQuery.trim().toLowerCase();
+        const matchingLeadIds = Array.from(leadsMap.entries())
+          .filter(([, l]) => l.customer_name?.toLowerCase().includes(term))
+          .map(([id]) => id);
+        const orParts = [`notes.ilike.%${term.replace(/[%,]/g, '')}%`];
+        if (matchingLeadIds.length) orParts.push(`lead_id.in.(${matchingLeadIds.join(',')})`);
+        query = query.or(orParts.join(','));
+      }
+
       // Apply Pagination
       const from = page * pageSize;
       const to = from + pageSize - 1;
@@ -151,7 +175,7 @@ export const Followups: React.FC = () => {
       setLoading(false);
       setSyncing(false);
     }
-  }, [statusFilter, page, pageSize]);
+  }, [statusFilter, page, pageSize, searchQuery, projectFilter, leadsMap]);
 
   useEffect(() => {
     fetchLookups();
@@ -380,22 +404,9 @@ export const Followups: React.FC = () => {
     }
   };
 
-  // Filter followups in-memory by search Query (matching lead customer name or notes)
-  const getFilteredFollowups = () => {
-    return followups.filter(f => {
-      const lead = leadsMap.get(f.lead_id || '');
-      const matchesSearch = searchQuery
-        ? (lead?.customer_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-           f.notes?.toLowerCase().includes(searchQuery.toLowerCase()))
-        : true;
-
-      const matchesProject = projectFilter
-        ? lead?.project_id === projectFilter
-        : true;
-
-      return matchesSearch && matchesProject;
-    });
-  };
+  // Search and project filter are both applied server-side in
+  // fetchFollowups now, so `followups` is already the filtered set.
+  const getFilteredFollowups = () => followups;
 
   const getStats = () => {
     let todayCount = 0;
