@@ -1843,7 +1843,7 @@ export const Payments: React.FC = () => {
                       .map(c => {
                         const booking = bookingMap.get(c.booking_id);
                         const cp = cpMap.get(c.cp_id);
-                        const partnerLabel = cp ? `${cp.name || cp.company_name || ''}${cp.name && cp.company_name ? ` (${cp.company_name})` : ''}` : 'CP';
+                        const partnerLabel = cp ? (cp.company_name || cp.name || 'CP') : 'CP';
                         return (
                           <option key={c.id} value={c.id}>
                             {booking?.booking_number || 'N/A'} — {partnerLabel} (Outstanding: ₹{(c.pending_amount || 0).toLocaleString('en-IN')})

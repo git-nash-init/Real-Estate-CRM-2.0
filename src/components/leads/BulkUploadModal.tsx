@@ -332,7 +332,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
                   >
                     <option value="">No specific partner</option>
                     {partners.map(p => (
-                      <option key={p.id} value={p.id}>{p.name}{p.company_name ? ` — ${p.company_name}` : ''}</option>
+                      <option key={p.id} value={p.id}>{p.company_name || p.name}</option>
                     ))}
                   </select>
                 </div>

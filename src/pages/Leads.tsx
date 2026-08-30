@@ -262,7 +262,7 @@ export const Leads: React.FC = () => {
         console.error('Supabase Channel Partners API Error:', cpError.message);
       } else if (data) {
         setChannelPartners(data);
-        setChannelPartnerMap(new Map(data.map(c => [c.id, `${c.partner_code || ''} - ${c.name || ''}${c.company_name ? ` (${c.company_name})` : ''}`])));
+        setChannelPartnerMap(new Map(data.map(c => [c.id, c.company_name || c.name || ''])));
       }
     } catch (err) {
       console.error('Unexpected Channel Partners fetch exception:', err);
@@ -2163,7 +2163,7 @@ export const Leads: React.FC = () => {
                           <option value="">Select Channel Partner...</option>
                           {channelPartners.map(cp => (
                             <option key={cp.id} value={cp.id}>
-                              {cp.partner_code || ''} - {cp.name}{cp.company_name ? ` (${cp.company_name})` : ''}
+                              {cp.company_name || cp.name}
                             </option>
                           ))}
                         </select>

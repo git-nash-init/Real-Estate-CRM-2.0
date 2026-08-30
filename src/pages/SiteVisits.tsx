@@ -150,12 +150,13 @@ export const SiteVisits: React.FC = () => {
   const [quickReferencedBy, setQuickReferencedBy] = useState('');
 
   // A channel partner logging their own walk-in visit doesn't pick a
-  // Channel Partner or type who referred it -- both are themselves.
+  // Channel Partner -- that's themselves. Referenced By stays a free text
+  // field they fill in themselves (not auto-filled/greyed out) since the
+  // person who actually referred a given visit isn't necessarily the CP.
   useEffect(() => {
     if (!isQuickCreateOpen || !isChannelPartner) return;
     if (myCpId) setQuickChannelPartnerId(myCpId);
-    setQuickReferencedBy(profileMap.get(user?.id || '') || '');
-  }, [isQuickCreateOpen, isChannelPartner, myCpId, user?.id, profileMap]);
+  }, [isQuickCreateOpen, isChannelPartner, myCpId]);
 
   // Sourcing Manager picker for the Walk-in Visit form. Not tied to any
   // one role -- the client wants every walk-in visit to be able to credit
@@ -709,7 +710,7 @@ export const SiteVisits: React.FC = () => {
                       </td>
                       <td className="py-3 px-6 text-slate-600">{formatDDMMYYYY(new Date(v.visit_at))} · {formatTime12h(new Date(v.visit_at))}</td>
                       <td className="py-3 px-6 text-slate-600">{projectMap.get(v.project_id) || 'N/A'}</td>
-                      <td className="py-3 px-6 text-slate-600">{cp ? `${cp.cp_code} - ${cp.name}${cp.company_name ? ` (${cp.company_name})` : ''}` : 'N/A'}</td>
+                      <td className="py-3 px-6 text-slate-600">{cp ? (cp.company_name || cp.name) : 'N/A'}</td>
                       <td className="py-3 px-6">
                         <span className="font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-1 rounded-lg">{v.verification_code}</span>
                       </td>
@@ -1137,7 +1138,7 @@ export const SiteVisits: React.FC = () => {
                     <div className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-100 text-slate-500 text-sm">
                       {(() => {
                         const me = channelPartners.find(cp => cp.id === myCpId);
-                        return me ? `${me.name}${me.company_name ? ` (${me.company_name})` : ''}` : 'You';
+                        return me ? (me.company_name || me.name) : 'You';
                       })()}
                     </div>
                   </div>
@@ -1151,7 +1152,7 @@ export const SiteVisits: React.FC = () => {
                     >
                       <option value="">Select Channel Partner... (optional)</option>
                       {channelPartners.map(cp => (
-                        <option key={cp.id} value={cp.id}>{cp.cp_code} - {cp.name}{cp.company_name ? ` (${cp.company_name})` : ''}</option>
+                        <option key={cp.id} value={cp.id}>{cp.company_name || cp.name}</option>
                       ))}
                     </select>
                     <p className="text-[10px] text-slate-400 mt-1">
@@ -1192,26 +1193,21 @@ export const SiteVisits: React.FC = () => {
                   </select>
                 </div>
 
-                {isChannelPartner ? (
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Referenced By</label>
-                    <div className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-100 text-slate-500 text-sm">
-                      {quickReferencedBy || 'You'}
-                    </div>
-                  </div>
-                ) : (
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Referenced By</label>
-                    <input
-                      type="text"
-                      placeholder="Name of the person who referred this visit (optional)"
-                      value={quickReferencedBy}
-                      onChange={(e) => setQuickReferencedBy(e.target.value)}
-                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
-                    />
-                    <p className="text-[10px] text-slate-400 mt-1">Appears in the WhatsApp message as "Referred by {'{'}name{'}'}" when filled in.</p>
-                  </div>
-                )}
+                {/* Free text for everyone, including a channel partner --
+                    per the client, this must not be pre-filled or greyed
+                    out for them; they type in whoever actually referred
+                    this specific visit themselves. */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Referenced By</label>
+                  <input
+                    type="text"
+                    placeholder="Name of the person who referred this visit (optional)"
+                    value={quickReferencedBy}
+                    onChange={(e) => setQuickReferencedBy(e.target.value)}
+                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">Appears in the WhatsApp message as "Referred by {'{'}name{'}'}" when filled in.</p>
+                </div>
 
                 <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 text-xxs text-slate-500">
                   A unique verification code will be generated and sent via WhatsApp to the customer, and to the Channel Partner if one is selected. This visit stays <span className="font-semibold">active for 24 hours</span>, after which it automatically expires.

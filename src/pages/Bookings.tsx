@@ -483,7 +483,7 @@ export const Bookings: React.FC = () => {
         .eq('status', 'active');
       if (!cpError && cpData) {
         setChannelPartnersList(cpData as any);
-        setChannelPartnerMap(new Map(cpData.map(c => [c.id, `${c.partner_code || ''} - ${c.name || ''}${c.company_name ? ` (${c.company_name})` : ''}`])));
+        setChannelPartnerMap(new Map(cpData.map(c => [c.id, c.company_name || c.name || ''])));
       }
 
       // 4. Fetch Project Inventory
@@ -2167,7 +2167,7 @@ export const Bookings: React.FC = () => {
                     <option value="">Direct (No Channel Partner Referral)</option>
                     {channelPartnersList.map(cp => (
                       <option key={cp.id} value={cp.id}>
-                        {cp.partner_code || ''} - {cp.name}{cp.company_name ? ` (${cp.company_name})` : ''}
+                        {cp.company_name || cp.name}
                       </option>
                     ))}
                   </select>
