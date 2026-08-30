@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabaseClient';
-import { Upload, FileSpreadsheet, User, Calendar, ExternalLink, ArrowLeft, Phone, MessageCircle, X } from 'lucide-react';
+import { Upload, FileSpreadsheet, User, Calendar, ExternalLink, ArrowLeft, Phone, MessageCircle, X, Trash2 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { BulkUploadModal } from '../components/leads/BulkUploadModal';
 
@@ -63,6 +63,10 @@ export const BulkUploads: React.FC = () => {
   const canUpload = role === 'super_admin' || role === 'site_head'
     || role === 'sourcing_manager' || role === 'sourcing_manager_tl'
     || role === 'channel_partner';
+  // Deleting an entire batch (and every lead in it) or an individual lead
+  // out of a batch is super_admin/site_head only -- enforced for real by
+  // bulk_lead_uploads_delete / leads_delete RLS, this just gates the button.
+  const canDeleteBulk = role === 'super_admin' || role === 'site_head';
 
   useEffect(() => {
     fetchUploads();
@@ -150,6 +154,29 @@ export const BulkUploads: React.FC = () => {
     setViewingUpload(null);
     setBatchLeads([]);
     setBatchError(null);
+  };
+
+  const handleDeleteBatch = async (upload: BulkUploadRecord) => {
+    if (!window.confirm(`Permanently delete "${upload.file_name}" and every lead in it? This cannot be undone.`)) return;
+    try {
+      const { error } = await supabase.from('bulk_lead_uploads').delete().eq('id', upload.id);
+      if (error) throw error;
+      await fetchUploads();
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete this upload.');
+    }
+  };
+
+  const handleDeleteBatchLead = async (lead: BatchLead) => {
+    if (!viewingUpload) return;
+    if (!window.confirm(`Permanently delete "${lead.customer_name || 'this lead'}"? This cannot be undone.`)) return;
+    try {
+      const { error } = await supabase.from('leads').delete().eq('id', lead.id);
+      if (error) throw error;
+      await fetchBatchLeads(viewingUpload.id);
+    } catch (err: any) {
+      setBatchError(err.message || 'Failed to delete this lead.');
+    }
   };
 
   const updateBatchLeadStatus = async (lead: BatchLead, newStatus: string) => {
@@ -275,6 +302,15 @@ export const BulkUploads: React.FC = () => {
                               >
                                 DETAILS
                               </button>
+                              {canDeleteBulk && (
+                                <button
+                                  onClick={() => handleDeleteBatchLead(lead)}
+                                  title="Delete this lead (Super Admin / Site Head only)"
+                                  className="inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg text-rose-500 hover:bg-rose-50 transition-colors"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -435,13 +471,24 @@ export const BulkUploads: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <button
-                        onClick={() => openBatch(upload)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-100 transition-colors"
-                      >
-                        <ExternalLink className="w-4 h-4" />
-                        View Leads
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => openBatch(upload)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-100 transition-colors"
+                        >
+                          <ExternalLink className="w-4 h-4" />
+                          View Leads
+                        </button>
+                        {canDeleteBulk && (
+                          <button
+                            onClick={() => handleDeleteBatch(upload)}
+                            title="Delete this entire upload and all its leads (Super Admin / Site Head only)"
+                            className="inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg text-rose-500 hover:bg-rose-50 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
