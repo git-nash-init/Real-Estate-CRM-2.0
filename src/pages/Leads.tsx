@@ -288,8 +288,14 @@ export const Leads: React.FC = () => {
       const bulkUploadId = searchParams.get('bulk_upload_id');
       if (bulkUploadId) {
         query = query.eq('bulk_upload_id', bulkUploadId);
+      } else {
+        // Bulk-uploaded leads are a separate thing and stay out of the main
+        // directory entirely -- they're only reachable by drilling into a
+        // specific batch from the Bulk Uploads page (?bulk_upload_id=...
+        // above).
+        query = query.is('bulk_upload_id', null);
       }
-      
+
       if (statusFilter) {
         query = query.eq('status', statusFilter);
       }

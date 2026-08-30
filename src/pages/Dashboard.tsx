@@ -188,11 +188,13 @@ export const Dashboard: React.FC = () => {
         projectsRes,
         profilesRes
       ] = await Promise.all([
-        supabase.from('leads').select('id', { count: 'exact', head: true }),
+        // Bulk-uploaded leads are a separate thing and stay out of the main
+        // leads count/recency views -- only visible from the Bulk Uploads page.
+        supabase.from('leads').select('id', { count: 'exact', head: true }).is('bulk_upload_id', null),
         supabase.from('followups').select('status'),
         supabase.from('site_visits').select('status, scheduled_at'),
         supabase.from('bookings').select('booking_amount'),
-        supabase.from('leads').select('*').order('created_at', { ascending: false }).limit(5),
+        supabase.from('leads').select('*').is('bulk_upload_id', null).order('created_at', { ascending: false }).limit(5),
         supabase.from('site_visits').select('*').order('scheduled_at', { ascending: true }).limit(5),
         supabase.from('projects').select('id, project_name'),
         supabase.from('user_profiles').select('id, full_name')
