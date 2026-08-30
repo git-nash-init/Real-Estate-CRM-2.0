@@ -136,17 +136,16 @@ export const SiteVisits: React.FC = () => {
   const [quickVisitAmPm, setQuickVisitAmPm] = useState<'AM' | 'PM'>('PM');
   const [quickChannelPartnerId, setQuickChannelPartnerId] = useState('');
   const [quickProjectId, setQuickProjectId] = useState('');
+  const [quickSourcingManagerName, setQuickSourcingManagerName] = useState('');
   const [quickReferencedBy, setQuickReferencedBy] = useState('');
 
-  // For presales specifically, "Referenced By" becomes a Sourcing Manager
-  // picker instead of free text -- per the client, a presales user logging
-  // a walk-in visit is crediting the Sourcing Manager who brought the lead
-  // in, not typing an arbitrary name. quickReferencedBy still just holds a
-  // name string underneath (unchanged DB column / WhatsApp message), only
-  // how it's populated differs.
+  // Sourcing Manager picker for the Walk-in Visit form. Not tied to any
+  // one role -- the client wants every walk-in visit to be able to credit
+  // a Sourcing Manager by name, separately from (and before) "Referenced
+  // By", and neither field is mandatory since a walk-in can come from a
+  // personal referral with no Channel Partner or Sourcing Manager involved.
   const [sourcingManagers, setSourcingManagers] = useState<{ id: string; name: string }[]>([]);
   useEffect(() => {
-    if (role !== 'presales') return;
     (async () => {
       const { data: roleRow } = await supabase.from('roles').select('id').eq('name', 'sourcing_manager').maybeSingle();
       if (!roleRow) return;
@@ -156,7 +155,7 @@ export const SiteVisits: React.FC = () => {
       const { data: profiles } = await supabase.from('user_profiles').select('id, full_name').in('id', userIds);
       setSourcingManagers((profiles || []).map(p => ({ id: p.id, name: p.full_name || 'Unnamed' })));
     })();
-  }, [role]);
+  }, []);
 
   const fetchQuickVisits = useCallback(async () => {
     const { data, error } = await supabase
@@ -219,6 +218,7 @@ export const SiteVisits: React.FC = () => {
     setQuickVisitAmPm('PM');
     setQuickChannelPartnerId('');
     setQuickProjectId('');
+    setQuickSourcingManagerName('');
     setQuickReferencedBy('');
     setQuickCreateError(null);
   };
@@ -252,8 +252,8 @@ export const SiteVisits: React.FC = () => {
   const handleQuickCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const visitDateTime = buildQuickVisitDateTime();
-    if (!quickCustomerName.trim() || !quickCustomerMobile.trim() || !visitDateTime || !quickChannelPartnerId || !quickProjectId || !quickReferencedBy.trim()) {
-      setQuickCreateError('All fields are required.');
+    if (!quickCustomerName.trim() || !quickCustomerMobile.trim() || !visitDateTime || !quickProjectId) {
+      setQuickCreateError('Customer Name, WhatsApp Number, Visit Date & Time and Project are required.');
       return;
     }
 
@@ -280,10 +280,11 @@ export const SiteVisits: React.FC = () => {
           customer_name: quickCustomerName.trim(),
           customer_mobile: customerPhone,
           visit_at: visitDateTime.toISOString(),
-          channel_partner_id: quickChannelPartnerId,
+          channel_partner_id: quickChannelPartnerId || null,
           project_id: quickProjectId,
           verification_code: verificationCode,
-          referenced_by: quickReferencedBy.trim(),
+          sourcing_manager_name: quickSourcingManagerName.trim() || null,
+          referenced_by: quickReferencedBy.trim() || null,
           status: 'active',
           created_by: user?.id || null,
         }])
@@ -299,7 +300,10 @@ export const SiteVisits: React.FC = () => {
       // customer and the Channel Partner, merge fields filled in:
       // "Dear {customer name}, use code {code} with (91) {customer number}
       //  to preview {project} on {date}. Referred by {referenced_by}."
-      const message = `Dear ${quickCustomerName.trim()}, use code ${verificationCode} with (91) ${customerPhone} to preview ${projectName} on ${visitDateLabel}. Referred by ${quickReferencedBy.trim()}.`;
+      // Referenced By is optional now, so that clause is only appended when
+      // a name was actually entered.
+      const referredByClause = quickReferencedBy.trim() ? ` Referred by ${quickReferencedBy.trim()}.` : '';
+      const message = `Dear ${quickCustomerName.trim()}, use code ${verificationCode} with (91) ${customerPhone} to preview ${projectName} on ${visitDateLabel}.${referredByClause}`;
 
       const outboxRows: { to_phone: string; message: string }[] = [];
       outboxRows.push({ to_phone: customerPhone, message });
@@ -1079,20 +1083,19 @@ export const SiteVisits: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Channel Partner *</label>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Channel Partner</label>
                   <select
-                    required
                     value={quickChannelPartnerId}
                     onChange={(e) => setQuickChannelPartnerId(e.target.value)}
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                   >
-                    <option value="">Select Channel Partner...</option>
+                    <option value="">Select Channel Partner... (optional)</option>
                     {channelPartners.map(cp => (
                       <option key={cp.id} value={cp.id}>{cp.cp_code} - {cp.name}</option>
                     ))}
                   </select>
                   <p className="text-[10px] text-slate-400 mt-1">
-                    Their number is taken automatically from their Channel Partner record — no need to type it.
+                    Leave blank if this visit isn't from a Channel Partner — e.g. a personal referral. Their number is taken automatically from their Channel Partner record when selected.
                   </p>
                 </div>
 
@@ -1115,36 +1118,33 @@ export const SiteVisits: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-                    {role === 'presales' ? 'Sourcing Manager *' : 'Referenced By *'}
-                  </label>
-                  {role === 'presales' ? (
-                    <select
-                      required
-                      value={quickReferencedBy}
-                      onChange={(e) => setQuickReferencedBy(e.target.value)}
-                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
-                    >
-                      <option value="">Select Sourcing Manager...</option>
-                      {sourcingManagers.map(sm => (
-                        <option key={sm.id} value={sm.name}>{sm.name}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      required
-                      placeholder="Name of the person who referred this visit"
-                      value={quickReferencedBy}
-                      onChange={(e) => setQuickReferencedBy(e.target.value)}
-                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
-                    />
-                  )}
-                  <p className="text-[10px] text-slate-400 mt-1">Appears in the WhatsApp message as "Referred by {'{'}name{'}'}".</p>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager Name</label>
+                  <select
+                    value={quickSourcingManagerName}
+                    onChange={(e) => setQuickSourcingManagerName(e.target.value)}
+                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
+                  >
+                    <option value="">Select Sourcing Manager... (optional)</option>
+                    {sourcingManagers.map(sm => (
+                      <option key={sm.id} value={sm.name}>{sm.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Referenced By</label>
+                  <input
+                    type="text"
+                    placeholder="Name of the person who referred this visit (optional)"
+                    value={quickReferencedBy}
+                    onChange={(e) => setQuickReferencedBy(e.target.value)}
+                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">Appears in the WhatsApp message as "Referred by {'{'}name{'}'}" when filled in.</p>
                 </div>
 
                 <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 text-xxs text-slate-500">
-                  A unique verification code will be generated and sent via WhatsApp to both the customer and the Channel Partner. This visit stays <span className="font-semibold">active for 24 hours</span>, after which it automatically expires.
+                  A unique verification code will be generated and sent via WhatsApp to the customer, and to the Channel Partner if one is selected. This visit stays <span className="font-semibold">active for 24 hours</span>, after which it automatically expires.
                 </div>
               </div>
 
