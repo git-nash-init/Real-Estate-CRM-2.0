@@ -470,6 +470,10 @@ export const Employees: React.FC = () => {
       setFormError('Please fill in all required fields.');
       return;
     }
+    if (!selectedRole) {
+      setFormError('An Access Role is required -- an employee without one has no permissions anywhere in the system and shows up as an unlabeled "User".');
+      return;
+    }
 
     setFormError(null);
     setFormLoading(true);
@@ -1686,13 +1690,14 @@ export const Employees: React.FC = () => {
                       <p className="text-[10px] text-slate-500 mt-1 italic">Optional: Select an existing account instead of auto-creating a new one.</p>
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Access Role Assignment</label>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Access Role Assignment *</label>
                       <select
+                        required
                         value={selectedRole}
                         onChange={(e) => setSelectedRole(e.target.value as UserRole)}
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
-                        <option value="">No Role Assigned...</option>
+                        <option value="" disabled>Select Access Role...</option>
                         {/* Sourced from the live `roles` table (rolesList), not the
                             hardcoded ROLES constant — that array has to be manually
                             kept in sync with the database and silently drops the role
