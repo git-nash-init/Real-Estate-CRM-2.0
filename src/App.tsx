@@ -119,9 +119,14 @@ function App() {
               path="reports"
               element={<Reports />}
             />
+            {/* Open to every role -- everyone gets to change their own
+                password here, even channel_partner, which is otherwise
+                excluded from most of the app. WhatsApp connection setup
+                inside Settings.tsx is separately gated to the roles that
+                actually use it. */}
             <Route
               path="settings"
-              element={<ProtectedRoute excludedRoles={['channel_partner']}><Settings /></ProtectedRoute>}
+              element={<Settings />}
             />
             <Route
               path="bulk-uploads"

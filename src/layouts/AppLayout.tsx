@@ -79,7 +79,10 @@ export const AppLayout: React.FC = () => {
     { name: 'Tasks', path: '/tasks', icon: CheckSquare, hiddenForRoles: ['channel_partner'] },
     { name: 'Reports', path: '/reports', icon: BarChart3 },
     { name: 'Expenses', path: '/expenses', icon: Wallet, allowedRoles: ['super_admin'] },
-    { name: 'Settings', path: '/settings', icon: Settings, hiddenForRoles: ['channel_partner'] },
+    // Open to every role -- everyone needs somewhere to change their own
+    // password, even channel_partner (otherwise excluded from most of the
+    // app). The WhatsApp panel inside Settings.tsx is separately gated.
+    { name: 'Settings', path: '/settings', icon: Settings },
   ].filter(item => {
     if (item.name === 'Expenses' && profile?.email === 'anilhiwale17@gmail.com') {
       return false;
