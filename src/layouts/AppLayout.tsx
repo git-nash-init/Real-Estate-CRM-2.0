@@ -38,6 +38,11 @@ export const AppLayout: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Separate from the desktop collapse toggle above -- on phones/tablets
+  // the sidebar is an off-canvas drawer that's closed by default and
+  // opened via the header's hamburger button, rather than the permanent
+  // fixed-width column used at md+ widths.
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
   const { notifications, unreadCount, markAsRead, markAllAsRead, justArrived, dismissJustArrived } = useNotifications();
@@ -113,25 +118,45 @@ export const AppLayout: React.FC = () => {
 
   return (
     <div className="min-h-screen flex bg-slate-50 text-slate-800 font-sans">
-      {/* LEFT SIDEBAR */}
+      {/* Backdrop behind the mobile drawer -- tapping it closes the menu.
+          Only ever rendered below md, and only while the drawer is open. */}
+      {mobileSidebarOpen && (
+        <div
+          onClick={() => setMobileSidebarOpen(false)}
+          className="fixed inset-0 z-20 bg-slate-900/50 md:hidden"
+        />
+      )}
+
+      {/* LEFT SIDEBAR — a permanent collapsible column at md+ (unchanged
+          desktop behavior), an off-canvas drawer below that: hidden by
+          default, slid in from the left over the content when opened from
+          the header's hamburger button. */}
       <aside
-        className={`fixed top-0 bottom-0 left-0 z-20 flex flex-col bg-slate-900 text-slate-300 border-r border-slate-800 transition-all duration-300 ${
-          sidebarOpen ? 'w-64' : 'w-20'
-        }`}
+        className={`fixed top-0 bottom-0 left-0 z-30 flex flex-col w-64 bg-slate-900 text-slate-300 border-r border-slate-800 transition-transform duration-300 md:z-20 md:transition-all ${
+          mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        } md:translate-x-0 ${sidebarOpen ? 'md:w-64' : 'md:w-20'}`}
       >
         {/* Sidebar Header */}
         <div className="h-16 flex items-center justify-between px-4 bg-slate-950 border-b border-slate-800">
           <div className="flex items-center space-x-3 overflow-hidden">
             <img src="/logo-icon.png" alt="Opal Properties" className="h-8 w-8 flex-shrink-0 object-contain" />
-            {sidebarOpen && (
-              <span className="font-bold text-lg text-white tracking-wider truncate">
+            {(sidebarOpen || mobileSidebarOpen) && (
+              <span className="font-bold text-lg text-white tracking-wider truncate md:inline">
                 Opal Properties
               </span>
             )}
           </div>
+          {/* Mobile close button */}
+          <button
+            onClick={() => setMobileSidebarOpen(false)}
+            className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 focus:outline-none transition-colors md:hidden"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          {/* Desktop collapse toggle */}
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 focus:outline-none transition-colors"
+            className="hidden md:block p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 focus:outline-none transition-colors"
           >
             {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
@@ -154,6 +179,7 @@ export const AppLayout: React.FC = () => {
               <NavLink
                 key={item.name}
                 to={item.path}
+                onClick={() => setMobileSidebarOpen(false)}
                 className={`flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 group ${
                   isActive
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20'
@@ -165,7 +191,7 @@ export const AppLayout: React.FC = () => {
                     isActive ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'
                   }`}
                 />
-                {sidebarOpen && <span className="truncate">{item.name}</span>}
+                {(sidebarOpen || mobileSidebarOpen) && <span className="truncate">{item.name}</span>}
               </NavLink>
             );
           })}
@@ -178,29 +204,38 @@ export const AppLayout: React.FC = () => {
             className="w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-400 hover:bg-rose-950/30 hover:text-rose-400 transition-colors focus:outline-none"
           >
             <LogOut className="h-5 w-5 flex-shrink-0 text-slate-400 group-hover:text-rose-400" />
-            {sidebarOpen && <span>Sign Out</span>}
+            {(sidebarOpen || mobileSidebarOpen) && <span>Sign Out</span>}
           </button>
         </div>
       </aside>
 
-      {/* RIGHT CONTENT WORKSPACE */}
+      {/* RIGHT CONTENT WORKSPACE -- full width on mobile (the sidebar is an
+          overlay drawer there, not a permanent column), the usual
+          collapsible left padding at md+. */}
       <div
-        className={`flex-1 flex flex-col min-h-screen transition-all duration-300 ${
-          sidebarOpen ? 'pl-64' : 'pl-20'
+        className={`flex-1 flex flex-col min-h-screen transition-all duration-300 pl-0 ${
+          sidebarOpen ? 'md:pl-64' : 'md:pl-20'
         }`}
       >
         {/* TOP HEADER */}
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 sticky top-0 z-10 shadow-sm">
+        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-3 sm:px-6 sticky top-0 z-10 shadow-sm gap-2">
           {/* Header Title / Search */}
-          <div className="flex items-center space-x-4">
-            <h1 className="text-xl font-bold text-slate-900 tracking-tight">
+          <div className="flex items-center space-x-2 sm:space-x-4 min-w-0">
+            {/* Mobile hamburger -- opens the off-canvas sidebar drawer */}
+            <button
+              onClick={() => setMobileSidebarOpen(true)}
+              className="p-1.5 -ml-1 rounded-md text-slate-500 hover:text-slate-800 hover:bg-slate-100 focus:outline-none transition-colors md:hidden"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+            <h1 className="text-base sm:text-xl font-bold text-slate-900 tracking-tight truncate">
               {getPageTitle()}
             </h1>
             <GlobalSearch />
           </div>
 
           {/* Header Actions & Profile */}
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-2 sm:space-x-4 flex-shrink-0">
             {/* Notifications */}
             <div className="relative">
               <button
@@ -327,7 +362,7 @@ export const AppLayout: React.FC = () => {
         </header>
 
         {/* MAIN VIEWPORT */}
-        <main className="flex-1 p-6 overflow-y-auto">
+        <main className="flex-1 p-3 sm:p-6 overflow-y-auto overflow-x-hidden">
           <Outlet />
         </main>
       </div>
