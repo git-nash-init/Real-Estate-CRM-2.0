@@ -174,7 +174,7 @@ export const canAccessBulkUploadPage = (role: Role) =>
   ['super_admin', 'site_head', 'sourcing_manager', 'sourcing_manager_tl', 'telecaller', 'channel_partner'].includes(role as string);
 
 export const canPerformBulkUpload = (role: Role) =>
-  ['super_admin', 'site_head', 'sourcing_manager', 'sourcing_manager_tl', 'channel_partner'].includes(role as string);
+  ['super_admin', 'site_head', 'sourcing_manager', 'sourcing_manager_tl', 'channel_partner', 'telecaller'].includes(role as string);
 
 // A10: New Booking Button
 export const canCreateBooking = (role: Role) =>

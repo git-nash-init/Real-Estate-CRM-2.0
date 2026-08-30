@@ -3,6 +3,7 @@ import { supabase } from '../services/supabaseClient';
 import { Upload, FileSpreadsheet, User, Calendar, ExternalLink, ArrowLeft, Phone, MessageCircle, X, Trash2 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { BulkUploadModal } from '../components/leads/BulkUploadModal';
+import { canPerformBulkUpload } from '../utils/permissions';
 
 interface BulkUploadRecord {
   id: string;
@@ -60,9 +61,7 @@ export const BulkUploads: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const { role, user } = useAuth();
-  const canUpload = role === 'super_admin' || role === 'site_head'
-    || role === 'sourcing_manager' || role === 'sourcing_manager_tl'
-    || role === 'channel_partner';
+  const canUpload = canPerformBulkUpload(role);
   // Deleting an entire batch (and every lead in it) or an individual lead
   // out of a batch is super_admin/site_head only -- enforced for real by
   // bulk_lead_uploads_delete / leads_delete RLS, this just gates the button.
