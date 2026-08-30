@@ -84,8 +84,13 @@ export const Leads: React.FC = () => {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
 
   // Auth and Routing hooks
-  const { user, role } = useAuth();
+  const { user, role, assignedProjects } = useAuth();
   const isChannelPartner = role === 'channel_partner';
+  // A non-super-admin only ever sees/allocates within project(s) they're
+  // themselves assigned to -- both which projects show up in the Project
+  // picker, and which people show up as Sourcing Manager/Presales
+  // (Telecaller)/Allocated To options once a project is chosen.
+  const [projectTeamMap, setProjectTeamMap] = useState<Map<string, Set<string>>>(new Map());
   const [searchParams, setSearchParams] = useSearchParams();
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | null>(null);
   const [isLogCallOpen, setIsLogCallOpen] = useState(false);
@@ -136,7 +141,7 @@ export const Leads: React.FC = () => {
   // exists — enforced for real by enforce_lead_source_change_trigger on
   // the database, not just this UI check.
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
-  const canEditSource = role === 'super_admin' || role === 'site_head';
+  const canEditSource = role === 'super_admin' || role === 'site_head' || role === 'receptionist';
 
   // Creation form fields
   const [customerName, setCustomerName] = useState('');
@@ -364,6 +369,24 @@ export const Leads: React.FC = () => {
           });
       });
   }, [isChannelPartner, user?.id]);
+
+  // Who's assigned to which project -- powers project-scoped Sourcing
+  // Manager/Presales(Telecaller)/Allocated To options in the lead form.
+  // Not gated to super_admin: shares_project_with_me() RLS lets anyone see
+  // their own project's other assignees, but nothing outside it.
+  useEffect(() => {
+    if (isChannelPartner) return;
+    supabase.from('user_project_assignments').select('user_id, project_id').eq('is_active', true)
+      .then(({ data, error }) => {
+        if (error) { reportQueryError('Leads: project team assignments', error); return; }
+        const map = new Map<string, Set<string>>();
+        (data || []).forEach(row => {
+          if (!map.has(row.project_id)) map.set(row.project_id, new Set());
+          map.get(row.project_id)!.add(row.user_id);
+        });
+        setProjectTeamMap(map);
+      });
+  }, [isChannelPartner]);
 
   // Load configuration and data
   useEffect(() => {
@@ -971,6 +994,26 @@ export const Leads: React.FC = () => {
   // Pagination bounds
   const startRange = page * pageSize + 1;
   const endRange = Math.min((page + 1) * pageSize, totalCount);
+
+  // Project scoping for the lead form -- applies to every role, including
+  // super_admin, per the client ("this would happen for all the roles").
+  // The Project picker itself only offers projects the current user is
+  // assigned to; once one is picked, Sourcing Manager/Presales
+  // (Telecaller)/Allocated To only offer people assigned to that same
+  // project (via projectTeamMap, built from user_project_assignments).
+  const formProjectMap = isSuperAdmin(role)
+    ? projectMap
+    : new Map(Array.from(projectMap.entries()).filter(([id]) => assignedProjects.includes(id)));
+
+  const scopeToProjectTeam = (map: Map<string, string>) => {
+    if (!selectedProjectId) return new Map<string, string>();
+    const teamIds = projectTeamMap.get(selectedProjectId);
+    if (!teamIds) return new Map<string, string>();
+    return new Map(Array.from(map.entries()).filter(([id]) => teamIds.has(id)));
+  };
+  const formSourcingManagerMap = scopeToProjectTeam(sourcingManagerMap);
+  const formTelecallerMap = scopeToProjectTeam(telecallerMap);
+  const formClosingTeamMap = scopeToProjectTeam(closingTeamMap);
 
   return (
     <div className="space-y-6">
@@ -1951,10 +1994,10 @@ export const Leads: React.FC = () => {
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
                         <option value="">Select Project...</option>
-                        {(isChannelPartner ? myCpProjectMap : projectMap).size === 0 ? (
+                        {(isChannelPartner ? myCpProjectMap : formProjectMap).size === 0 ? (
                           <option value="" disabled>No projects available</option>
                         ) : (
-                          Array.from((isChannelPartner ? myCpProjectMap : projectMap).entries()).map(([id, name]) => (
+                          Array.from((isChannelPartner ? myCpProjectMap : formProjectMap).entries()).map(([id, name]) => (
                             <option key={id} value={id}>{name}</option>
                           ))
                         )}
@@ -2061,10 +2104,15 @@ export const Leads: React.FC = () => {
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
                         <option value="">Select Sourcing Manager...</option>
-                        {Array.from(sourcingManagerMap.entries()).map(([id, name]) => (
+                        {Array.from(formSourcingManagerMap.entries()).map(([id, name]) => (
                           <option key={id} value={id}>{name}</option>
                         ))}
                       </select>
+                      {!selectedProjectId ? (
+                        <p className="text-[10px] text-slate-400 mt-1">Select a Project first to see its Sourcing Managers.</p>
+                      ) : formSourcingManagerMap.size === 0 && (
+                        <p className="text-[10px] text-amber-600 mt-1">No Sourcing Manager is assigned to this project yet.</p>
+                      )}
                     </div>
                     )}
 
@@ -2083,7 +2131,7 @@ export const Leads: React.FC = () => {
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
                         <option value="">Select Presales (Telecaller)...</option>
-                        {Array.from(telecallerMap.entries()).map(([id, name]) => (
+                        {Array.from(formTelecallerMap.entries()).map(([id, name]) => (
                           <option key={id} value={id}>{name}</option>
                         ))}
                       </select>
@@ -2098,10 +2146,13 @@ export const Leads: React.FC = () => {
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
                         <option value="">Select Owner...</option>
-                        {Array.from(closingTeamMap.entries()).map(([id, name]) => (
+                        {Array.from(formClosingTeamMap.entries()).map(([id, name]) => (
                           <option key={id} value={id}>{name}</option>
                         ))}
                       </select>
+                      {selectedProjectId && formClosingTeamMap.size === 0 && (
+                        <p className="text-[10px] text-amber-600 mt-1">No Closing Manager is assigned to this project yet.</p>
+                      )}
                     </div>
 
                     <div>
