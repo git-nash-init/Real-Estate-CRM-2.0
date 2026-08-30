@@ -284,17 +284,10 @@ export const Leads: React.FC = () => {
         query = query.or(`customer_name.ilike.%${term}%,mobile.ilike.%${term}%,email.ilike.%${term}%`);
       }
 
-      // Apply Filters
-      const bulkUploadId = searchParams.get('bulk_upload_id');
-      if (bulkUploadId) {
-        query = query.eq('bulk_upload_id', bulkUploadId);
-      } else {
-        // Bulk-uploaded leads are a separate thing and stay out of the main
-        // directory entirely -- they're only reachable by drilling into a
-        // specific batch from the Bulk Uploads page (?bulk_upload_id=...
-        // above).
-        query = query.is('bulk_upload_id', null);
-      }
+      // Bulk-uploaded leads are a separate thing and stay out of the main
+      // directory entirely -- viewing a specific batch's leads now happens
+      // fully inside the Bulk Uploads page itself, not here.
+      query = query.is('bulk_upload_id', null);
 
       if (statusFilter) {
         query = query.eq('status', statusFilter);
@@ -407,34 +400,6 @@ export const Leads: React.FC = () => {
       } finally {
         setLoading(false);
       }
-    }
-  };
-
-  const updateLeadStatus = async (lead: Lead, newStatus: string) => {
-    setLoading(true);
-    try {
-      if (newStatus === 'lost') {
-        const { data, error } = await supabase.from('leads').delete().eq('id', lead.id).select();
-        if (error) throw error;
-        if (!data || data.length === 0) {
-          throw new Error('Permission denied. You do not have the required roles to delete this lead.');
-        }
-        setNotification({ type: 'success', message: 'Lead permanently deleted.' });
-      } else {
-        const { error } = await supabase.from('leads').update({ status: newStatus }).eq('id', lead.id);
-        if (error) throw error;
-        setNotification({ type: 'success', message: 'Status updated successfully.' });
-      }
-      fetchLeads();
-    } catch (err: any) {
-      setNotification({ type: 'error', message: err.message || 'Failed to update status' });
-      setLoading(false);
-    }
-  };
-
-  const handleLostStatus = (lead: Lead) => {
-    if (window.confirm(`Marking as LOST will permanently delete this lead. Continue?`)) {
-      handleDeleteLead(lead);
     }
   };
 
@@ -932,20 +897,6 @@ export const Leads: React.FC = () => {
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
           
-          {/* Back to Bulk Uploads if filtered */}
-          {searchParams.get('bulk_upload_id') && (
-            <button
-              onClick={() => {
-                const newParams = new URLSearchParams(searchParams);
-                newParams.delete('bulk_upload_id');
-                setSearchParams(newParams);
-              }}
-              className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl text-sm font-semibold transition-all focus:outline-none"
-            >
-              Clear Upload Filter
-            </button>
-          )}
-
           {hasCreateAccess && (
             <button
               onClick={() => {
@@ -1117,9 +1068,9 @@ export const Leads: React.FC = () => {
                         </td>
                         <td className="py-4 px-6">
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${
-                            lead.status?.toLowerCase() === 'booked' ? 'bg-emerald-50 text-emerald-700' :
-                            lead.status?.toLowerCase() === 'lost' ? 'bg-rose-50 text-rose-700' :
-                            lead.status?.toLowerCase() === 'visit_scheduled' ? 'bg-amber-50 text-amber-700' :
+                            lead.status?.toLowerCase() === 'booking_done' ? 'bg-emerald-50 text-emerald-700' :
+                            (lead.status?.toLowerCase() === 'lost' || lead.status?.toLowerCase() === 'junk') ? 'bg-rose-50 text-rose-700' :
+                            (lead.status?.toLowerCase() === 'site_visit_planned' || lead.status?.toLowerCase() === 'site_visit_done') ? 'bg-amber-50 text-amber-700' :
                             'bg-indigo-50 text-indigo-700'
                           }`}>
                             {lead.status || 'new'}
@@ -1173,55 +1124,6 @@ export const Leads: React.FC = () => {
                           </div>
                         </td>
                       </tr>
-                      {searchParams.get('bulk_upload_id') && (
-                        <tr key={`${lead.id}-actions`} className="bg-slate-50/50 border-b border-slate-100">
-                          <td colSpan={9} className="py-3 px-6">
-                            <div className="flex flex-wrap gap-2 items-center">
-                              <a 
-                                href={`tel:${lead.mobile}`} 
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 transition-colors"
-                              >
-                                <Phone className="w-3.5 h-3.5" /> Call
-                              </a>
-                              <a 
-                                href={`https://wa.me/${lead.mobile?.replace(/\D/g, '')}`} 
-                                target="_blank" 
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-semibold hover:bg-emerald-100 transition-colors"
-                              >
-                                <MessageCircle className="w-3.5 h-3.5" /> WhatsApp
-                              </a>
-                              <div className="w-px h-5 bg-slate-200 mx-2"></div>
-                              
-                              <button onClick={() => setSelectedLead(lead)} className="px-3 py-1.5 border border-slate-200 bg-white text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-100 transition-colors">
-                                DETAILS
-                              </button>
-                              {lead.telecaller_id === user?.id && (
-                                <>
-                                  <button onClick={() => updateLeadStatus(lead, 'call_back')} className="px-3 py-1.5 border border-orange-500 bg-orange-500 text-black rounded-lg text-xs font-bold hover:bg-orange-600 transition-colors">
-                                    CALL BACK
-                                  </button>
-                                  <button onClick={() => handleLostStatus(lead)} className="px-3 py-1.5 border border-red-600 bg-red-600 text-black rounded-lg text-xs font-bold hover:bg-red-700 transition-colors">
-                                    LOST
-                                  </button>
-                                  <button onClick={() => updateLeadStatus(lead, 'booked')} className="px-3 py-1.5 border border-[#00FF00] bg-[#00FF00] text-black rounded-lg text-xs font-bold hover:bg-[#00cc00] transition-colors">
-                                    BOOKED
-                                  </button>
-                                  <button onClick={() => updateLeadStatus(lead, 'planed')} className="px-3 py-1.5 border border-cyan-400 bg-cyan-400 text-black rounded-lg text-xs font-bold hover:bg-cyan-500 transition-colors">
-                                    PLANED
-                                  </button>
-                                  <button onClick={() => updateLeadStatus(lead, 'other_lead')} className="px-3 py-1.5 border border-black bg-black text-red-600 rounded-lg text-xs font-bold hover:bg-gray-900 transition-colors">
-                                    OTHER LEAD
-                                  </button>
-                                  <button onClick={() => updateLeadStatus(lead, 'visit_done')} className="px-3 py-1.5 border border-[#5AB7B7] bg-[#5AB7B7] text-black rounded-lg text-xs font-bold hover:bg-[#4a9f9f] transition-colors">
-                                    VISIT DONE
-                                  </button>
-                                </>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      )}
                     </React.Fragment>
                     ))
                   ) : (
@@ -1973,11 +1875,25 @@ export const Leads: React.FC = () => {
                         onChange={(e) => setSelectedStatus(e.target.value)}
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
+                        {/* Values must match the DB's lead_status enum exactly
+                            (new, contacted, interested, hot, site_visit_planned,
+                            site_visit_done, negotiation, booking_done,
+                            not_reachable, call_back_later, lost, junk) --
+                            'visit_scheduled'/'booked' here previously didn't
+                            exist in that enum, so saving either one always
+                            failed with a Postgres enum error. */}
                         <option value="new">New Lead</option>
                         <option value="contacted">Contacted</option>
-                        <option value="visit_scheduled">Visit Scheduled</option>
-                        <option value="booked">Booked</option>
+                        <option value="interested">Interested</option>
+                        <option value="hot">Hot</option>
+                        <option value="site_visit_planned">Visit Scheduled</option>
+                        <option value="site_visit_done">Visit Done</option>
+                        <option value="negotiation">Negotiation</option>
+                        <option value="booking_done">Booked</option>
+                        <option value="not_reachable">Not Reachable</option>
+                        <option value="call_back_later">Call Back Later</option>
                         <option value="lost">Lost</option>
+                        <option value="junk">Junk</option>
                       </select>
                     </div>
 
