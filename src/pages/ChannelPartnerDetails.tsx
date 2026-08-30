@@ -2354,7 +2354,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                       <span>{unitsMap.get(manualUnitId) || '—'}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="font-bold">Consideration Amount:</span>
+                      <span className="font-bold">Agreement Value:</span>
                       <span className="font-semibold text-slate-800">₹{manualSaleValue.toLocaleString('en-IN')}</span>
                     </div>
                     <div className="flex justify-between">

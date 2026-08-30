@@ -707,7 +707,7 @@ export const Bookings: React.FC = () => {
       return;
     }
     if (!considerationAmount.trim() || isNaN(Number(considerationAmount)) || Number(considerationAmount) <= 0) {
-      setCreateError('Consideration Amount (Base) is required, must be a number, and must be greater than zero.');
+      setCreateError('Agreement Value (Base) is required, must be a number, and must be greater than zero.');
       return;
     }
     if (gstAmount.trim() && (isNaN(Number(gstAmount)) || Number(gstAmount) < 0)) {
@@ -1709,7 +1709,7 @@ export const Bookings: React.FC = () => {
                             return (
                               <>
                                 <div className="flex justify-between">
-                                  <span className="text-slate-500 font-medium">Consideration Amount (Base):</span>
+                                  <span className="text-slate-500 font-medium">Agreement Value (Base):</span>
                                   <span className="font-semibold text-slate-800">₹{baseAmt.toLocaleString('en-IN')}</span>
                                 </div>
                                 <div className="flex justify-between">
@@ -2239,9 +2239,9 @@ export const Bookings: React.FC = () => {
                   <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-4">Financial Charges Structure</h4>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Base/Consideration Amount */}
+                    {/* Base/Agreement Value */}
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Consideration Amount (Base) *</label>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Agreement Value (Base) *</label>
                       <div className="relative">
                         <IndianRupee className="absolute inset-y-0 left-3 h-4.5 w-4.5 text-slate-400 self-center top-1/2 -translate-y-1/2" />
                         <input
