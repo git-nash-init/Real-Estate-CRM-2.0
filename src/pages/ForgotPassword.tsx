@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../services/supabaseClient';
-import { Building, Mail, AlertCircle, ArrowLeft, CheckCircle } from 'lucide-react';
+import { Building, Mail, AlertCircle, AlertTriangle, ArrowLeft, CheckCircle } from 'lucide-react';
 
 export const ForgotPassword: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -66,6 +66,13 @@ export const ForgotPassword: React.FC = () => {
               <p className="text-sm text-emerald-700">
                 Check your inbox for a message containing your password reset link.
               </p>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl flex items-start space-x-2.5">
+              <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+              <span className="text-sm font-medium leading-tight">
+                Don't see it? Please check your <span className="font-bold">Spam</span> or <span className="font-bold">Junk</span> folder — the reset link is sometimes filtered there.
+              </span>
             </div>
 
             <Link

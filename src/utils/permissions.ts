@@ -72,6 +72,16 @@ export const canAddOwnLead = (role: Role) =>
 export const canViewOwnLeadsTab = (role: Role) =>
   canAddOwnLead(role) || role === 'super_admin' || role === 'site_head';
 
+// Pre Tagging (Walk-in Visits): converting a walk-in visit's customer into
+// a real lead. Per the client's explicit role list -- everyone except
+// telecaller and channel_partner (telecaller works leads once they exist,
+// not create them from a visit; channel_partner has no lead-creation
+// access at all).
+export const canConvertVisitToLead = (role: Role) =>
+  ['super_admin', 'project_admin', 'site_head', 'sourcing_manager_tl', 'sourcing_manager',
+   'presales_tl', 'presales', 'closing_manager_tl', 'closing_manager',
+   'marketing_head', 'marketing', 'receptionist'].includes(role as string);
+
 // Editing an existing lead record (the pencil button on the Leads
 // directory / lead detail modal) is super_admin only, full stop -- per the
 // client's explicit "edit option should only be given to super admin...

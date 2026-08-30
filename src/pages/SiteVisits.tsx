@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
-import { canEditLead } from '../utils/permissions';
+import { canEditLead, canConvertVisitToLead } from '../utils/permissions';
 import {
   Search,
   RefreshCw,
@@ -127,8 +127,10 @@ export const SiteVisits: React.FC = () => {
     project_id: string;
     verification_code: string;
     referenced_by: string;
+    sourcing_manager_name?: string | null;
     status: 'active' | 'expired';
     created_at: string;
+    converted_to_lead_id?: string | null;
   }
   const [quickVisits, setQuickVisits] = useState<QuickVisit[]>([]);
   const [isQuickCreateOpen, setIsQuickCreateOpen] = useState(false);
@@ -524,6 +526,7 @@ export const SiteVisits: React.FC = () => {
   };
 
   const [deletingVisitId, setDeletingVisitId] = useState<string | null>(null);
+  const [convertingVisitId, setConvertingVisitId] = useState<string | null>(null);
 
   const handleDeleteVisit = async (visitId: string) => {
     if (!window.confirm('Delete this site visit? This cannot be undone.')) return;
@@ -555,6 +558,72 @@ export const SiteVisits: React.FC = () => {
       setNotification({ type: 'error', message: err.message || 'Failed to delete walk-in visit.' });
     } finally {
       setDeletingVisitId(null);
+    }
+  };
+
+  // Converts a Pre Tagging walk-in visit's customer into a real lead --
+  // per the client, available to every role except telecaller and
+  // channel_partner (see canConvertVisitToLead). Carries over the Channel
+  // Partner attribution if one was set on the visit; Referenced By and the
+  // free-text Sourcing Manager name go into notes since the latter isn't
+  // tied to a real user id on this form.
+  const handleConvertToLead = async (visit: QuickVisit) => {
+    if (visit.converted_to_lead_id) return;
+    if (!window.confirm(`Add ${visit.customer_name} to Leads?`)) return;
+    setConvertingVisitId(visit.id);
+    try {
+      const { data: maxLeadData } = await supabase
+        .from('leads')
+        .select('lead_number')
+        .order('lead_number', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const maxLeadNumber = maxLeadData?.lead_number || null;
+      let nextLeadNumber = 'LD-10001';
+      if (maxLeadNumber) {
+        const match = maxLeadNumber.match(/^([a-zA-Z\-_]*?)(\d+)$/);
+        if (match) {
+          const nextNum = parseInt(match[2], 10) + 1;
+          nextLeadNumber = `${match[1]}${String(nextNum).padStart(match[2].length, '0')}`;
+        }
+      }
+
+      const notesParts = [
+        'Converted from Pre Tagging walk-in visit.',
+        visit.referenced_by ? `Referenced by: ${visit.referenced_by}.` : null,
+        visit.sourcing_manager_name ? `Sourcing Manager (as logged): ${visit.sourcing_manager_name}.` : null,
+      ].filter(Boolean);
+
+      const { data: insertedLead, error: insertErr } = await supabase
+        .from('leads')
+        .insert([{
+          customer_name: visit.customer_name,
+          mobile: visit.customer_mobile,
+          project_id: visit.project_id,
+          channel_partner_id: visit.channel_partner_id || null,
+          source: visit.channel_partner_id ? 'channel_partner' : 'walk_in',
+          status: 'new',
+          lead_number: nextLeadNumber,
+          notes: notesParts.join(' '),
+          created_by: user?.id || null,
+        }])
+        .select('id')
+        .single();
+      if (insertErr) throw insertErr;
+
+      const { error: updateErr } = await supabase
+        .from('quick_site_visits')
+        .update({ converted_to_lead_id: insertedLead.id })
+        .eq('id', visit.id);
+      if (updateErr) throw updateErr;
+
+      setQuickVisits(prev => prev.map(v => v.id === visit.id ? { ...v, converted_to_lead_id: insertedLead.id } : v));
+      setNotification({ type: 'success', message: `${visit.customer_name} added to Leads.` });
+    } catch (err: any) {
+      reportQueryError('Site Visits: convert walk-in visit to lead', err);
+      setNotification({ type: 'error', message: err.message || 'Failed to add this visit to Leads.' });
+    } finally {
+      setConvertingVisitId(null);
     }
   };
 
@@ -695,7 +764,7 @@ export const SiteVisits: React.FC = () => {
                   <th className="py-3 px-6">Code</th>
                   <th className="py-3 px-6">Message Status</th>
                   <th className="py-3 px-6">Status</th>
-                  {canDelete && <th className="py-3 px-6 text-right">Actions</th>}
+                  {(canDelete || canConvertVisitToLead(role)) && <th className="py-3 px-6 text-right">Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -720,16 +789,36 @@ export const SiteVisits: React.FC = () => {
                           {v.status === 'active' ? 'Active' : 'Expired'}
                         </span>
                       </td>
-                      {canDelete && (
+                      {(canDelete || canConvertVisitToLead(role)) && (
                         <td className="py-3 px-6 text-right">
-                          <button
-                            onClick={() => handleDeleteQuickVisit(v.id)}
-                            disabled={deletingVisitId === v.id}
-                            title="Delete (Super Admin only)"
-                            className="inline-flex items-center justify-center p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 disabled:opacity-40"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
+                          <div className="inline-flex items-center gap-2">
+                            {canConvertVisitToLead(role) && (
+                              v.converted_to_lead_id ? (
+                                <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xxs font-semibold bg-emerald-50 text-emerald-700">
+                                  Added to Leads
+                                </span>
+                              ) : (
+                                <button
+                                  onClick={() => handleConvertToLead(v)}
+                                  disabled={convertingVisitId === v.id}
+                                  title="Add this walk-in visit's customer to Leads"
+                                  className="inline-flex items-center px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                                >
+                                  {convertingVisitId === v.id ? 'Adding...' : '+ Add to Lead'}
+                                </button>
+                              )
+                            )}
+                            {canDelete && (
+                              <button
+                                onClick={() => handleDeleteQuickVisit(v.id)}
+                                disabled={deletingVisitId === v.id}
+                                title="Delete (Super Admin only)"
+                                className="inline-flex items-center justify-center p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 disabled:opacity-40"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       )}
                     </tr>
