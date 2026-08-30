@@ -119,10 +119,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // We listen to user_roles and user_project_assignments for the current user
-      realtimeChannel = supabase.channel(`public:auth_changes_\${userId}`)
+      realtimeChannel = supabase.channel(`public:auth_changes_${userId}`)
         .on(
           'postgres_changes',
-          { event: '*', schema: 'public', table: 'user_roles', filter: `user_id=eq.\${userId}` },
+          { event: '*', schema: 'public', table: 'user_roles', filter: `user_id=eq.${userId}` },
           () => {
             // Refetch roles on any change
             fetchProfileAndRole(userId, userEmail).then(({ profile, role, assignedProjects }) => {
@@ -134,7 +134,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         )
         .on(
           'postgres_changes',
-          { event: '*', schema: 'public', table: 'user_project_assignments', filter: `user_id=eq.\${userId}` },
+          { event: '*', schema: 'public', table: 'user_project_assignments', filter: `user_id=eq.${userId}` },
           () => {
             // Refetch assigned projects on any change
             fetchProfileAndRole(userId, userEmail).then(({ profile, role, assignedProjects }) => {
