@@ -74,9 +74,17 @@ export const Leads: React.FC = () => {
   // Dynamic filter option lists (populated from DB)
   const [projectMap, setProjectMap] = useState<Map<string, string>>(new Map());
   const [profileMap, setProfileMap] = useState<Map<string, string>>(new Map());
+  // Unfiltered -- includes offboarded/inactive people. Used anywhere a
+  // historical record's stored user id needs to resolve to a name (display
+  // only), including a channel partner's own assigned Sourcing Manager.
   const [sourcingManagerMap, setSourcingManagerMap] = useState<Map<string, string>>(new Map());
   const [telecallerMap, setTelecallerMap] = useState<Map<string, string>>(new Map());
   const [closingTeamMap, setClosingTeamMap] = useState<Map<string, string>>(new Map());
+  // Active-only -- these feed the assignment pickers in the lead form so an
+  // offboarded person stops being assignable to new leads.
+  const [activeSourcingManagerMap, setActiveSourcingManagerMap] = useState<Map<string, string>>(new Map());
+  const [activeTelecallerMap, setActiveTelecallerMap] = useState<Map<string, string>>(new Map());
+  const [activeClosingTeamMap, setActiveClosingTeamMap] = useState<Map<string, string>>(new Map());
   const [uniqueStatuses, setUniqueStatuses] = useState<string[]>([]);
   const [uniqueSources, setUniqueSources] = useState<string[]>([]);
 
@@ -196,42 +204,53 @@ export const Leads: React.FC = () => {
     // 2. Load User Profiles and Roles for filtering Sourcing Managers / Telecallers
     try {
       const [profilesRes, rolesRes, userRolesRes] = await Promise.all([
-        supabase.from('user_profiles').select('id, full_name'),
+        supabase.from('user_profiles').select('id, full_name, status'),
         supabase.from('roles').select('id, name'),
         supabase.from('user_roles').select('user_id, role_id')
       ]);
-      
+
       if (profilesRes.error) {
         console.error('Supabase User Profiles API Error:', profilesRes.error.message);
       } else if (profilesRes.data) {
         console.log(`Supabase Profiles loaded: ${profilesRes.data.length} records`);
         const allProfiles = new Map(profilesRes.data.map(u => [u.id, u.full_name]));
+        const activeProfileIds = new Set(profilesRes.data.filter(u => u.status === 'active').map(u => u.id));
         setProfileMap(allProfiles);
-        
+
         if (rolesRes.data && userRolesRes.data) {
           const roleMap = new Map(rolesRes.data.map(r => [r.id, r.name]));
           const smMap = new Map<string, string>();
           const tcMap = new Map<string, string>();
           const cmMap = new Map<string, string>();
+          const activeSmMap = new Map<string, string>();
+          const activeTcMap = new Map<string, string>();
+          const activeCmMap = new Map<string, string>();
 
           userRolesRes.data.forEach(ur => {
             const rName = roleMap.get(ur.role_id);
             const pName = allProfiles.get(ur.user_id);
             if (rName && pName) {
+              const isActive = activeProfileIds.has(ur.user_id);
               if (rName === 'sourcing_manager' || rName === 'sourcing_manager_tl') {
                 smMap.set(ur.user_id, pName);
+                if (isActive) activeSmMap.set(ur.user_id, pName);
               }
               if (rName === 'presales' || rName === 'presales_tl') {
                 tcMap.set(ur.user_id, pName);
+                if (isActive) activeTcMap.set(ur.user_id, pName);
               }
               if (rName === 'closing_manager' || rName === 'closing_manager_tl' || rName === 'site_head') {
                 cmMap.set(ur.user_id, pName);
+                if (isActive) activeCmMap.set(ur.user_id, pName);
               }
             }
           });
           setSourcingManagerMap(smMap);
           setTelecallerMap(tcMap);
           setClosingTeamMap(cmMap);
+          setActiveSourcingManagerMap(activeSmMap);
+          setActiveTelecallerMap(activeTcMap);
+          setActiveClosingTeamMap(activeCmMap);
         }
       }
     } catch (err) {
@@ -297,8 +316,22 @@ export const Leads: React.FC = () => {
       if (statusFilter) {
         query = query.eq('status', statusFilter);
       }
-      if (projectFilter) {
-        query = query.eq('project_id', projectFilter);
+      // Filter by Project / Role enforcement
+      if (role === 'site_head') {
+        if (assignedProjects && assignedProjects.length > 0) {
+          if (projectFilter && assignedProjects.includes(projectFilter)) {
+            query = query.eq('project_id', projectFilter);
+          } else {
+            query = query.in('project_id', assignedProjects);
+          }
+        } else {
+          // A site_head with no assigned projects should see nothing
+          query = query.eq('project_id', '00000000-0000-0000-0000-000000000000');
+        }
+      } else {
+        if (projectFilter) {
+          query = query.eq('project_id', projectFilter);
+        }
       }
       if (sourceFilter) {
         query = query.eq('source', sourceFilter);
@@ -327,7 +360,7 @@ export const Leads: React.FC = () => {
       setLoading(false);
       setSyncing(false);
     }
-  }, [searchQuery, statusFilter, projectFilter, sourceFilter, sourcingManagerFilter, page, pageSize]);
+  }, [searchQuery, statusFilter, projectFilter, sourceFilter, sourcingManagerFilter, page, pageSize, role, assignedProjects]);
 
   // Resolve the current user's employee record, needed to attribute call logs.
   useEffect(() => {
@@ -819,12 +852,8 @@ export const Leads: React.FC = () => {
       setCreateError('Please select a project.');
       return;
     }
-    if (isChannelPartner ? !myCpSourcingManagerId : !sourcingManagerId) {
-      setCreateError(isChannelPartner
-        ? 'No Sourcing Manager is allocated to you yet — contact an admin.'
-        : 'Please select a Sourcing Manager.');
-      return;
-    }
+    // Sourcing Manager is no longer mandatory on the New Lead form -- explicit
+    // reversal of an earlier client instruction that had made it required.
 
     setCreateError(null);
     setCreateLoading(true);
@@ -1005,15 +1034,23 @@ export const Leads: React.FC = () => {
     ? projectMap
     : new Map(Array.from(projectMap.entries()).filter(([id]) => assignedProjects.includes(id)));
 
-  const scopeToProjectTeam = (map: Map<string, string>) => {
+  // `activeMap` (the picker source) excludes offboarded people; `fullMap`
+  // (the unfiltered display map) is consulted only to keep an already-
+  // assigned-but-now-inactive person visible as a labelled option -- so
+  // opening an existing lead never blanks their current assignment and
+  // silently drops it on the next unrelated save.
+  const scopeToProjectTeam = (activeMap: Map<string, string>, fullMap: Map<string, string>, currentValue: string) => {
     if (!selectedProjectId) return new Map<string, string>();
     const teamIds = projectTeamMap.get(selectedProjectId);
-    if (!teamIds) return new Map<string, string>();
-    return new Map(Array.from(map.entries()).filter(([id]) => teamIds.has(id)));
+    const scoped = new Map(Array.from(activeMap.entries()).filter(([id]) => teamIds?.has(id)));
+    if (currentValue && !scoped.has(currentValue) && fullMap.has(currentValue)) {
+      scoped.set(currentValue, `${fullMap.get(currentValue)} (inactive)`);
+    }
+    return scoped;
   };
-  const formSourcingManagerMap = scopeToProjectTeam(sourcingManagerMap);
-  const formTelecallerMap = scopeToProjectTeam(telecallerMap);
-  const formClosingTeamMap = scopeToProjectTeam(closingTeamMap);
+  const formSourcingManagerMap = scopeToProjectTeam(activeSourcingManagerMap, sourcingManagerMap, sourcingManagerId);
+  const formTelecallerMap = scopeToProjectTeam(activeTelecallerMap, telecallerMap, telecallerId);
+  const formClosingTeamMap = scopeToProjectTeam(activeClosingTeamMap, closingTeamMap, selectedOwnerId);
 
   return (
     <div className="space-y-6">
@@ -2086,7 +2123,7 @@ export const Leads: React.FC = () => {
                         site_head assign that during onboarding or later). */}
                     {isChannelPartner ? (
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager *</label>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager</label>
                         <div className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-100 text-slate-500 text-sm">
                           {sourcingManagerMap.get(myCpSourcingManagerId || '') || 'Not allocated yet'}
                         </div>
@@ -2096,9 +2133,8 @@ export const Leads: React.FC = () => {
                       </div>
                     ) : (
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager *</label>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager</label>
                       <select
-                        required
                         value={sourcingManagerId}
                         onChange={(e) => setSourcingManagerId(e.target.value)}
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
