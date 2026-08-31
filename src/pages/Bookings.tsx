@@ -3,6 +3,7 @@ import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
 import { canCreateBooking, canCancelBooking, isSuperAdmin } from '../utils/permissions';
+import { computeCurrentlyDueTotal, totalMilestonePercentage } from '../utils/bookingDue';
 import {
   Search,
   RefreshCw,
@@ -52,6 +53,7 @@ interface Booking {
   cancelled_at?: string | null;
   sales_owner?: string | null;
   closing_manager?: string | null;
+  possession_date?: string | null;
 }
 
 interface Lead {
@@ -118,6 +120,12 @@ export const Bookings: React.FC = () => {
   const [inventoryMap, setInventoryMap] = useState<Map<string, InventoryUnit>>(new Map());
   const [towersMap, setTowersMap] = useState<Map<string, string>>(new Map());
   const [floorsMap, setFloorsMap] = useState<Map<string, string>>(new Map());
+  // Cumulative % of the Agreement Value currently "released" for payment,
+  // per project -- set by super_admin via project_payment_milestones.
+  const [projectMilestonePercent, setProjectMilestonePercent] = useState<Map<string, number>>(new Map());
+  // Per booking, whether at least one payment has already been recorded --
+  // drives whether GST/Stamp Duty/Registration/Other Charges are due yet.
+  const [bookingHasPaymentMap, setBookingHasPaymentMap] = useState<Map<string, boolean>>(new Map());
   
   // Lists for creation form dropdowns
   const [leadsList, setLeadsList] = useState<Lead[]>([]);
@@ -358,7 +366,7 @@ export const Bookings: React.FC = () => {
       // Fetch live booking to check totals
       const { data: dbBooking, error: bookErr } = await supabase
         .from('bookings')
-        .select('booking_amount, total_payable_amount')
+        .select('booking_amount, total_payable_amount, consideration_amount, gst_amount, stamp_duty, registration_charges, other_charges, development_charges, maintenance_charges, parking_charges, possession_date, project_id')
         .eq('id', selectedBooking.id)
         .single();
       if (bookErr || !dbBooking) {
@@ -374,14 +382,24 @@ export const Bookings: React.FC = () => {
         throw new Error("Unable to verify booking payment history.");
       }
 
-      const totalBookingVal = dbBooking.total_payable_amount !== null ? dbBooking.total_payable_amount : (dbBooking.booking_amount || 0);
-
       const activeTotal = dbPayments
         .filter((p: any) => p.status?.toLowerCase() === 'received' || p.status?.toLowerCase() === 'paid')
         .reduce((sum: number, p: any) => sum + p.amount, 0);
 
-      if (activeTotal + amt > totalBookingVal) {
-        throw new Error("Payment amount exceeds the outstanding booking balance.");
+      // Currently-due total isn't the booking's full grand total -- it's
+      // staged by the project's released payment percentage, plus
+      // first-payment/possession-triggered charges (see bookingDue.ts).
+      // GST/Stamp Duty/Registration/Other Charges become due AT the first
+      // payment (concurrent with it, not requiring a separate prior
+      // payment), so they're always included as collectible here --
+      // hasAnyPayment=true reflects "this transaction is or follows the
+      // first payment", which is always the case once a payment is being
+      // recorded at all.
+      const milestonePercent = projectMilestonePercent.get(dbBooking.project_id || '') || 0;
+      const currentlyDueTotal = computeCurrentlyDueTotal(dbBooking, milestonePercent, true);
+
+      if (activeTotal + amt > currentlyDueTotal) {
+        throw new Error(`Payment amount exceeds the currently due balance (₹${currentlyDueTotal.toLocaleString('en-IN')} due so far, based on the project's released payment percentage).`);
       }
 
       const { data: { user } } = await supabase.auth.getUser();
@@ -417,6 +435,43 @@ export const Bookings: React.FC = () => {
           if (retryErr) throw retryErr;
         } else {
           throw insertErr;
+        }
+      }
+
+      // First payment on a booking with a Channel Partner attached ->
+      // flag their referral fee record as settlement-eligible and notify
+      // them to request it. activeTotal is the total BEFORE this insert,
+      // so activeTotal === 0 with this payment actually received/paid
+      // means this is the first real money landing on the booking.
+      const isActivePayment = addPaymentStatus === 'received' || addPaymentStatus === 'paid';
+      if (activeTotal === 0 && isActivePayment && selectedBooking.channel_partner_id) {
+        try {
+          await supabase
+            .from('cp_commissions')
+            .update({ first_payment_received_at: new Date().toISOString() })
+            .eq('booking_id', selectedBooking.id)
+            .is('first_payment_received_at', null);
+
+          const { data: cpRow } = await supabase
+            .from('channel_partners')
+            .select('user_id, name')
+            .eq('id', selectedBooking.channel_partner_id)
+            .maybeSingle();
+
+          if (cpRow?.user_id) {
+            await supabase.from('notifications').insert([{
+              user_id: cpRow.user_id,
+              notification_type: 'cp_settlement_eligible',
+              title: 'Settlement Available',
+              message: `The first payment has been received for booking ${selectedBooking.booking_number || selectedBooking.id}. You can now request your referral fee settlement.`,
+              related_entity: 'booking',
+              related_id: selectedBooking.id,
+            }]);
+          }
+        } catch (notifyErr) {
+          // Payment itself is already saved -- a failed notification
+          // shouldn't undo that.
+          reportQueryError('Bookings: CP settlement notification', notifyErr);
         }
       }
 
@@ -516,6 +571,37 @@ export const Bookings: React.FC = () => {
         console.error('Supabase Project Floors API Error:', floorsError.message, floorsError.details);
       } else if (floorData) {
         setFloorsMap(new Map(floorData.map(f => [f.id, f.floor_name || `Floor ${f.floor_number}`])));
+      }
+
+      // 7. Fetch Project Payment Milestones -- cumulative % released per project
+      const { data: milestoneData, error: milestoneError } = await supabase
+        .from('project_payment_milestones')
+        .select('project_id, percentage');
+      if (milestoneError) {
+        console.error('Supabase Payment Milestones API Error:', milestoneError.message);
+      } else if (milestoneData) {
+        const byProject = new Map<string, number[]>();
+        milestoneData.forEach(m => {
+          const arr = byProject.get(m.project_id) || [];
+          arr.push(m.percentage);
+          byProject.set(m.project_id, arr);
+        });
+        const percentMap = new Map<string, number>();
+        byProject.forEach((percentages, projectId) => percentMap.set(projectId, totalMilestonePercentage(percentages)));
+        setProjectMilestonePercent(percentMap);
+      }
+
+      // 8. Which bookings already have at least one recorded payment --
+      // determines whether GST/Stamp Duty/Registration/Other Charges are due.
+      const { data: paymentBookingIds, error: paymentBookingErr } = await supabase
+        .from('payments')
+        .select('booking_id');
+      if (paymentBookingErr) {
+        console.error('Supabase Payments-by-booking API Error:', paymentBookingErr.message);
+      } else if (paymentBookingIds) {
+        const hasPaymentMap = new Map<string, boolean>();
+        paymentBookingIds.forEach(p => { if (p.booking_id) hasPaymentMap.set(p.booking_id, true); });
+        setBookingHasPaymentMap(hasPaymentMap);
       }
     } catch (err) {
       console.error('Unexpected lookups load exception:', err);
@@ -1066,6 +1152,28 @@ export const Bookings: React.FC = () => {
   // logged to loss_logs as forfeited. Booking status becomes 'refunded'
   // when any money is returned, 'cancelled' otherwise (both terminal
   // states in booking_status, kept distinct for reporting).
+  // Marks possession as handed over -- this is what unlocks Maintenance/
+  // Parking/Development Charges as currently due (see bookingDue.ts).
+  const [markingPossessionId, setMarkingPossessionId] = useState<string | null>(null);
+  const handleMarkPossession = async (booking: Booking) => {
+    if (!window.confirm(`Mark possession as given for booking ${booking.booking_number || booking.id}? This makes Maintenance, Parking, and Development Charges due.`)) return;
+    setMarkingPossessionId(booking.id);
+    try {
+      const { error } = await supabase
+        .from('bookings')
+        .update({ possession_date: new Date().toISOString() })
+        .eq('id', booking.id);
+      if (error) throw error;
+      setSelectedBooking(prev => prev && prev.id === booking.id ? { ...prev, possession_date: new Date().toISOString() } : prev);
+      setNotification({ type: 'success', message: 'Possession marked as given.' });
+      await fetchBookings();
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to mark possession.' });
+    } finally {
+      setMarkingPossessionId(null);
+    }
+  };
+
   const handleCancelBooking = async (booking: Booking, reason: string, refundAmountInput: string) => {
     setCancelSubmitting(true);
     setCancelError(null);
@@ -1359,6 +1467,7 @@ export const Bookings: React.FC = () => {
                     <th className="py-3.5 px-6">Inventory Unit</th>
                     <th className="py-3.5 px-6">Base Amount</th>
                     <th className="py-3.5 px-6">Total Payable</th>
+                    <th className="py-3.5 px-6">Currently Due</th>
                     <th className="py-3.5 px-6">Booking Date</th>
                     <th className="py-3.5 px-6">Status</th>
                     <th className="py-3.5 px-6 text-right">Actions</th>
@@ -1371,6 +1480,8 @@ export const Bookings: React.FC = () => {
                       const unit = inventoryMap.get(b.inventory_id || '');
                       const baseAmt = b.consideration_amount !== null ? b.consideration_amount : (b.booking_amount || 0);
                       const totalPayable = b.total_payable_amount !== null ? b.total_payable_amount : (b.booking_amount || 0);
+                      const bMilestonePercent = projectMilestonePercent.get(b.project_id || '') || 0;
+                      const bCurrentlyDue = computeCurrentlyDueTotal(b, bMilestonePercent, !!bookingHasPaymentMap.get(b.id));
                       return (
                         <tr key={b.id} className="hover:bg-slate-50/50 transition-colors">
                           <td className="py-4 px-6 font-semibold text-slate-900">
@@ -1394,6 +1505,11 @@ export const Bookings: React.FC = () => {
                           <td className="py-4 px-6">
                             <span className="font-extrabold text-indigo-700 text-sm">
                               ₹{totalPayable.toLocaleString('en-IN')}
+                            </span>
+                          </td>
+                          <td className="py-4 px-6">
+                            <span className="font-semibold text-amber-700 text-sm" title={`${bMilestonePercent}% of Agreement Value released`}>
+                              ₹{bCurrentlyDue.toLocaleString('en-IN')}
                             </span>
                           </td>
                           <td className="py-4 px-6 text-sm text-slate-600">
@@ -1455,7 +1571,7 @@ export const Bookings: React.FC = () => {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={7} className="py-20 text-center text-slate-400">
+                      <td colSpan={8} className="py-20 text-center text-slate-400">
                         <div className="flex flex-col items-center justify-center space-y-3">
                           <div className="bg-slate-50 p-4 rounded-full text-slate-300">
                             <IndianRupee className="h-8 w-8" />
@@ -1767,22 +1883,31 @@ export const Bookings: React.FC = () => {
                   const totalPaid = validPayments
                     .filter(p => p.status?.toLowerCase() === 'received' || p.status?.toLowerCase() === 'paid')
                     .reduce((sum, p) => sum + p.amount, 0);
-                  const outstanding = totalPayable - totalPaid;
+                  // Currently due isn't the full booking value -- it's staged by
+                  // the project's released payment percentage, plus
+                  // first-payment/possession-triggered charges.
+                  const milestonePercent = projectMilestonePercent.get(selectedBooking.project_id || '') || 0;
+                  const currentlyDueTotal = computeCurrentlyDueTotal(selectedBooking, milestonePercent, totalPaid > 0);
+                  const outstanding = Math.max(0, currentlyDueTotal - totalPaid);
 
                   return (
                     <div className="space-y-5">
                       {/* Ledger Summary Stats */}
-                      <div className="grid grid-cols-3 gap-3 bg-slate-50 border border-slate-200/80 rounded-xl p-4 text-xs">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-slate-50 border border-slate-200/80 rounded-xl p-4 text-xs">
                         <div>
-                          <span className="block font-bold text-slate-400 uppercase tracking-wider text-xxs">Booking Value</span>
+                          <span className="block font-bold text-slate-400 uppercase tracking-wider text-xxs">Booking Value (Total)</span>
                           <span className="font-extrabold text-slate-800 text-sm">₹{totalPayable.toLocaleString('en-IN')}</span>
+                        </div>
+                        <div>
+                          <span className="block font-bold text-slate-400 uppercase tracking-wider text-xxs">Currently Due ({milestonePercent}% Released)</span>
+                          <span className="font-extrabold text-amber-600 text-sm">₹{currentlyDueTotal.toLocaleString('en-IN')}</span>
                         </div>
                         <div>
                           <span className="block font-bold text-slate-400 uppercase tracking-wider text-xxs">Total Settled</span>
                           <span className="font-extrabold text-emerald-600 text-sm">₹{totalPaid.toLocaleString('en-IN')}</span>
                         </div>
                         <div>
-                          <span className="block font-bold text-slate-400 uppercase tracking-wider text-xxs">Outstanding</span>
+                          <span className="block font-bold text-slate-400 uppercase tracking-wider text-xxs">Outstanding (This Stage)</span>
                           <span className="font-bold text-indigo-600 text-sm">₹{outstanding.toLocaleString('en-IN')}</span>
                         </div>
                       </div>
@@ -1889,6 +2014,18 @@ export const Bookings: React.FC = () => {
                       className="flex-1 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition-colors"
                     >
                       Confirm Booking
+                    </button>
+                  )}
+                  {!selectedBooking.possession_date
+                    && selectedBooking.status?.toLowerCase() !== 'cancelled'
+                    && selectedBooking.status?.toLowerCase() !== 'refunded'
+                    && (isSuperAdmin(role) || role === 'site_head') && (
+                    <button
+                      onClick={() => handleMarkPossession(selectedBooking)}
+                      disabled={markingPossessionId === selectedBooking.id}
+                      className="px-4 py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-xl text-sm font-bold transition-all disabled:opacity-50"
+                    >
+                      {markingPossessionId === selectedBooking.id ? 'Marking...' : 'Mark Possession Given'}
                     </button>
                   )}
                   {(selectedBooking.status?.toLowerCase() === 'draft' || selectedBooking.status?.toLowerCase() === 'confirmed') && (
