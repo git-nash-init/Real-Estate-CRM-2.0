@@ -320,6 +320,29 @@ export const Payments: React.FC = () => {
     }
   };
 
+  // A CP can only ever set settlement_requested_at on their own commission
+  // row -- enforced server-side by enforce_cp_settlement_request_only,
+  // which also refuses this until first_payment_received_at is set. This
+  // is just the request; approval/payout still happens separately via
+  // Record Payout, by super admin or that project's site head.
+  const [settlementRequestingId, setSettlementRequestingId] = useState<string | null>(null);
+  const handleRequestSettlement = async (commissionId: string) => {
+    setSettlementRequestingId(commissionId);
+    try {
+      const { error } = await supabase
+        .from('cp_commissions')
+        .update({ settlement_requested_at: new Date().toISOString() })
+        .eq('id', commissionId);
+      if (error) throw error;
+      setNotification({ type: 'success', message: 'Settlement request submitted.' });
+      await fetchData();
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to submit settlement request.' });
+    } finally {
+      setSettlementRequestingId(null);
+    }
+  };
+
   const handlePayoutCommissionChange = (commId: string) => {
     setSelectedCommissionId(commId);
     if (!commId) {
@@ -929,6 +952,104 @@ export const Payments: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* REFERRAL FEE OBLIGATIONS -- lets a CP request settlement once their
+          first payment lands on a booking, and lets admins see who has
+          requested one. Separate from the payouts table below, which only
+          ever lists money already paid out. */}
+      {activeView === 'referral fee' && !loading && (
+        <div className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden mb-6">
+          <div className="px-6 py-4 border-b border-slate-100">
+            <h3 className="text-sm font-bold text-slate-800">
+              {role === 'channel_partner' ? 'My Referral Fee Obligations' : 'Referral Fee Obligations'}
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {role === 'channel_partner'
+                ? 'Once the first payment lands on a booking, you can request settlement here.'
+                : 'Settlement requests submitted by Channel Partners are highlighted below.'}
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-sm">
+              <thead>
+                <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
+                  {role !== 'channel_partner' && <th className="py-2.5 px-4">Channel Partner</th>}
+                  <th className="py-2.5 px-4">Booking #</th>
+                  <th className="py-2.5 px-4">Project</th>
+                  <th className="py-2.5 px-4">Payable Amount</th>
+                  <th className="py-2.5 px-4">Status</th>
+                  <th className="py-2.5 px-4">Settlement</th>
+                  {role === 'channel_partner' && <th className="py-2.5 px-4 text-right">Action</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {cpCommissions.length > 0 ? (
+                  cpCommissions.map((c) => {
+                    const booking = bookingMap.get(c.booking_id);
+                    const cp = cpMap.get(c.cp_id);
+                    const cpName = cp ? (cp.name || cp.company_name || 'N/A') : 'N/A';
+                    const projName = booking ? projectMap.get(booking.project_id) : 'N/A';
+                    const statusLower = c.status?.toLowerCase();
+                    const eligible = !!c.first_payment_received_at && !c.settlement_requested_at && statusLower === 'pending';
+
+                    return (
+                      <tr key={c.id} className={`hover:bg-slate-50/50 transition-colors ${c.settlement_requested_at && (statusLower === 'pending') ? 'bg-amber-50/40' : ''}`}>
+                        {role !== 'channel_partner' && (
+                          <td className="py-3 px-4 font-semibold text-slate-800 text-xs">{cpName}</td>
+                        )}
+                        <td className="py-3 px-4 font-mono text-xs font-semibold text-slate-700">{booking?.booking_number || 'N/A'}</td>
+                        <td className="py-3 px-4 text-xs text-slate-600 truncate max-w-[150px]">{projName}</td>
+                        <td className="py-3 px-4 font-mono text-xs font-bold text-slate-800">₹{(c.payable_amount || 0).toLocaleString('en-IN')}</td>
+                        <td className="py-3 px-4">
+                          <span className={`inline-flex px-2 py-0.5 rounded-full text-xxs font-extrabold uppercase tracking-wider ${
+                            statusLower === 'paid' ? 'bg-emerald-50 text-emerald-700' :
+                            statusLower === 'partially_paid' ? 'bg-blue-50 text-blue-700' :
+                            statusLower === 'approved' ? 'bg-indigo-50 text-indigo-700' :
+                            statusLower === 'rejected' || statusLower === 'cancelled' ? 'bg-rose-50 text-rose-700' :
+                            'bg-slate-100 text-slate-500'
+                          }`}>
+                            {c.status}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          {!c.first_payment_received_at ? (
+                            <span className="text-xxs text-slate-400 font-medium">Awaiting first payment</span>
+                          ) : c.settlement_requested_at ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xxs font-extrabold uppercase tracking-wider bg-amber-100 text-amber-800">
+                              Requested {new Date(c.settlement_requested_at).toLocaleDateString('en-IN')}
+                            </span>
+                          ) : (
+                            <span className="text-xxs text-emerald-600 font-bold uppercase tracking-wider">Eligible</span>
+                          )}
+                        </td>
+                        {role === 'channel_partner' && (
+                          <td className="py-3 px-4 text-right">
+                            {eligible && (
+                              <button
+                                onClick={() => handleRequestSettlement(c.id)}
+                                disabled={settlementRequestingId === c.id}
+                                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xxs font-bold shadow-sm transition-all focus:outline-none disabled:opacity-50"
+                              >
+                                {settlementRequestingId === c.id ? 'Requesting...' : 'Request Settlement'}
+                              </button>
+                            )}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={role === 'channel_partner' ? 6 : 6} className="py-10 text-center text-xs text-slate-400">
+                      No referral fee obligations found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* TABLE */}
       <div className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden flex flex-col">
