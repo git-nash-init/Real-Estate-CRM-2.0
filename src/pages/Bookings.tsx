@@ -4,6 +4,7 @@ import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
 import { canCreateBooking, canCancelBooking, isSuperAdmin } from '../utils/permissions';
 import { computeCurrentlyDueTotal, totalMilestonePercentage } from '../utils/bookingDue';
+import { exportRowsToExcel } from '../utils/exportExcel';
 import {
   Search,
   RefreshCw,
@@ -20,7 +21,8 @@ import {
   IndianRupee,
   Plus,
   Users,
-  Trash2
+  Trash2,
+  Download
 } from 'lucide-react';
 
 interface Booking {
@@ -1295,6 +1297,71 @@ export const Bookings: React.FC = () => {
   };
 
   const filteredBookings = getFilteredBookings();
+
+  // Bookings is server-side paginated, so this re-runs the same filtered
+  // query without .range() to pull every matching booking, not just the
+  // current page. Export button is super_admin-only, so the site_head
+  // project-scoping branch below is dead in practice but kept for parity
+  // with fetchBookings' own filter logic.
+  const [exportingBookings, setExportingBookings] = useState(false);
+  const handleExportExcel = async () => {
+    setExportingBookings(true);
+    try {
+      let query = supabase.from('bookings').select('*');
+      if (statusFilter) query = query.eq('status', statusFilter);
+      if (searchQuery.trim()) {
+        const term = searchQuery.trim().toLowerCase();
+        const matchingLeadIds = leadsList.filter(l => l.customer_name?.toLowerCase().includes(term)).map(l => l.id);
+        const matchingUnitIds = inventoryList.filter((u: any) => u.unit_number?.toLowerCase().includes(term)).map(u => u.id);
+        const orParts = [`notes.ilike.%${term.replace(/[%,]/g, '')}%`];
+        if (matchingLeadIds.length) orParts.push(`lead_id.in.(${matchingLeadIds.join(',')})`);
+        if (matchingUnitIds.length) orParts.push(`inventory_id.in.(${matchingUnitIds.join(',')})`);
+        query = query.or(orParts.join(','));
+      }
+      if (role === 'site_head') {
+        if (assignedProjects && assignedProjects.length > 0) {
+          query = projectFilter && assignedProjects.includes(projectFilter)
+            ? query.eq('project_id', projectFilter)
+            : query.in('project_id', assignedProjects);
+        } else {
+          query = query.eq('project_id', '00000000-0000-0000-0000-000000000000');
+        }
+      } else if (projectFilter) {
+        query = query.eq('project_id', projectFilter);
+      }
+      query = query.order('booking_date', { ascending: false });
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      const rows = (data || []).map((b: any) => {
+        const lead = leadsMap.get(b.lead_id || '');
+        const unit = inventoryMap.get(b.inventory_id || '');
+        const baseAmt = b.consideration_amount !== null ? b.consideration_amount : (b.booking_amount || 0);
+        const totalPayable = b.total_payable_amount !== null ? b.total_payable_amount : (b.booking_amount || 0);
+        const milestonePercent = towerMilestonePercent.get(b.tower_id || '') || 0;
+        const currentlyDue = computeCurrentlyDueTotal(b, milestonePercent, !!bookingHasPaymentMap.get(b.id));
+        return {
+          'Booking #': b.booking_number || '',
+          'Customer': lead?.customer_name || b.customer_name || '',
+          'Project': projectMap.get(b.project_id || '') || '',
+          'Tower': towersMap.get(unit?.tower_id || '') || '',
+          'Unit': unit?.unit_number || '',
+          'Agreement Value': baseAmt,
+          'Total Payable': totalPayable,
+          'Currently Due': currentlyDue,
+          'Booking Date': b.booking_date ? new Date(b.booking_date).toLocaleDateString('en-IN') : '',
+          'Status': b.status || '',
+        };
+      });
+      exportRowsToExcel('Bookings', 'Bookings', rows);
+    } catch (err: any) {
+      setError(err.message || 'Failed to export bookings.');
+    } finally {
+      setExportingBookings(false);
+    }
+  };
+
   const startRange = page * pageSize + 1;
   const endRange = Math.min((page + 1) * pageSize, totalCount);
 
@@ -1371,6 +1438,17 @@ export const Bookings: React.FC = () => {
             <RefreshCw className={`h-4 w-4 text-slate-500 ${syncing ? 'animate-spin' : ''}`} />
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
+
+          {isSuperAdmin(role) && (
+            <button
+              onClick={handleExportExcel}
+              disabled={exportingBookings}
+              className="flex items-center space-x-2 bg-white border border-slate-200 px-4 py-2 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm focus:outline-none disabled:opacity-50"
+            >
+              <Download className="h-4 w-4 text-slate-500" />
+              <span>{exportingBookings ? 'Exporting...' : 'Export to Excel'}</span>
+            </button>
+          )}
           {canCreateBooking(role) && (
             <button
               onClick={() => setIsCreateOpen(true)}

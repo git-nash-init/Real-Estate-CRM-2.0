@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../hooks/useAuth';
 import { canEditPayment, canCancelPayment, isSuperAdmin } from '../utils/permissions';
+import { exportRowsToExcel } from '../utils/exportExcel';
 import {
   Search,
   RefreshCw,
@@ -16,7 +17,8 @@ import {
   Printer,
   Trash2,
   Edit,
-  Ban
+  Ban,
+  Download
 } from 'lucide-react';
 
 interface Payment {
@@ -680,6 +682,50 @@ export const Payments: React.FC = () => {
     return true;
   });
 
+  // Exports whichever tab is currently active -- Customer Payments or
+  // Referral Fee Payouts -- using the same filters already applied on screen.
+  const handleExportExcel = () => {
+    if (activeView === 'customer') {
+      const rows = filteredPayments.map((p) => {
+        const booking = bookingMap.get(p.booking_id);
+        const unit = booking ? inventoryMap.get(booking.inventory_id) : null;
+        return {
+          'Payment #': p.payment_number || '',
+          'Customer': booking?.customer_name || '',
+          'Project': booking ? (projectMap.get(booking.project_id) || '') : '',
+          'Unit': unit?.unit_number || '',
+          'Booking #': booking?.booking_number || '',
+          'Type': p.payment_type || '',
+          'Amount': p.amount || 0,
+          'Due Date': p.due_date || '',
+          'Received Date': p.received_date || '',
+          'Mode': p.payment_mode || '',
+          'Status': getDisplayStatus(p),
+          'Reference': p.transaction_reference || '',
+        };
+      });
+      exportRowsToExcel('Customer_Payments', 'Customer Payments', rows);
+    } else {
+      const rows = filteredCommissionPayouts.map((p) => {
+        const comm = cpCommissions.find(c => c.id === p.commission_id);
+        const booking = comm ? bookingMap.get(comm.booking_id) : null;
+        const cp = comm ? cpMap.get(comm.cp_id) : null;
+        return {
+          'Payout Date': p.payment_date ? new Date(p.payment_date).toLocaleDateString('en-IN') : '',
+          'Channel Partner': cp ? (cp.name || cp.company_name || '') : '',
+          'Booking #': booking?.booking_number || '',
+          'Project': booking ? (projectMap.get(booking.project_id) || '') : '',
+          'Approved Amount': comm?.payable_amount || 0,
+          'Payout Amount': p.amount || 0,
+          'Mode': p.payment_mode || '',
+          'Reference': p.reference_number || '',
+          'Status': comm?.status || '',
+        };
+      });
+      exportRowsToExcel('Referral_Fee_Payouts', 'Referral Fee Payouts', rows);
+    }
+  };
+
   const totalFilteredCommCount = filteredCommissionPayouts.length;
   const startCommRange = totalFilteredCommCount > 0 ? page * pageSize + 1 : 0;
   const endCommRange = Math.min((page + 1) * pageSize, totalFilteredCommCount);
@@ -725,6 +771,15 @@ export const Payments: React.FC = () => {
             <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
+          {isSuperAdmin(role) && (
+            <button
+              onClick={handleExportExcel}
+              className="inline-flex items-center space-x-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>Export to Excel</span>
+            </button>
+          )}
           {activeView === 'customer' ? (
             role !== 'channel_partner' && (
               <button

@@ -4,6 +4,7 @@ import { useAuth } from '../hooks/useAuth';
 import { canCreateLead, canEditLeadRecord, canAddOwnLead, canViewOwnLeadsTab, isSuperAdmin } from '../utils/permissions';
 import { reportQueryError } from '../services/queryLogger';
 import { supabase } from '../services/supabaseClient';
+import { exportRowsToExcel } from '../utils/exportExcel';
 import {
   uploadWhatsAppAttachment,
   removeWhatsAppAttachment,
@@ -33,6 +34,7 @@ import {
   Paperclip,
   Pencil,
   Trash2,
+  Download,
 } from 'lucide-react';
 
 interface Lead {
@@ -436,6 +438,60 @@ export const Leads: React.FC = () => {
     setSyncing(true);
     await fetchFilterOptions();
     await fetchLeads();
+  };
+
+  // Export -- super_admin only. The directory table itself is server-side
+  // paginated (10 rows/page), so this re-runs the same filtered query
+  // without .range() to pull every matching row, not just the current page.
+  const [exporting, setExporting] = useState(false);
+  const handleExportExcel = async () => {
+    setExporting(true);
+    try {
+      let query = supabase.from('leads').select('*').is('bulk_upload_id', null);
+      if (searchQuery.trim()) {
+        const term = searchQuery.trim();
+        query = query.or(`customer_name.ilike.%${term}%,mobile.ilike.%${term}%,email.ilike.%${term}%`);
+      }
+      if (statusFilter) query = query.eq('status', statusFilter);
+      if (role === 'site_head') {
+        if (assignedProjects && assignedProjects.length > 0) {
+          if (projectFilter && assignedProjects.includes(projectFilter)) {
+            query = query.eq('project_id', projectFilter);
+          } else {
+            query = query.in('project_id', assignedProjects);
+          }
+        } else {
+          query = query.eq('project_id', '00000000-0000-0000-0000-000000000000');
+        }
+      } else if (projectFilter) {
+        query = query.eq('project_id', projectFilter);
+      }
+      if (sourceFilter) query = query.eq('source', sourceFilter);
+      if (sourcingManagerFilter) query = query.eq('sourcing_manager_id', sourcingManagerFilter);
+      query = query.order('created_at', { ascending: false });
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      const rows = (data || []).map((lead: any) => ({
+        'Customer Name': lead.customer_name || '',
+        'Mobile': lead.mobile || '',
+        'Email': lead.email || '',
+        'Status': lead.status || '',
+        'Source': lead.source || '',
+        'Project': projectMap.get(lead.project_id || '') || '',
+        'Owner': profileMap.get(lead.owner_id || '') || '',
+        'Sourcing Manager': profileMap.get(lead.sourcing_manager_id || '') || '',
+        'Channel Partner': lead.channel_partner_id ? (channelPartnerMap.get(lead.channel_partner_id) || '') : '',
+        'Notes': lead.notes || '',
+        'Created At': lead.created_at ? new Date(lead.created_at).toLocaleString('en-IN') : '',
+      }));
+      exportRowsToExcel('Leads', 'Leads', rows);
+    } catch (err: any) {
+      setError(err.message || 'Failed to export leads.');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const handleDeleteLead = async (lead: Lead) => {
@@ -1106,6 +1162,17 @@ export const Leads: React.FC = () => {
             <RefreshCw className={`h-4 w-4 text-slate-500 ${syncing ? 'animate-spin' : ''}`} />
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
+
+          {isSuperAdmin(role) && (
+            <button
+              onClick={handleExportExcel}
+              disabled={exporting}
+              className="flex items-center space-x-2 bg-white border border-slate-200 px-4 py-2 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm focus:outline-none disabled:opacity-50"
+            >
+              <Download className="h-4 w-4 text-slate-500" />
+              <span>{exporting ? 'Exporting...' : 'Export to Excel'}</span>
+            </button>
+          )}
 
           {activeTab === 'directory' && hasCreateAccess && (
             <button

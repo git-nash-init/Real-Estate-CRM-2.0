@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
+import { exportRowsToExcel } from '../utils/exportExcel';
 import {
   Search,
   RefreshCw,
@@ -21,7 +22,8 @@ import {
   ThumbsUp,
   ThumbsDown,
   Send,
-  Trash2
+  Trash2,
+  Download
 } from 'lucide-react';
 
 interface ChannelPartner {
@@ -896,6 +898,25 @@ export const ChannelPartners: React.FC = () => {
   };
 
   const filteredPartners = getFilteredPartners();
+
+  const handleExportExcel = () => {
+    const rows = filteredPartners.map((cp) => ({
+      'CP Code': cp.cp_code || cp.partner_code || '',
+      'Name': cp.name || cp.partner_name || '',
+      'Company': cp.company_name || '',
+      'Mobile': cp.mobile || cp.phone || '',
+      'Email': cp.email || '',
+      'City': cp.city || '',
+      'State': cp.state || '',
+      'RERA Number': cp.rera_number || cp.rera_registration_number || '',
+      'GST Number': cp.gst_number || '',
+      'PAN Number': cp.pan_number || '',
+      'Status': cp.status || '',
+      'Created At': cp.created_at ? new Date(cp.created_at).toLocaleString('en-IN') : '',
+    }));
+    exportRowsToExcel('Channel_Partners', 'Channel Partners', rows);
+  };
+
   const totalFilteredCount = filteredPartners.length;
   const startRange = totalFilteredCount > 0 ? page * pageSize + 1 : 0;
   const endRange = Math.min((page + 1) * pageSize, totalFilteredCount);
@@ -957,6 +978,16 @@ export const ChannelPartners: React.FC = () => {
             <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
+
+          {isSuperAdmin && (
+            <button
+              onClick={handleExportExcel}
+              className="inline-flex items-center space-x-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>Export to Excel</span>
+            </button>
+          )}
           {/* All logged-in users can submit a request */}
           <button
             onClick={() => { resetFormFields(); setEditingPartner(null); setIsCreateOpen(true); }}
