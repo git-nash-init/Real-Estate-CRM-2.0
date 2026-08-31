@@ -221,7 +221,7 @@ export const Leads: React.FC = () => {
               if (rName === 'sourcing_manager' || rName === 'sourcing_manager_tl') {
                 smMap.set(ur.user_id, pName);
               }
-              if (rName === 'telecaller' || rName === 'presales' || rName === 'presales_tl') {
+              if (rName === 'presales' || rName === 'presales_tl') {
                 tcMap.set(ur.user_id, pName);
               }
               if (rName === 'closing_manager' || rName === 'closing_manager_tl' || rName === 'site_head') {
@@ -715,7 +715,7 @@ export const Leads: React.FC = () => {
       // Auto-attribute to whichever field matches this person's own role,
       // so if it's later folded into the main directory the attribution is
       // already correct -- everyone else just relies on created_by.
-      const isTelecallerLike = role === 'telecaller' || role === 'presales' || role === 'presales_tl';
+      const isTelecallerLike = role === 'presales' || role === 'presales_tl';
       const isSourcingLike = role === 'sourcing_manager' || role === 'sourcing_manager_tl';
       const { error } = await supabase.from('leads').insert([{
         customer_name: ownLeadName.trim(),

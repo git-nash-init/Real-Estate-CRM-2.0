@@ -67,13 +67,15 @@ interface ManagerLookup {
   designation: string;
 }
 
+// telecaller was removed as a role entirely -- the client considers it the
+// same as presales (its current name), and every existing telecaller was
+// migrated to presales in the database.
 const ROLES: UserRole[] = [
   'super_admin',
   'project_admin',
   'site_head',
   'sourcing_manager_tl',
   'sourcing_manager',
-  'telecaller',
   'presales_tl',
   'presales',
   'closing_manager_tl',

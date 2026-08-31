@@ -79,11 +79,11 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
       const { data: cpData } = await supabase.from('channel_partners').select('id, name, company_name').eq('status', 'active');
       if (cpData) setPartners(cpData.map(c => ({ id: c.id, name: c.name, company_name: c.company_name })));
 
-      // Fetch Telecallers (role = telecaller, presales, or presales_tl --
-      // matches the same "Presales (Telecaller)" bucketing used in Leads.tsx)
+      // Fetch Telecallers (role = presales or presales_tl -- telecaller was
+      // removed as a role entirely, merged into presales)
       const { data: roles, error: rErr } = await supabase.from('roles').select('id, name');
       if (rErr) console.error('Error fetching roles:', rErr);
-      const tcRoleIds = (roles || []).filter(r => ['telecaller', 'presales', 'presales_tl'].includes(r.name)).map(r => r.id);
+      const tcRoleIds = (roles || []).filter(r => ['presales', 'presales_tl'].includes(r.name)).map(r => r.id);
 
       if (tcRoleIds.length > 0) {
         const { data: userRoles, error: urErr } = await supabase.from('user_roles').select('user_id').in('role_id', tcRoleIds);
@@ -150,7 +150,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
     setSuccess(null);
 
     if (!isChannelPartner && telecallerIds.length === 0) {
-      setError('Please select at least one telecaller before uploading.');
+      setError('Please select at least one Presales (Telecaller) before uploading.');
       setLoading(false);
       return;
     }
@@ -320,7 +320,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
 
             {isChannelPartner ? (
               <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-4 text-sm text-indigo-800">
-                These leads will be attributed to you automatically as the referring Channel Partner. Staff will assign a telecaller after review.
+                These leads will be attributed to you automatically as the referring Channel Partner. Staff will assign a Presales (Telecaller) after review.
               </div>
             ) : (
               <>
@@ -339,10 +339,10 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Assign Telecallers (Round-Robin)</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Assign Presales (Telecaller) — Round-Robin</label>
                   <div className="border border-slate-300 rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
                     {telecallers.length === 0 ? (
-                      <p className="text-sm text-slate-500">No telecallers found.</p>
+                      <p className="text-sm text-slate-500">No Presales (Telecaller) staff found.</p>
                     ) : (
                       telecallers.map(tc => (
                         <label key={tc.id} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">

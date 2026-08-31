@@ -4,7 +4,6 @@ export type UserRole =
   | 'site_head'
   | 'sourcing_manager_tl'
   | 'sourcing_manager'
-  | 'telecaller'
   | 'presales_tl'
   | 'presales'
   | 'closing_manager_tl'

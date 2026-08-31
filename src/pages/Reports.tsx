@@ -752,13 +752,13 @@ export const Reports: React.FC = () => {
       </div>
 
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
-        <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2"><PhoneCall className="h-4 w-4 text-indigo-600" /> Telecaller Call Performance</h3>
+        <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2"><PhoneCall className="h-4 w-4 text-indigo-600" /> Presales (Telecaller) Call Performance</h3>
         {telecallerStats.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-100">
-                  <th className="py-2">Telecaller</th>
+                  <th className="py-2">Presales (Telecaller)</th>
                   <th className="py-2 text-right">Total Calls</th>
                   <th className="py-2 text-right">Connect Rate</th>
                   <th className="py-2 text-right">Avg Duration</th>

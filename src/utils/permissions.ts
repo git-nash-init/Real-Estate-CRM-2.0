@@ -171,11 +171,14 @@ export const canEditTask = (
 // allow it. A CP can also add a single lead one-by-one (see canCreateLead
 // above) -- Leads.tsx scopes that form to their own CP record and assigned
 // projects when the role is channel_partner.
+// telecaller was removed as a role entirely (merged into presales, its
+// current name) -- everywhere telecaller previously had access, presales
+// and presales_tl now have it instead.
 export const canAccessBulkUploadPage = (role: Role) =>
-  ['super_admin', 'site_head', 'sourcing_manager', 'sourcing_manager_tl', 'telecaller', 'channel_partner'].includes(role as string);
+  ['super_admin', 'site_head', 'sourcing_manager', 'sourcing_manager_tl', 'presales', 'presales_tl', 'channel_partner'].includes(role as string);
 
 export const canPerformBulkUpload = (role: Role) =>
-  ['super_admin', 'site_head', 'sourcing_manager', 'sourcing_manager_tl', 'channel_partner', 'telecaller'].includes(role as string);
+  ['super_admin', 'site_head', 'sourcing_manager', 'sourcing_manager_tl', 'channel_partner', 'presales', 'presales_tl'].includes(role as string);
 
 // A10: New Booking Button
 export const canCreateBooking = (role: Role) =>
