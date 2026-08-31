@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../hooks/useAuth';
+import { exportRowsToExcel } from '../utils/exportExcel';
 import {
   Search,
   RefreshCw,
@@ -13,6 +14,7 @@ import {
   Clock,
   User,
   IndianRupee,
+  Download,
   Map as MapIcon,
   List
 } from 'lucide-react';
@@ -796,6 +798,25 @@ export const Inventory: React.FC = () => {
   const filteredInventory = getFilteredInventory();
   const stats = getStats(projectFilter ? inventoryList.filter(item => item.project_id === projectFilter) : inventoryList);
 
+  const handleExportExcel = () => {
+    const rows = filteredInventory.map((item: any) => ({
+      'Unit Number': item.unit_number || '',
+      'Project': getProjectName(item.project_id),
+      'Tower': getTowerName(item.tower_id),
+      'Floor': getFloorName(item.floor_id),
+      'Configuration': item.configuration || '',
+      'Carpet Area (sq.ft)': item.carpet_area || '',
+      'Built Up Area (sq.ft)': item.built_up_area || '',
+      'Base Price': item.base_price || 0,
+      'PLC Amount': item.plc_amount || 0,
+      'Parking Amount': item.parking_amount || 0,
+      'Other Charges': item.other_charges || 0,
+      'Total Price': item.total_price || 0,
+      'Status': item.status || '',
+    }));
+    exportRowsToExcel('Inventory', 'Inventory', rows);
+  };
+
   // Towers & Floors lists for filter dropdowns
   const filteredTowersForDropdown = towers.filter(t => t.project_id === projectFilter);
   const filteredFloorsForDropdown = floors.filter(f => f.tower_id === towerFilter);
@@ -916,6 +937,16 @@ export const Inventory: React.FC = () => {
             <RefreshCw className={`h-4 w-4 text-slate-500 ${syncing ? 'animate-spin' : ''}`} />
             <span>{syncing ? 'Syncing...' : 'Sync'}</span>
           </button>
+
+          {isSuperAdmin && (
+            <button
+              onClick={handleExportExcel}
+              className="flex items-center space-x-2 bg-white border border-slate-200 px-3 py-2 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm focus:outline-none"
+            >
+              <Download className="h-4 w-4 text-slate-500" />
+              <span>Export to Excel</span>
+            </button>
+          )}
           
           {isSuperAdmin && (
             <button

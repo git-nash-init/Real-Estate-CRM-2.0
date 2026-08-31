@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabaseClient';
-import { Upload, FileSpreadsheet, User, Calendar, ExternalLink, ArrowLeft, Phone, MessageCircle, X, Trash2 } from 'lucide-react';
+import { Upload, FileSpreadsheet, User, Calendar, ExternalLink, ArrowLeft, Phone, MessageCircle, X, Trash2, Download } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { BulkUploadModal } from '../components/leads/BulkUploadModal';
-import { canPerformBulkUpload } from '../utils/permissions';
+import { canPerformBulkUpload, isSuperAdmin } from '../utils/permissions';
+import { exportRowsToExcel } from '../utils/exportExcel';
 
 interface BulkUploadRecord {
   id: string;
@@ -178,6 +179,31 @@ export const BulkUploads: React.FC = () => {
     }
   };
 
+  const handleExportBatchExcel = () => {
+    const rows = batchLeads.map((lead) => ({
+      'Customer': lead.customer_name || '',
+      'Mobile': lead.mobile || '',
+      'Project': projectMap.get(lead.project_id || '') || '',
+      'Sourcing Manager': profileMap.get(lead.sourcing_manager_id || '') || '',
+      'Allocated To': profileMap.get(lead.owner_id || '') || '',
+      'Presales (Telecaller)': profileMap.get(lead.telecaller_id || '') || '',
+      'Status': STATUS_LABEL[lead.status || 'new'] || lead.status || '',
+      'Notes': lead.notes || '',
+    }));
+    exportRowsToExcel(`Bulk_Upload_${viewingUpload?.file_name?.replace(/\.[^.]+$/, '') || 'Batch'}`, 'Leads', rows);
+  };
+
+  const handleExportUploadsExcel = () => {
+    const rows = uploads.map((u) => ({
+      'File Name': u.file_name || '',
+      'Project': u.project?.project_name || '',
+      'Uploaded By': u.uploader?.full_name || '',
+      'Channel Partner': u.partner?.name || '',
+      'Uploaded At': u.created_at ? new Date(u.created_at).toLocaleString('en-IN') : '',
+    }));
+    exportRowsToExcel('Bulk_Uploads', 'Bulk Uploads', rows);
+  };
+
   const updateBatchLeadStatus = async (lead: BatchLead, newStatus: string) => {
     if (!viewingUpload) return;
     // LOST permanently deletes the lead, per the client -- everything else
@@ -205,20 +231,30 @@ export const BulkUploads: React.FC = () => {
   if (viewingUpload) {
     return (
       <div className="p-6 max-w-7xl mx-auto space-y-6">
-        <div>
-          <button
-            onClick={closeBatch}
-            className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-600 hover:text-indigo-600 transition-colors mb-3"
-          >
-            <ArrowLeft className="w-4 h-4" /> Back to Bulk Uploads
-          </button>
-          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
-            <FileSpreadsheet className="w-6 h-6 text-indigo-600" />
-            {viewingUpload.file_name}
-          </h1>
-          <p className="text-sm text-slate-500 mt-1">
-            {viewingUpload.project?.project_name || 'Unknown project'} · Uploaded by {viewingUpload.uploader?.full_name || 'Unknown'}
-          </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <button
+              onClick={closeBatch}
+              className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-600 hover:text-indigo-600 transition-colors mb-3"
+            >
+              <ArrowLeft className="w-4 h-4" /> Back to Bulk Uploads
+            </button>
+            <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+              <FileSpreadsheet className="w-6 h-6 text-indigo-600" />
+              {viewingUpload.file_name}
+            </h1>
+            <p className="text-sm text-slate-500 mt-1">
+              {viewingUpload.project?.project_name || 'Unknown project'} · Uploaded by {viewingUpload.uploader?.full_name || 'Unknown'}
+            </p>
+          </div>
+          {isSuperAdmin(role) && batchLeads.length > 0 && (
+            <button
+              onClick={handleExportBatchExcel}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none flex-shrink-0"
+            >
+              <Download className="w-3.5 h-3.5" /> Export to Excel
+            </button>
+          )}
         </div>
 
         {batchError && (
@@ -390,15 +426,26 @@ export const BulkUploads: React.FC = () => {
             Directory of all Excel lead uploads. Click an upload to view its leads.
           </p>
         </div>
-        {canUpload && (
-          <button
-            onClick={() => setIsUploadOpen(true)}
-            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-sm transition-all focus:outline-none"
-          >
-            <FileSpreadsheet className="w-4 h-4" />
-            Upload Bulk Leads
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {isSuperAdmin(role) && uploads.length > 0 && (
+            <button
+              onClick={handleExportUploadsExcel}
+              className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-semibold shadow-sm transition-all focus:outline-none"
+            >
+              <Download className="w-4 h-4" />
+              Export to Excel
+            </button>
+          )}
+          {canUpload && (
+            <button
+              onClick={() => setIsUploadOpen(true)}
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-sm transition-all focus:outline-none"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              Upload Bulk Leads
+            </button>
+          )}
+        </div>
       </div>
 
       <BulkUploadModal

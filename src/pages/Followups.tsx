@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../hooks/useAuth';
-import { canEditLead } from '../utils/permissions';
+import { canEditLead, isSuperAdmin } from '../utils/permissions';
 import { reportQueryError } from '../services/queryLogger';
+import { exportRowsToExcel } from '../utils/exportExcel';
 import {
   Search,
   RefreshCw,
@@ -17,7 +18,8 @@ import {
   User,
   Bookmark,
   FileText,
-  CheckCircle
+  CheckCircle,
+  Download
 } from 'lucide-react';
 
 interface Followup {
@@ -445,6 +447,55 @@ export const Followups: React.FC = () => {
   const stats = getStats();
 
   const filteredFollowups = getFilteredFollowups();
+
+  // Server-side paginated, so this re-runs the same filtered query without
+  // .range() to pull every matching follow-up, not just the current page.
+  const [exportingFollowups, setExportingFollowups] = useState(false);
+  const handleExportExcel = async () => {
+    setExportingFollowups(true);
+    try {
+      let query = supabase.from('followups').select('*');
+      if (statusFilter) query = query.eq('status', statusFilter);
+      if (projectFilter) {
+        const projectLeadIds = Array.from(leadsMap.entries())
+          .filter(([, l]) => l.project_id === projectFilter)
+          .map(([id]) => id);
+        query = query.in('lead_id', projectLeadIds.length ? projectLeadIds : ['00000000-0000-0000-0000-000000000000']);
+      }
+      if (searchQuery.trim()) {
+        const term = searchQuery.trim().toLowerCase();
+        const matchingLeadIds = Array.from(leadsMap.entries())
+          .filter(([, l]) => l.customer_name?.toLowerCase().includes(term))
+          .map(([id]) => id);
+        const orParts = [`notes.ilike.%${term.replace(/[%,]/g, '')}%`];
+        if (matchingLeadIds.length) orParts.push(`lead_id.in.(${matchingLeadIds.join(',')})`);
+        query = query.or(orParts.join(','));
+      }
+      query = query.order('due_at', { ascending: true });
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      const rows = (data || []).map((f: any) => {
+        const lead = leadsMap.get(f.lead_id || '');
+        return {
+          'Customer': lead?.customer_name || '',
+          'Mobile': lead?.mobile || '',
+          'Project': projectMap.get(lead?.project_id || '') || '',
+          'Owner': profileMap.get(lead?.owner_id || '') || '',
+          'Due At': f.due_at ? new Date(f.due_at).toLocaleString('en-IN') : '',
+          'Status': f.status || '',
+          'Notes': f.notes || '',
+        };
+      });
+      exportRowsToExcel('Followups', 'Follow-ups', rows);
+    } catch (err: any) {
+      setError(err.message || 'Failed to export follow-ups.');
+    } finally {
+      setExportingFollowups(false);
+    }
+  };
+
   const startRange = page * pageSize + 1;
   const endRange = Math.min((page + 1) * pageSize, totalCount);
 
@@ -465,6 +516,16 @@ export const Followups: React.FC = () => {
             <RefreshCw className={`h-4 w-4 text-slate-500 ${syncing ? 'animate-spin' : ''}`} />
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
+          {isSuperAdmin(role) && (
+            <button
+              onClick={handleExportExcel}
+              disabled={exportingFollowups}
+              className="flex items-center space-x-2 bg-white border border-slate-200 px-4 py-2 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm focus:outline-none disabled:opacity-50"
+            >
+              <Download className="h-4 w-4 text-slate-500" />
+              <span>{exportingFollowups ? 'Exporting...' : 'Export to Excel'}</span>
+            </button>
+          )}
           <button
             onClick={() => setIsCreateOpen(true)}
             className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
