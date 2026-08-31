@@ -15,7 +15,8 @@ import {
   Plus,
   Printer,
   Trash2,
-  Edit
+  Edit,
+  Ban
 } from 'lucide-react';
 
 interface Payment {
@@ -1011,10 +1012,10 @@ export const Payments: React.FC = () => {
                                 {canCancelPayment(role) && (
                                   <button
                                     onClick={() => setCancellingPayment(p)}
-                                    className="inline-flex p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
-                                    title="Cancel Transaction"
+                                    className="inline-flex p-1.5 text-slate-400 hover:text-amber-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
+                                    title="Cancel Transaction (keeps the record, marks it cancelled)"
                                   >
-                                    <Trash2 className="h-4.5 w-4.5" />
+                                    <Ban className="h-4.5 w-4.5" />
                                   </button>
                                 )}
                               </>
