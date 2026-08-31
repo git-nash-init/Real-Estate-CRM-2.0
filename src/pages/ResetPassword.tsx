@@ -54,6 +54,7 @@ export const ResetPassword: React.FC = () => {
       } else {
         await supabase.auth.signOut();
         setSuccess(true);
+        setTimeout(() => navigate('/login'), 3000);
       }
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');
