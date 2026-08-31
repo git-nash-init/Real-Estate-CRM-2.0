@@ -39,3 +39,27 @@ export function computeCurrentlyDueTotal(b: DueCalcBooking, milestonePercentage:
     : 0;
   return considerationDue + firstPaymentCharges + possessionCharges;
 }
+
+/**
+ * Per-category breakdown of what's currently due on a booking, keyed by
+ * the same payment_type strings the Payments page's "New Payment" form
+ * already uses (OCR / GST / Stamp Duty Registration / Development Charges
+ * / Maintenance Charges / Other Charges) -- so the Payments page can show
+ * every applicable charge as its own line, not just whatever's already
+ * been manually recorded. Categories with nothing currently due are
+ * omitted (e.g. GST before the first payment, or Development Charges
+ * before possession).
+ */
+export function computeDueByCategory(b: DueCalcBooking, milestonePercentage: number, hasAnyPayment: boolean): { type: string; amount: number }[] {
+  const considerationAmount = b.consideration_amount ?? b.booking_amount ?? 0;
+  const considerationDue = Math.min(considerationAmount, considerationAmount * (milestonePercentage / 100));
+  const categories: { type: string; amount: number }[] = [
+    { type: 'OCR', amount: considerationDue },
+    { type: 'GST', amount: hasAnyPayment ? (b.gst_amount || 0) : 0 },
+    { type: 'Stamp Duty Registration', amount: hasAnyPayment ? (b.stamp_duty || 0) + (b.registration_charges || 0) : 0 },
+    { type: 'Development Charges', amount: b.possession_date ? (b.development_charges || 0) : 0 },
+    { type: 'Maintenance Charges', amount: b.possession_date ? (b.maintenance_charges || 0) : 0 },
+    { type: 'Other Charges', amount: hasAnyPayment ? (b.other_charges || 0) : 0 },
+  ];
+  return categories.filter(c => c.amount > 0);
+}

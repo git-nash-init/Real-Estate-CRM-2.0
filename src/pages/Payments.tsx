@@ -3,6 +3,7 @@ import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../hooks/useAuth';
 import { canEditPayment, canCancelPayment, isSuperAdmin } from '../utils/permissions';
 import { exportRowsToExcel } from '../utils/exportExcel';
+import { totalMilestonePercentage, computeDueByCategory } from '../utils/bookingDue';
 import {
   Search,
   RefreshCw,
@@ -46,11 +47,19 @@ interface Booking {
   booking_number: string;
   customer_name: string;
   project_id: string;
+  tower_id?: string | null;
   inventory_id: string;
   booking_amount: number;
   consideration_amount?: number | null;
   total_additional_charges?: number | null;
   total_payable_amount?: number | null;
+  gst_amount?: number | null;
+  stamp_duty?: number | null;
+  registration_charges?: number | null;
+  development_charges?: number | null;
+  maintenance_charges?: number | null;
+  other_charges?: number | null;
+  possession_date?: string | null;
   lead_id: string;
   status: string;
 }
@@ -79,6 +88,7 @@ export const Payments: React.FC = () => {
   const [towerMap, setTowerMap] = useState<Map<string, string>>(new Map());
   const [inventoryMap, setInventoryMap] = useState<Map<string, InventoryUnit>>(new Map());
   const [bookingMap, setBookingMap] = useState<Map<string, Booking>>(new Map());
+  const [towerMilestonePercent, setTowerMilestonePercent] = useState<Map<string, number>>(new Map());
 
   // Navigation / Loading / UI States
   const [loading, setLoading] = useState(true);
@@ -181,10 +191,28 @@ export const Payments: React.FC = () => {
       // 4. Fetch Bookings (load all valid ones)
       const { data: bookData, error: bookErr } = await supabase
         .from('bookings')
-        .select('id, booking_number, customer_name, project_id, inventory_id, booking_amount, consideration_amount, total_additional_charges, total_payable_amount, lead_id, status');
+        .select('id, booking_number, customer_name, project_id, tower_id, inventory_id, booking_amount, consideration_amount, total_additional_charges, total_payable_amount, gst_amount, stamp_duty, registration_charges, development_charges, maintenance_charges, other_charges, possession_date, lead_id, status');
       if (bookErr) throw bookErr;
       setBookings(bookData || []);
       setBookingMap(new Map(bookData?.map(b => [b.id, b]) || []));
+
+      // 4b. Fetch Payment Milestones -- cumulative % of Agreement Value
+      // released per tower, needed to know how much of a booking's OCR
+      // (Agreement Value) charge is actually due right now.
+      const { data: milestoneData, error: milestoneErr } = await supabase
+        .from('project_payment_milestones')
+        .select('tower_id, percentage');
+      if (milestoneErr) throw milestoneErr;
+      const byTower = new Map<string, number[]>();
+      (milestoneData || []).forEach((m: any) => {
+        if (!m.tower_id) return;
+        const arr = byTower.get(m.tower_id) || [];
+        arr.push(m.percentage);
+        byTower.set(m.tower_id, arr);
+      });
+      const percentMap = new Map<string, number>();
+      byTower.forEach((percentages, towerId) => percentMap.set(towerId, totalMilestonePercentage(percentages)));
+      setTowerMilestonePercent(percentMap);
 
       // 5. Fetch Payments
       const { data: payData, error: payErr } = await supabase
@@ -521,6 +549,27 @@ export const Payments: React.FC = () => {
     setIsModalOpen(true);
   };
 
+  // Opens the New Payment modal pre-filled from a synthesized "Pending"
+  // row, so recording the actual payment for a charge that's due but not
+  // yet entered is a single click away instead of re-picking the booking
+  // and type from scratch.
+  const openCreateModalForPending = (p: Payment) => {
+    setEditingPayment(null);
+    setFormError(null);
+    setSelectedBookingId(p.booking_id);
+    setPaymentType(p.payment_type);
+    setAmountInput(p.amount.toString());
+    setDueDate('');
+    setReceivedDate(new Date().toISOString().split('T')[0]);
+    setPaymentMode('Cash');
+    setTransactionReference('');
+    setChequeNumber('');
+    setBankName('');
+    setRemarks('');
+    setPaymentStatus('paid');
+    setIsModalOpen(true);
+  };
+
   // Open editing modal
   const openEditModal = (p: Payment) => {
     setEditingPayment(p);
@@ -622,8 +671,58 @@ export const Payments: React.FC = () => {
     }
   });
 
+  // Synthesize a "Pending" row for every charge category (OCR/GST/Stamp
+  // Duty Registration/Development/Maintenance/Other Charges) that's
+  // currently due on a booking but has no matching payment record for it
+  // yet -- otherwise a charge nobody has manually recorded a payment
+  // against simply never appeared here at all, even though it's really
+  // due right now per the booking's staged payment schedule.
+  const bookingPaymentTypeTotals = new Map<string, Map<string, number>>();
+  payments.forEach(p => {
+    if (p.status === 'cancelled' || p.status === 'refunded') return;
+    const byType = bookingPaymentTypeTotals.get(p.booking_id) || new Map<string, number>();
+    byType.set(p.payment_type, (byType.get(p.payment_type) || 0) + p.amount);
+    bookingPaymentTypeTotals.set(p.booking_id, byType);
+  });
+
+  const syntheticPendingRows: Payment[] = [];
+  bookings.forEach(b => {
+    if (b.status?.toLowerCase() === 'cancelled' || b.status?.toLowerCase() === 'refunded') return;
+    const hasAnyPayment = bookingPaymentTypeTotals.has(b.id);
+    const milestonePercent = towerMilestonePercent.get(b.tower_id || '') || 0;
+    const dueByCategory = computeDueByCategory(b, milestonePercent, hasAnyPayment);
+    const recordedByType = bookingPaymentTypeTotals.get(b.id);
+    dueByCategory.forEach(({ type, amount }) => {
+      const alreadyRecorded = recordedByType?.get(type) || 0;
+      const remaining = amount - alreadyRecorded;
+      if (remaining > 0.5) {
+        syntheticPendingRows.push({
+          id: `pending-${b.id}-${type}`,
+          booking_id: b.id,
+          payment_number: '',
+          payment_type: type,
+          amount: remaining,
+          due_date: null,
+          received_date: null,
+          payment_mode: null,
+          transaction_reference: null,
+          cheque_number: null,
+          bank_name: null,
+          receipt_document: null,
+          status: 'pending',
+          remarks: null,
+          created_by: null,
+          created_at: '',
+          updated_at: '',
+        });
+      }
+    });
+  });
+
+  const allPaymentRows = [...payments, ...syntheticPendingRows];
+
   // Filter payments in-memory
-  const filteredPayments = payments.filter(p => {
+  const filteredPayments = allPaymentRows.filter(p => {
     const booking = bookingMap.get(p.booking_id);
     const unit = booking ? inventoryMap.get(booking.inventory_id) : null;
 
@@ -1140,10 +1239,13 @@ export const Payments: React.FC = () => {
                       const unit = booking ? inventoryMap.get(booking.inventory_id) : null;
                       const projName = booking ? projectMap.get(booking.project_id) : 'N/A';
                       const displayStatus = getDisplayStatus(p);
+                      const isSynthetic = p.id.startsWith('pending-');
 
                       return (
-                        <tr key={p.id} className="hover:bg-slate-50/50 transition-colors text-sm">
-                          <td className="py-3.5 px-6 font-mono text-slate-600 text-xs font-semibold">{p.payment_number || '—'}</td>
+                        <tr key={p.id} className={`hover:bg-slate-50/50 transition-colors text-sm ${isSynthetic ? 'bg-amber-50/30' : ''}`}>
+                          <td className="py-3.5 px-6 font-mono text-slate-600 text-xs font-semibold">
+                            {isSynthetic ? <span className="italic text-slate-400 font-sans">Not yet recorded</span> : (p.payment_number || '—')}
+                          </td>
                           <td className="py-3.5 px-6 text-slate-900 font-semibold">{booking?.customer_name || 'N/A'}</td>
                           <td className="py-3.5 px-6 text-slate-655 font-medium">{projName}</td>
                           <td className="py-3.5 px-6 text-slate-700 font-semibold">{unit?.unit_number || '—'}</td>
@@ -1167,43 +1269,58 @@ export const Payments: React.FC = () => {
                             </span>
                           </td>
                           <td className="py-3.5 px-6 text-right space-x-1.5">
-                            <button
-                              onClick={() => setSelectedPayment(p)}
-                              className="inline-flex p-1.5 text-slate-400 hover:text-indigo-650 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
-                              title="View Details"
-                            >
-                              <Eye className="h-4.5 w-4.5" />
-                            </button>
-                            {p.status?.toLowerCase() !== 'cancelled' && p.status?.toLowerCase() !== 'refunded' && (
+                            {isSynthetic ? (
+                              canEditPayment(role) && role !== 'channel_partner' && (
+                                <button
+                                  onClick={() => openCreateModalForPending(p)}
+                                  className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xxs font-bold shadow-sm transition-all focus:outline-none"
+                                  title="Record this payment"
+                                >
+                                  <Plus className="h-3 w-3" />
+                                  <span>Record</span>
+                                </button>
+                              )
+                            ) : (
                               <>
-                                {canEditPayment(role) && (
-                                  <button
-                                    onClick={() => openEditModal(p)}
-                                    className="inline-flex p-1.5 text-slate-400 hover:text-amber-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
-                                    title="Edit"
-                                  >
-                                    <Edit className="h-4.5 w-4.5" />
-                                  </button>
+                                <button
+                                  onClick={() => setSelectedPayment(p)}
+                                  className="inline-flex p-1.5 text-slate-400 hover:text-indigo-650 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
+                                  title="View Details"
+                                >
+                                  <Eye className="h-4.5 w-4.5" />
+                                </button>
+                                {p.status?.toLowerCase() !== 'cancelled' && p.status?.toLowerCase() !== 'refunded' && (
+                                  <>
+                                    {canEditPayment(role) && (
+                                      <button
+                                        onClick={() => openEditModal(p)}
+                                        className="inline-flex p-1.5 text-slate-400 hover:text-amber-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
+                                        title="Edit"
+                                      >
+                                        <Edit className="h-4.5 w-4.5" />
+                                      </button>
+                                    )}
+                                    {canCancelPayment(role) && (
+                                      <button
+                                        onClick={() => setCancellingPayment(p)}
+                                        className="inline-flex p-1.5 text-slate-400 hover:text-amber-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
+                                        title="Cancel Transaction (keeps the record, marks it cancelled)"
+                                      >
+                                        <Ban className="h-4.5 w-4.5" />
+                                      </button>
+                                    )}
+                                  </>
                                 )}
-                                {canCancelPayment(role) && (
+                                {isSuperAdmin(role) && (
                                   <button
-                                    onClick={() => setCancellingPayment(p)}
-                                    className="inline-flex p-1.5 text-slate-400 hover:text-amber-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
-                                    title="Cancel Transaction (keeps the record, marks it cancelled)"
+                                    onClick={() => handleDeletePayment(p.id)}
+                                    className="inline-flex p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
+                                    title="Delete Payment Permanently"
                                   >
-                                    <Ban className="h-4.5 w-4.5" />
+                                    <Trash2 className="h-4.5 w-4.5" />
                                   </button>
                                 )}
                               </>
-                            )}
-                            {isSuperAdmin(role) && (
-                              <button
-                                onClick={() => handleDeletePayment(p.id)}
-                                className="inline-flex p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition-colors focus:outline-none"
-                                title="Delete Payment Permanently"
-                              >
-                                <Trash2 className="h-4.5 w-4.5" />
-                              </button>
                             )}
                           </td>
                         </tr>
