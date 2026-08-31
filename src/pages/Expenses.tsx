@@ -451,20 +451,22 @@ export const Expenses: React.FC = () => {
               {formError && (
                 <div className="bg-rose-50 border border-rose-200 text-rose-700 text-sm rounded-lg px-3 py-2">{formError}</div>
               )}
-              <div className="grid grid-cols-2 gap-4">
+              <div className={`grid gap-4 ${formMode === 'received' ? 'grid-cols-1' : 'grid-cols-2'}`}>
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 mb-1">Date *</label>
                   <input type="date" value={form.expense_date} onChange={(e) => setForm({ ...form, expense_date: e.target.value })} required
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500" />
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Category</label>
-                  <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500">
-                    <option value="">Select category</option>
-                    {categoryOptions.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
+                {formMode !== 'received' && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">Category</label>
+                    <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                      <option value="">Select category</option>
+                      {categoryOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-500 mb-1">Vendor / Bill Reference</label>
