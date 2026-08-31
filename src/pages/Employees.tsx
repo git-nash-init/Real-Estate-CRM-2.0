@@ -170,6 +170,12 @@ export const Employees: React.FC = () => {
   const [reportingManager, setReportingManager] = useState('');
   const [employmentType, setEmploymentType] = useState('Full Time');
   const [employmentStatus, setEmploymentStatus] = useState('active');
+  // Captured when opening Edit, so handleFormSubmit can tell whether this
+  // save is actually *changing* whether the account can log in (only
+  // 'active' is a logged-in-allowed state -- matches how every assignee
+  // picker already reads user_profiles.status) -- see the ban/unban sync
+  // in handleFormSubmit for why this matters.
+  const [originalEmploymentStatus, setOriginalEmploymentStatus] = useState('active');
   const [officialEmail, setOfficialEmail] = useState('');
   const [workLocation, setWorkLocation] = useState('');
   const [branch, setBranch] = useState('');
@@ -435,6 +441,7 @@ export const Employees: React.FC = () => {
     setReportingManager('');
     setEmploymentType('Full Time');
     setEmploymentStatus('active');
+    setOriginalEmploymentStatus('active');
     setOfficialEmail('');
     setWorkLocation('');
     setBranch('');
@@ -481,6 +488,7 @@ export const Employees: React.FC = () => {
     setReportingManager(emp.reporting_manager || '');
     setEmploymentType(emp.employment_type || 'Full Time');
     setEmploymentStatus(emp.employment_status || 'active');
+    setOriginalEmploymentStatus(emp.employment_status || 'active');
     setOfficialEmail(emp.official_email || '');
     setWorkLocation(emp.work_location || '');
     setBranch(emp.branch || '');
@@ -701,6 +709,36 @@ export const Employees: React.FC = () => {
           .update(payload)
           .eq('id', editingId);
         if (updateError) throw updateError;
+
+        // The Employment Status field above writes employees.employment_status
+        // directly -- but that's not the actual login gate. If this save
+        // crosses the active/not-active boundary, sync the real Supabase auth
+        // ban and user_profiles.status too (via manage-employee-account),
+        // exactly like the dedicated Deactivate/Reactivate toggle does.
+        // Without this, saving the form with a changed status here silently
+        // desyncs from the real login state -- confirmed live: an employee
+        // whose employees.employment_status showed 'active' after being
+        // edited back from 'inactive' was still banned from logging in,
+        // because only this table got updated.
+        const wasActive = originalEmploymentStatus === 'active';
+        const isActive = employmentStatus === 'active';
+        if (wasActive !== isActive && selectedUserId) {
+          try {
+            const { data: sessionData } = await supabase.auth.getSession();
+            const accessToken = sessionData.session?.access_token;
+            if (accessToken) {
+              const { data: fnData, error: fnError } = await supabase.functions.invoke('manage-employee-account', {
+                body: { action: isActive ? 'unban_login' : 'ban_login', employee_id: editingId, user_id: selectedUserId },
+                headers: { Authorization: `Bearer ${accessToken}` },
+              });
+              if (fnError || fnData?.error) {
+                reportQueryError('Employees: sync login state with status change', fnError || new Error(fnData.error));
+              }
+            }
+          } catch (syncErr) {
+            reportQueryError('Employees: sync login state with status change', syncErr);
+          }
+        }
       } else {
         // Insert Employee
         const { error: insertError } = await supabase
