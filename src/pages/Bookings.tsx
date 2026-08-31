@@ -367,7 +367,7 @@ export const Bookings: React.FC = () => {
       // Fetch live booking to check totals
       const { data: dbBooking, error: bookErr } = await supabase
         .from('bookings')
-        .select('booking_amount, total_payable_amount, consideration_amount, gst_amount, stamp_duty, registration_charges, other_charges, development_charges, maintenance_charges, parking_charges, possession_date, project_id')
+        .select('booking_amount, total_payable_amount, consideration_amount, gst_amount, stamp_duty, registration_charges, other_charges, development_charges, maintenance_charges, parking_charges, possession_date, project_id, tower_id')
         .eq('id', selectedBooking.id)
         .single();
       if (bookErr || !dbBooking) {
