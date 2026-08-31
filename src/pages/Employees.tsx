@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
+import { exportRowsToExcel } from '../utils/exportExcel';
 import {
   Search,
   RefreshCw,
@@ -12,7 +13,8 @@ import {
   Users,
   CheckCircle,
   Edit2,
-  Trash2
+  Trash2,
+  Download
 } from 'lucide-react';
 import type { UserRole } from '../types/auth';
 import { useAuth } from '../hooks/useAuth';
@@ -940,6 +942,61 @@ export const Employees: React.FC = () => {
   // are already the filtered set.
   const filteredEmployees = employees;
 
+  // Server-side paginated like fetchEmployees, so this re-runs the same
+  // filtered query without .range() to pull every matching employee.
+  const [exportingEmployees, setExportingEmployees] = useState(false);
+  const handleExportExcel = async () => {
+    setExportingEmployees(true);
+    try {
+      let query = supabase.from('employees').select('*');
+      if (searchQuery.trim()) {
+        searchQuery.trim().split(/\s+/).forEach(word => {
+          const w = word.replace(/[%,]/g, '');
+          if (!w) return;
+          const matchingProfileIds = profiles
+            .filter(p => p.email?.toLowerCase().includes(w.toLowerCase()))
+            .map(p => p.id);
+          const profileIdClause = matchingProfileIds.length ? `,user_id.in.(${matchingProfileIds.join(',')})` : '';
+          query = query.or(`first_name.ilike.%${w}%,last_name.ilike.%${w}%,employee_id.ilike.%${w}%,official_email.ilike.%${w}%,personal_email.ilike.%${w}%${profileIdClause}`);
+        });
+      }
+      if (deptFilter) query = query.eq('department', deptFilter);
+      if (desigFilter) query = query.eq('designation', desigFilter);
+      if (statusFilter) query = query.eq('employment_status', statusFilter);
+      else query = query.neq('employment_status', 'terminated');
+      if (roleFilter) {
+        const matchingUserIds = Array.from(userRolesMap.entries())
+          .filter(([, rName]) => rName === roleFilter)
+          .map(([uid]) => uid);
+        query = query.in('user_id', matchingUserIds.length ? matchingUserIds : ['00000000-0000-0000-0000-000000000000']);
+      }
+      query = query.order('created_at', { ascending: false });
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      const rows = (data || []).map((emp: any) => ({
+        'Employee ID': emp.employee_id || '',
+        'Name': `${emp.first_name || ''} ${emp.last_name || ''}`.trim(),
+        'Email': emp.official_email || emp.personal_email || '',
+        'Mobile': emp.mobile || '',
+        'Department': emp.department || '',
+        'Designation': emp.designation || '',
+        'Reporting Manager': managersLookup.find(m => m.id === emp.reporting_manager)?.name || '',
+        'Access Role': emp.user_id ? (userRolesMap.get(emp.user_id) || '') : '',
+        'Joining Date': emp.joining_date || '',
+        'Employment Type': emp.employment_type || '',
+        'Status': emp.employment_status || '',
+        'City': emp.city || '',
+      }));
+      exportRowsToExcel('Employees', 'Employees', rows);
+    } catch (err: any) {
+      setError(err.message || 'Failed to export employees.');
+    } finally {
+      setExportingEmployees(false);
+    }
+  };
+
   // Directory-wide statistics -- computed from allEmployeesLite (every
   // employee, unpaginated), not just the current page, so these totals
   // don't silently shrink to the page size.
@@ -983,6 +1040,16 @@ export const Employees: React.FC = () => {
             <RefreshCw className={`h-4 w-4 text-slate-500 ${syncing ? 'animate-spin' : ''}`} />
             <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
           </button>
+          {currentUserRole === 'super_admin' && (
+            <button
+              onClick={handleExportExcel}
+              disabled={exportingEmployees}
+              className="flex items-center space-x-2 bg-white border border-slate-200 px-4 py-2 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm focus:outline-none disabled:opacity-50"
+            >
+              <Download className="h-4 w-4 text-slate-500" />
+              <span>{exportingEmployees ? 'Exporting...' : 'Export to Excel'}</span>
+            </button>
+          )}
           <button
             onClick={openCreateModal}
             className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-650/10 hover:shadow-lg transition-all focus:outline-none"

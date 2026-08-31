@@ -3,6 +3,7 @@ import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
 import { canEditTask, canAssignTasksToOthers } from '../utils/permissions';
+import { exportRowsToExcel } from '../utils/exportExcel';
 import {
   CheckSquare,
   Plus,
@@ -11,7 +12,8 @@ import {
   CheckCircle,
   XCircle,
   Search,
-  Trash2
+  Trash2,
+  Download
 } from 'lucide-react';
 
 interface Task {
@@ -245,6 +247,20 @@ export const Tasks: React.FC = () => {
     return true;
   });
 
+  const handleExportExcel = () => {
+    const rows = filteredTasks.map((t) => ({
+      'Title': t.title || '',
+      'Description': t.description || '',
+      'Assigned To': usersMap.get(t.assigned_to || '') || '',
+      'Assigned By': usersMap.get(t.assigned_by || '') || '',
+      'Priority': t.priority || '',
+      'Status': t.status || '',
+      'Due Date': t.due_date ? new Date(t.due_date).toLocaleDateString('en-IN') : '',
+      'Completed At': t.completed_at ? new Date(t.completed_at).toLocaleString('en-IN') : '',
+    }));
+    exportRowsToExcel('Tasks', 'Tasks', rows);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -279,6 +295,14 @@ export const Tasks: React.FC = () => {
           >
             <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
           </button>
+          {isSuperAdmin && (
+            <button
+              onClick={handleExportExcel}
+              className="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
+            >
+              <Download className="h-3.5 w-3.5" /> Export to Excel
+            </button>
+          )}
           <button
             onClick={() => { resetForm(); setIsCreateOpen(true); }}
             className="flex items-center space-x-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold shadow-sm"
