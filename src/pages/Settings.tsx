@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
@@ -180,6 +181,7 @@ const WhatsAppPanel: React.FC = () => {
 // a password *reset* for someone who's locked out, which is what the
 // email flow is for).
 const ChangePasswordPanel: React.FC = () => {
+  const navigate = useNavigate();
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -207,6 +209,13 @@ const ChangePasswordPanel: React.FC = () => {
       setSuccess(true);
       setNewPassword('');
       setConfirmPassword('');
+      // Sign out and send back to login so the new password is what's
+      // actually verified next -- staying logged in on the old session
+      // left it ambiguous whether the change had really taken effect.
+      setTimeout(async () => {
+        await supabase.auth.signOut();
+        navigate('/login', { replace: true });
+      }, 2000);
     } catch (err: any) {
       setError(err.message || 'Failed to update password.');
     } finally {
@@ -223,7 +232,7 @@ const ChangePasswordPanel: React.FC = () => {
 
       {success && (
         <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-3 text-xs mb-4">
-          <CheckCircle className="h-4 w-4 flex-shrink-0" /> Password updated. Use it next time you log in.
+          <CheckCircle className="h-4 w-4 flex-shrink-0" /> Password updated! Redirecting you to login...
         </div>
       )}
       {error && (
