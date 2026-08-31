@@ -85,7 +85,8 @@ const ROLES: UserRole[] = [
   'closing_manager',
   'marketing_head',
   'marketing',
-  'receptionist'
+  'receptionist',
+  'crm'
 ];
 
 // Cryptographically random password for newly auto-created accounts.

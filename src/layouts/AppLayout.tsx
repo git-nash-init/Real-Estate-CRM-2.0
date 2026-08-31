@@ -59,28 +59,35 @@ export const AppLayout: React.FC = () => {
   // role restriction at all. hiddenForRoles closes that off at the nav
   // level to match what RLS now actually allows them to do something
   // useful with.
+  // crm is a narrow, project-scoped role (Bookings view-only + Payments +
+  // referral fee/payout visibility) -- everything else business-data-shaped
+  // is hidden from it, same treatment channel_partner already gets above.
+  // Bookings and Payments themselves are deliberately left open below.
   const navigationItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
-    { name: 'Leads', path: '/leads', icon: UserCheck },
+    { name: 'Leads', path: '/leads', icon: UserCheck, hiddenForRoles: ['crm'] },
     { name: 'Bulk Uploads', path: '/bulk-uploads', icon: FileSpreadsheet, isVisible: canAccessBulkUploadPage },
-    { name: 'Follow-ups', path: '/follow-ups', icon: PhoneCall, hiddenForRoles: ['channel_partner'] },
+    { name: 'Follow-ups', path: '/follow-ups', icon: PhoneCall, hiddenForRoles: ['channel_partner', 'crm'] },
     // Channel partners now log their own Walk-in Visits here -- SiteVisits.tsx
     // hides the formal scheduled Site Visits directory for that role.
-    { name: 'Pre Tagging', path: '/site-visits', icon: MapPin },
-    { name: 'Projects', path: '/projects', icon: Building2, hiddenForRoles: ['channel_partner'] },
-    { name: 'Inventory', path: '/inventory', icon: Home, hiddenForRoles: ['channel_partner'] },
+    { name: 'Pre Tagging', path: '/site-visits', icon: MapPin, hiddenForRoles: ['crm'] },
+    { name: 'Projects', path: '/projects', icon: Building2, hiddenForRoles: ['channel_partner', 'crm'] },
+    { name: 'Inventory', path: '/inventory', icon: Home, hiddenForRoles: ['channel_partner', 'crm'] },
     { name: 'Bookings', path: '/bookings', icon: CalendarCheck },
     // Presales gets no access to Payments at all, per the client -- not
     // just the create button.
     // Receptionist also excluded per the client -- receptionist should not
     // have access to Payments, CP Outreach, or Marketing at all.
     { name: 'Payments', path: '/payments', icon: CreditCard, hiddenForRoles: ['presales', 'receptionist'] },
-    { name: 'Channel Partners', path: '/channel-partners', icon: Users, hiddenForRoles: ['channel_partner'] },
+    // crm only ever sees referral fee/payout data inside Payments, not the
+    // full Channel Partners directory (CP profiles, KYC, referral fee rate
+    // setup) -- per the client's explicit "payout data only" scoping.
+    { name: 'Channel Partners', path: '/channel-partners', icon: Users, hiddenForRoles: ['channel_partner', 'crm'] },
     // Closing Manager, Presales, and Receptionist excluded per the client --
     // CP Outreach is a sourcing-side activity (logging field meetings with
     // Channel Partners), not part of any of these roles' workflows.
-    { name: 'CP Outreach', path: '/cp-outreach', icon: Handshake, hiddenForRoles: ['channel_partner', 'closing_manager', 'presales', 'receptionist'] },
-    { name: 'Marketing', path: '/marketing', icon: Megaphone, hiddenForRoles: ['channel_partner', 'receptionist'] },
+    { name: 'CP Outreach', path: '/cp-outreach', icon: Handshake, hiddenForRoles: ['channel_partner', 'closing_manager', 'presales', 'receptionist', 'crm'] },
+    { name: 'Marketing', path: '/marketing', icon: Megaphone, hiddenForRoles: ['channel_partner', 'receptionist', 'crm'] },
     { name: 'Employees', path: '/employees', icon: Briefcase, allowedRoles: ['super_admin'] },
     { name: 'Attendance', path: '/attendance', icon: ClipboardCheck, hiddenForRoles: ['channel_partner'] },
     { name: 'Tasks', path: '/tasks', icon: CheckSquare, hiddenForRoles: ['channel_partner'] },

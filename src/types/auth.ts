@@ -11,7 +11,8 @@ export type UserRole =
   | 'marketing_head'
   | 'marketing'
   | 'receptionist'
-  | 'channel_partner';
+  | 'channel_partner'
+  | 'crm';
 
 export interface UserProfile {
   id: string;
