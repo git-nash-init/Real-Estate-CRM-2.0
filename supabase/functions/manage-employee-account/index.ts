@@ -147,13 +147,22 @@ Deno.serve(async (req: Request) => {
         });
       }
 
+      // user_profiles.status (not employees.employment_status) is what every
+      // assignee dropdown across the app actually filters on (Leads.tsx,
+      // Tasks.tsx, SiteVisits.tsx, BulkUploads.tsx, Followups.tsx, Dashboard
+      // all build their "active" picker set from it) -- both must flip
+      // together or a deactivated employee keeps appearing in every picker.
       const { error: empError } = await adminClient
         .from("employees")
         .update({ employment_status: "inactive" })
         .eq("id", employee_id);
-      if (empError) {
+      const { error: profileError } = await adminClient
+        .from("user_profiles")
+        .update({ status: "inactive" })
+        .eq("id", user_id);
+      if (empError || profileError) {
         await adminClient.auth.admin.updateUserById(user_id, { ban_duration: "none" });
-        return new Response(JSON.stringify({ error: empError.message }), {
+        return new Response(JSON.stringify({ error: (empError || profileError)?.message }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -180,8 +189,12 @@ Deno.serve(async (req: Request) => {
         .from("employees")
         .update({ employment_status: "active" })
         .eq("id", employee_id);
-      if (empError) {
-        return new Response(JSON.stringify({ error: empError.message }), {
+      const { error: profileError } = await adminClient
+        .from("user_profiles")
+        .update({ status: "active" })
+        .eq("id", user_id);
+      if (empError || profileError) {
+        return new Response(JSON.stringify({ error: (empError || profileError)?.message }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });

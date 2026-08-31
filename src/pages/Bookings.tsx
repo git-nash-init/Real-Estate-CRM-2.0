@@ -1917,26 +1917,28 @@ export const Bookings: React.FC = () => {
                       {/* Header and Record Button */}
                       <div className="flex justify-between items-center pt-2">
                         <span className="block font-bold text-slate-700 uppercase tracking-wide text-xs">Receipt Ledger Ledger</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAddAmount('');
-                            setAddDueDate('');
-                            setAddReceivedDate(new Date().toISOString().split('T')[0]);
-                            setAddPaymentMode('Cash');
-                            setAddTxnRef('');
-                            setAddChequeNum('');
-                            setAddBankName('');
-                            setAddRemarks('');
-                            setAddPaymentStatus('paid');
-                            setAddPaymentError(null);
-                            setIsAddPaymentOpen(true);
-                          }}
-                          className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xxs font-bold shadow-sm transition-all focus:outline-none"
-                        >
-                          <Plus className="h-3 w-3" />
-                          <span>Record Payment</span>
-                        </button>
+                        {role !== 'channel_partner' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAddAmount('');
+                              setAddDueDate('');
+                              setAddReceivedDate(new Date().toISOString().split('T')[0]);
+                              setAddPaymentMode('Cash');
+                              setAddTxnRef('');
+                              setAddChequeNum('');
+                              setAddBankName('');
+                              setAddRemarks('');
+                              setAddPaymentStatus('paid');
+                              setAddPaymentError(null);
+                              setIsAddPaymentOpen(true);
+                            }}
+                            className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xxs font-bold shadow-sm transition-all focus:outline-none"
+                          >
+                            <Plus className="h-3 w-3" />
+                            <span>Record Payment</span>
+                          </button>
+                        )}
                       </div>
 
                       {/* History list */}

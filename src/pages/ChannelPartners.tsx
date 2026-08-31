@@ -26,6 +26,7 @@ import {
 
 interface ChannelPartner {
   id: string;
+  user_id: string | null;
   cp_code: string | null;
   partner_code: string | null;
   partner_type: string | null;
@@ -416,11 +417,29 @@ export const ChannelPartners: React.FC = () => {
 
   // Status Activation Toggle
   
-  const handleDeleteCP = async (cpId: string) => {
-    if (!window.confirm('Are you sure you want to permanently delete this Channel Partner?')) return;
+  // Both actions run through manage-cp-account so a deactivated/deleted CP
+  // with a linked login is actually banned, not just hidden by a status
+  // flag -- the same gap that was just fixed for employees. Delete still
+  // hard-deletes the row (channel_partners has real RESTRICT foreign keys
+  // on commission/lead history, so the DB itself blocks deleting a CP with
+  // real history rather than silently corrupting it).
+  const handleDeleteCP = async (cp: ChannelPartner) => {
+    if (!window.confirm('Are you sure you want to permanently delete this Channel Partner? This also blocks their login immediately, if they have one.')) return;
     try {
-      const { error } = await supabase.from('channel_partners').delete().eq('id', cpId);
-      if (error) throw error;
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) {
+        throw new Error('Your login session has expired. Please sign out and sign back in, then try again.');
+      }
+      const { data: fnData, error: fnError } = await supabase.functions.invoke('manage-cp-account', {
+        body: { action: 'ban_and_delete', cp_id: cp.id, user_id: cp.user_id || undefined },
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (fnError) {
+        const detail = (fnError as any)?.context?.body ? await (fnError as any).context.text().catch(() => null) : null;
+        throw new Error(detail || fnError.message);
+      }
+      if (fnData?.error) throw new Error(fnData.error);
       setNotification({ type: 'success', message: 'Channel Partner deleted permanently.' });
       fetchData();
     } catch (err: any) {
@@ -430,18 +449,44 @@ export const ChannelPartners: React.FC = () => {
 
   const handleToggleStatus = async (cp: ChannelPartner) => {
     const nextStatus = cp.status === 'active' ? 'inactive' : 'active';
-    try {
-      const { error: updateErr } = await supabase
-        .from('channel_partners')
-        .update({ status: nextStatus, updated_at: new Date().toISOString() })
-        .eq('id', cp.id);
 
-      if (updateErr) throw updateErr;
+    if (!cp.user_id) {
+      // No linked login account to ban/unban -- just flip the status flag.
+      try {
+        const { error: updateErr } = await supabase
+          .from('channel_partners')
+          .update({ status: nextStatus, updated_at: new Date().toISOString() })
+          .eq('id', cp.id);
+        if (updateErr) throw updateErr;
+        setPartners(prev => prev.map(p => p.id === cp.id ? { ...p, status: nextStatus } : p));
+        setNotification({ type: 'success', message: `Channel Partner ${cp.cp_code || cp.partner_code} status is now ${nextStatus}.` });
+        setConfirmToggleCp(null);
+      } catch (err: any) {
+        setNotification({ type: 'error', message: err.message || 'Failed to update partner status.' });
+      }
+      return;
+    }
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) {
+        throw new Error('Your login session has expired. Please sign out and sign back in, then try again.');
+      }
+      const { data: fnData, error: fnError } = await supabase.functions.invoke('manage-cp-account', {
+        body: { action: nextStatus === 'inactive' ? 'ban_login' : 'unban_login', cp_id: cp.id, user_id: cp.user_id },
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (fnError) {
+        const detail = (fnError as any)?.context?.body ? await (fnError as any).context.text().catch(() => null) : null;
+        throw new Error(detail || fnError.message);
+      }
+      if (fnData?.error) throw new Error(fnData.error);
 
       setPartners(prev => prev.map(p => p.id === cp.id ? { ...p, status: nextStatus } : p));
       setNotification({
         type: 'success',
-        message: `Channel Partner ${cp.cp_code || cp.partner_code} status is now ${nextStatus}.`
+        message: nextStatus === 'inactive' ? 'Channel Partner deactivated — login blocked.' : 'Channel Partner reactivated — login restored.'
       });
       setConfirmToggleCp(null);
     } catch (err: any) {
@@ -1142,7 +1187,7 @@ export const ChannelPartners: React.FC = () => {
                               )}
                             {isSuperAdmin && (
                                 <button
-                                  onClick={() => handleDeleteCP(cp.id)}
+                                  onClick={() => handleDeleteCP(cp)}
                                   className="p-1 border border-slate-200 rounded-lg text-rose-500 hover:bg-rose-50 hover:border-rose-100 transition-all"
                                   title="Delete Channel Partner Permanently"
                                 >
