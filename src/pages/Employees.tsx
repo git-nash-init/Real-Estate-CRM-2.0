@@ -825,15 +825,51 @@ export const Employees: React.FC = () => {
     }
   };
 
-  // Toggle Activation Status
+  // Toggle Activation Status -- deactivating now bans the actual Supabase
+  // auth account (via manage-employee-account) rather than just flipping
+  // employment_status, which previously left a "deactivated" employee
+  // still able to log in and use the app normally. Unlike Offboard, this
+  // doesn't touch role/project assignments, so reactivating restores them
+  // exactly as they were.
   const handleToggleActivation = async (emp: Employee) => {
     const nextStatus = emp.employment_status?.toLowerCase() === 'active' ? 'inactive' : 'active';
+
+    if (!emp.user_id) {
+      // No linked login account to ban/unban -- just flip the status flag.
+      try {
+        const { error: updateError } = await supabase
+          .from('employees')
+          .update({ employment_status: nextStatus })
+          .eq('id', emp.id);
+        if (updateError) throw updateError;
+        setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, employment_status: nextStatus } : e));
+        if (selectedEmployee && selectedEmployee.id === emp.id) {
+          setSelectedEmployee(prev => prev ? { ...prev, employment_status: nextStatus } : null);
+        }
+        fetchAllEmployeesLite();
+        setNotification({ type: 'success', message: `Employee status changed to ${nextStatus.toUpperCase()}!` });
+      } catch (err: any) {
+        setNotification({ type: 'error', message: err.message || 'Failed to update employee status.' });
+      }
+      return;
+    }
+
     try {
-      const { error: updateError } = await supabase
-        .from('employees')
-        .update({ employment_status: nextStatus })
-        .eq('id', emp.id);
-      if (updateError) throw updateError;
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) {
+        throw new Error('Your login session has expired. Please sign out and sign back in, then try again.');
+      }
+
+      const { data: fnData, error: fnError } = await supabase.functions.invoke('manage-employee-account', {
+        body: { action: nextStatus === 'inactive' ? 'ban_login' : 'unban_login', employee_id: emp.id, user_id: emp.user_id },
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (fnError) {
+        const detail = (fnError as any)?.context?.body ? await (fnError as any).context.text().catch(() => null) : null;
+        throw new Error(detail || fnError.message);
+      }
+      if (fnData?.error) throw new Error(fnData.error);
 
       setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, employment_status: nextStatus } : e));
       if (selectedEmployee && selectedEmployee.id === emp.id) {
@@ -843,7 +879,7 @@ export const Employees: React.FC = () => {
 
       setNotification({
         type: 'success',
-        message: `Employee status changed to ${nextStatus.toUpperCase()}!`
+        message: nextStatus === 'inactive' ? 'Employee deactivated — login blocked.' : 'Employee reactivated — login restored.'
       });
     } catch (err: any) {
       console.error('Activation toggle error:', err);

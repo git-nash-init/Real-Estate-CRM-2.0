@@ -129,6 +129,70 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    if (action === "ban_login") {
+      // Deactivate is meant to be reversible -- suspend someone (leave,
+      // investigation, etc.) without wiping their role/project assignments
+      // the way offboard does, so reactivating puts them back exactly as
+      // they were. Previously the Deactivate toggle only flipped
+      // employment_status in the employees table and never touched the
+      // actual Supabase auth account, so a "deactivated" employee could
+      // still log in and use the app normally.
+      const { error: banError } = await adminClient.auth.admin.updateUserById(user_id, {
+        ban_duration: "876000h",
+      });
+      if (banError) {
+        return new Response(JSON.stringify({ error: banError.message }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const { error: empError } = await adminClient
+        .from("employees")
+        .update({ employment_status: "inactive" })
+        .eq("id", employee_id);
+      if (empError) {
+        await adminClient.auth.admin.updateUserById(user_id, { ban_duration: "none" });
+        return new Response(JSON.stringify({ error: empError.message }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (action === "unban_login") {
+      const { error: unbanError } = await adminClient.auth.admin.updateUserById(user_id, {
+        ban_duration: "none",
+      });
+      if (unbanError) {
+        return new Response(JSON.stringify({ error: unbanError.message }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const { error: empError } = await adminClient
+        .from("employees")
+        .update({ employment_status: "active" })
+        .eq("id", employee_id);
+      if (empError) {
+        return new Response(JSON.stringify({ error: empError.message }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     if (action === "reactivate") {
       const { error: unbanError } = await adminClient.auth.admin.updateUserById(user_id, {
         ban_duration: "none",
