@@ -28,6 +28,7 @@ interface Booking {
   created_at: string;
   lead_id: string | null;
   project_id: string | null;
+  tower_id?: string | null;
   booking_amount: number | null;
   consideration_amount: number | null;
   gst_amount: number | null;
