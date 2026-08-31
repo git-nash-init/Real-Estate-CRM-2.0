@@ -9,7 +9,7 @@ interface AuthContextType extends UserSession {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const fetchProfileAndRole = async (userId: string, email: string): Promise<{ profile: UserProfile | null; role: UserRole | null; assignedProjects: string[] }> => {
+const fetchProfileAndRole = async (userId: string, email: string): Promise<{ profile: UserProfile | null; role: UserRole | null; assignedProjects: string[]; profileResolved: boolean }> => {
   try {
     const profilePromise = supabase
       .from('user_profiles')
@@ -30,18 +30,40 @@ const fetchProfileAndRole = async (userId: string, email: string): Promise<{ pro
       .eq('is_active', true);
 
     // 2.5s safeguard timeout so database latency never hangs auth
-    const timeoutPromise = new Promise<{ timeout: true }>((resolve) =>
-      setTimeout(() => resolve({ timeout: true }), 2500)
+    const timeoutPromise = new Promise<{ timedOut: true }>((resolve) =>
+      setTimeout(() => resolve({ timedOut: true }), 2500)
     );
 
-    const [profileRes, userRoleRes, assignedProjectsRes] = await Promise.race([
+    const raceResult = await Promise.race([
       Promise.all([profilePromise, userRolePromise, assignedProjectsPromise]),
-      timeoutPromise.then(() => [{ data: null, error: null }, { data: null, error: null }, { data: null, error: null }]),
+      timeoutPromise,
     ]);
 
-    const profile = (profileRes as any)?.data;
-    const userRole = (userRoleRes as any)?.data;
-    const assignedProjectsData = (assignedProjectsRes as any)?.data || [];
+    // If the timeout fired first, we never actually read a profile row --
+    // profileResolved must be false so a status-based sign-out guard never
+    // acts on the fabricated 'active' fallback below.
+    if ((raceResult as any).timedOut) {
+      return {
+        profile: {
+          id: userId,
+          email: email,
+          full_name: null,
+          avatar_url: null,
+          status: 'active',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        role: null,
+        assignedProjects: [],
+        profileResolved: false,
+      };
+    }
+
+    const [profileRes, userRoleRes, assignedProjectsRes] = raceResult as any[];
+
+    const profile = profileRes?.data;
+    const userRole = userRoleRes?.data;
+    const assignedProjectsData = assignedProjectsRes?.data || [];
     const assignedProjects = assignedProjectsData.map((row: any) => row.project_id);
 
     let roleName: UserRole | null = null;
@@ -72,6 +94,7 @@ const fetchProfileAndRole = async (userId: string, email: string): Promise<{ pro
       profile: finalProfile,
       role: roleName,
       assignedProjects,
+      profileResolved: !!profile,
     };
   } catch (err) {
     console.error('Error in fetchProfileAndRole:', err);
@@ -87,9 +110,19 @@ const fetchProfileAndRole = async (userId: string, email: string): Promise<{ pro
       },
       role: null,
       assignedProjects: [],
+      profileResolved: false,
     };
   }
 };
+
+// True only when we actually read a profile row and it's not active --
+// never trips on the fabricated 'active' fallback fetchProfileAndRole
+// returns when its timeout/error path fires (profileResolved: false there).
+// The auth ban (Supabase Admin API, applied server-side when an employee is
+// offboarded) is the real security boundary that kills their session --
+// this is just the fast path that also signs out an already-open tab.
+const isDeactivated = (res: { profile: UserProfile | null; profileResolved: boolean }) =>
+  res.profileResolved && res.profile?.status !== 'active';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [sessionState, setSessionState] = useState<UserSession>(() => {
@@ -125,10 +158,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           { event: '*', schema: 'public', table: 'user_roles', filter: `user_id=eq.${userId}` },
           () => {
             // Refetch roles on any change
-            fetchProfileAndRole(userId, userEmail).then(({ profile, role, assignedProjects }) => {
-              if (mounted) {
-                setSessionState((prev) => ({ ...prev, profile, role, assignedProjects }));
-              }
+            fetchProfileAndRole(userId, userEmail).then((res) => {
+              if (!mounted) return;
+              if (isDeactivated(res)) { supabase.auth.signOut(); return; }
+              const { profile, role, assignedProjects } = res;
+              setSessionState((prev) => ({ ...prev, profile, role, assignedProjects }));
             });
           }
         )
@@ -137,10 +171,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           { event: '*', schema: 'public', table: 'user_project_assignments', filter: `user_id=eq.${userId}` },
           () => {
             // Refetch assigned projects on any change
-            fetchProfileAndRole(userId, userEmail).then(({ profile, role, assignedProjects }) => {
-              if (mounted) {
-                setSessionState((prev) => ({ ...prev, profile, role, assignedProjects }));
-              }
+            fetchProfileAndRole(userId, userEmail).then((res) => {
+              if (!mounted) return;
+              if (isDeactivated(res)) { supabase.auth.signOut(); return; }
+              const { profile, role, assignedProjects } = res;
+              setSessionState((prev) => ({ ...prev, profile, role, assignedProjects }));
             });
           }
         )
@@ -171,9 +206,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
 
         const userObj = { id: session.user.id, email: session.user.email };
-        const { profile, role, assignedProjects } = await fetchProfileAndRole(userObj.id, userObj.email || '');
+        const res = await fetchProfileAndRole(userObj.id, userObj.email || '');
 
         if (mounted) {
+          if (isDeactivated(res)) {
+            await supabase.auth.signOut();
+            setSessionState({ user: null, profile: null, role: null, assignedProjects: [], loading: false });
+            return;
+          }
+          const { profile, role, assignedProjects } = res;
           setSessionState({
             user: userObj,
             profile,
@@ -225,16 +266,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           loading: false,
         }));
 
-        fetchProfileAndRole(userObj.id, userObj.email || '').then(({ profile, role, assignedProjects }) => {
-          if (mounted) {
-            setSessionState((prev) => ({
-              ...prev,
-              profile,
-              role,
-              assignedProjects,
-            }));
-            setupRealtime(userObj.id, userObj.email || '');
+        fetchProfileAndRole(userObj.id, userObj.email || '').then((res) => {
+          if (!mounted) return;
+          if (isDeactivated(res)) {
+            supabase.auth.signOut();
+            setSessionState({ user: null, profile: null, role: null, assignedProjects: [], loading: false });
+            return;
           }
+          const { profile, role, assignedProjects } = res;
+          setSessionState((prev) => ({
+            ...prev,
+            profile,
+            role,
+            assignedProjects,
+          }));
+          setupRealtime(userObj.id, userObj.email || '');
         });
       }
     });
@@ -259,14 +305,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         assignedProjects: [],
         loading: false,
       });
-      fetchProfileAndRole(userObj.id, userObj.email || '').then(({ profile, role, assignedProjects }) => {
-        setSessionState((prev) => ({
-          ...prev,
-          profile,
-          role,
-          assignedProjects,
-        }));
-      });
+      const res = await fetchProfileAndRole(userObj.id, userObj.email || '');
+      if (isDeactivated(res)) {
+        await supabase.auth.signOut();
+        setSessionState({ user: null, profile: null, role: null, assignedProjects: [], loading: false });
+        return { error: { message: 'This account has been deactivated. Contact an admin.' } };
+      }
+      const { profile, role, assignedProjects } = res;
+      setSessionState((prev) => ({
+        ...prev,
+        profile,
+        role,
+        assignedProjects,
+      }));
     }
     return { error };
   };

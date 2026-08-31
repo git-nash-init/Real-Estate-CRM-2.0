@@ -72,13 +72,15 @@ export const AppLayout: React.FC = () => {
     { name: 'Bookings', path: '/bookings', icon: CalendarCheck },
     // Presales gets no access to Payments at all, per the client -- not
     // just the create button.
-    { name: 'Payments', path: '/payments', icon: CreditCard, hiddenForRoles: ['presales'] },
+    // Receptionist also excluded per the client -- receptionist should not
+    // have access to Payments, CP Outreach, or Marketing at all.
+    { name: 'Payments', path: '/payments', icon: CreditCard, hiddenForRoles: ['presales', 'receptionist'] },
     { name: 'Channel Partners', path: '/channel-partners', icon: Users, hiddenForRoles: ['channel_partner'] },
-    // Closing Manager and Presales excluded per the client -- CP Outreach
-    // is a sourcing-side activity (logging field meetings with Channel
-    // Partners), not part of either role's workflow.
-    { name: 'CP Outreach', path: '/cp-outreach', icon: Handshake, hiddenForRoles: ['channel_partner', 'closing_manager', 'presales'] },
-    { name: 'Marketing', path: '/marketing', icon: Megaphone, hiddenForRoles: ['channel_partner'] },
+    // Closing Manager, Presales, and Receptionist excluded per the client --
+    // CP Outreach is a sourcing-side activity (logging field meetings with
+    // Channel Partners), not part of any of these roles' workflows.
+    { name: 'CP Outreach', path: '/cp-outreach', icon: Handshake, hiddenForRoles: ['channel_partner', 'closing_manager', 'presales', 'receptionist'] },
+    { name: 'Marketing', path: '/marketing', icon: Megaphone, hiddenForRoles: ['channel_partner', 'receptionist'] },
     { name: 'Employees', path: '/employees', icon: Briefcase, allowedRoles: ['super_admin'] },
     { name: 'Attendance', path: '/attendance', icon: ClipboardCheck, hiddenForRoles: ['channel_partner'] },
     { name: 'Tasks', path: '/tasks', icon: CheckSquare, hiddenForRoles: ['channel_partner'] },

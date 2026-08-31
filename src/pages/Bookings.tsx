@@ -122,7 +122,7 @@ export const Bookings: React.FC = () => {
   const [floorsMap, setFloorsMap] = useState<Map<string, string>>(new Map());
   // Cumulative % of the Agreement Value currently "released" for payment,
   // per project -- set by super_admin via project_payment_milestones.
-  const [projectMilestonePercent, setProjectMilestonePercent] = useState<Map<string, number>>(new Map());
+  const [towerMilestonePercent, setTowerMilestonePercent] = useState<Map<string, number>>(new Map());
   // Per booking, whether at least one payment has already been recorded --
   // drives whether GST/Stamp Duty/Registration/Other Charges are due yet.
   const [bookingHasPaymentMap, setBookingHasPaymentMap] = useState<Map<string, boolean>>(new Map());
@@ -395,7 +395,7 @@ export const Bookings: React.FC = () => {
       // hasAnyPayment=true reflects "this transaction is or follows the
       // first payment", which is always the case once a payment is being
       // recorded at all.
-      const milestonePercent = projectMilestonePercent.get(dbBooking.project_id || '') || 0;
+      const milestonePercent = towerMilestonePercent.get(dbBooking.tower_id || '') || 0;
       const currentlyDueTotal = computeCurrentlyDueTotal(dbBooking, milestonePercent, true);
 
       if (activeTotal + amt > currentlyDueTotal) {
@@ -573,22 +573,23 @@ export const Bookings: React.FC = () => {
         setFloorsMap(new Map(floorData.map(f => [f.id, f.floor_name || `Floor ${f.floor_number}`])));
       }
 
-      // 7. Fetch Project Payment Milestones -- cumulative % released per project
+      // 7. Fetch Project Payment Milestones -- cumulative % released per tower
       const { data: milestoneData, error: milestoneError } = await supabase
         .from('project_payment_milestones')
-        .select('project_id, percentage');
+        .select('tower_id, percentage');
       if (milestoneError) {
         console.error('Supabase Payment Milestones API Error:', milestoneError.message);
       } else if (milestoneData) {
-        const byProject = new Map<string, number[]>();
+        const byTower = new Map<string, number[]>();
         milestoneData.forEach(m => {
-          const arr = byProject.get(m.project_id) || [];
+          if (!m.tower_id) return; // skip old project-level ones
+          const arr = byTower.get(m.tower_id) || [];
           arr.push(m.percentage);
-          byProject.set(m.project_id, arr);
+          byTower.set(m.tower_id, arr);
         });
         const percentMap = new Map<string, number>();
-        byProject.forEach((percentages, projectId) => percentMap.set(projectId, totalMilestonePercentage(percentages)));
-        setProjectMilestonePercent(percentMap);
+        byTower.forEach((percentages, towerId) => percentMap.set(towerId, totalMilestonePercentage(percentages)));
+        setTowerMilestonePercent(percentMap);
       }
 
       // 8. Which bookings already have at least one recorded payment --
@@ -1480,7 +1481,7 @@ export const Bookings: React.FC = () => {
                       const unit = inventoryMap.get(b.inventory_id || '');
                       const baseAmt = b.consideration_amount !== null ? b.consideration_amount : (b.booking_amount || 0);
                       const totalPayable = b.total_payable_amount !== null ? b.total_payable_amount : (b.booking_amount || 0);
-                      const bMilestonePercent = projectMilestonePercent.get(b.project_id || '') || 0;
+                      const bMilestonePercent = towerMilestonePercent.get(b.tower_id || '') || 0;
                       const bCurrentlyDue = computeCurrentlyDueTotal(b, bMilestonePercent, !!bookingHasPaymentMap.get(b.id));
                       return (
                         <tr key={b.id} className="hover:bg-slate-50/50 transition-colors">
@@ -1886,7 +1887,7 @@ export const Bookings: React.FC = () => {
                   // Currently due isn't the full booking value -- it's staged by
                   // the project's released payment percentage, plus
                   // first-payment/possession-triggered charges.
-                  const milestonePercent = projectMilestonePercent.get(selectedBooking.project_id || '') || 0;
+                  const milestonePercent = towerMilestonePercent.get(selectedBooking.tower_id || '') || 0;
                   const currentlyDueTotal = computeCurrentlyDueTotal(selectedBooking, milestonePercent, totalPaid > 0);
                   const outstanding = Math.max(0, currentlyDueTotal - totalPaid);
 

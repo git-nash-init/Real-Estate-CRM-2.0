@@ -79,13 +79,14 @@ function App() {
             <Route path="projects" element={<ProtectedRoute excludedRoles={['channel_partner']}><Projects /></ProtectedRoute>} />
             <Route path="inventory" element={<ProtectedRoute excludedRoles={['channel_partner']}><Inventory /></ProtectedRoute>} />
             <Route path="bookings" element={<Bookings />} />
-            {/* Presales has no access to Payments at all per the client --
-                matches the Payments nav item's hiddenForRoles. */}
-            <Route path="payments" element={<ProtectedRoute excludedRoles={['presales']}><Payments /></ProtectedRoute>} />
+            {/* Presales and Receptionist have no access to Payments at all
+                per the client -- matches the Payments nav item's
+                hiddenForRoles. */}
+            <Route path="payments" element={<ProtectedRoute excludedRoles={['presales', 'receptionist']}><Payments /></ProtectedRoute>} />
             <Route path="channel-partners" element={<ProtectedRoute excludedRoles={['channel_partner']}><ChannelPartners /></ProtectedRoute>} />
             <Route path="channel-partners/:id" element={<ProtectedRoute excludedRoles={['channel_partner']}><ChannelPartnerDetails /></ProtectedRoute>} />
-            <Route path="cp-outreach" element={<ProtectedRoute excludedRoles={['channel_partner', 'closing_manager', 'presales']}><CPOutreach /></ProtectedRoute>} />
-            <Route path="marketing" element={<ProtectedRoute excludedRoles={['channel_partner']}><Marketing /></ProtectedRoute>} />
+            <Route path="cp-outreach" element={<ProtectedRoute excludedRoles={['channel_partner', 'closing_manager', 'presales', 'receptionist']}><CPOutreach /></ProtectedRoute>} />
+            <Route path="marketing" element={<ProtectedRoute excludedRoles={['channel_partner', 'receptionist']}><Marketing /></ProtectedRoute>} />
             {/* Account/credential management — restricted to super_admin
                 only per the client's explicit request: creating logins,
                 sharing credentials, and activating/deactivating accounts

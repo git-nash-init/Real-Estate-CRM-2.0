@@ -118,8 +118,9 @@ export const Projects: React.FC = () => {
   // super admin releases for this project (see src/utils/bookingDue.ts).
   // Adding one immediately makes that much more of every booking's
   // Agreement Value due, across every booking in this project.
-  const [milestones, setMilestones] = useState<{ id: string; percentage: number; label: string | null; created_at: string }[]>([]);
+  const [milestones, setMilestones] = useState<{ id: string; percentage: number; label: string | null; created_at: string; tower_id?: string }[]>([]);
   const [milestonesLoading, setMilestonesLoading] = useState(false);
+  const [selectedMilestoneTowerId, setSelectedMilestoneTowerId] = useState<string>('');
   const [newMilestonePercent, setNewMilestonePercent] = useState('');
   const [newMilestoneLabel, setNewMilestoneLabel] = useState('');
   const [milestoneError, setMilestoneError] = useState<string | null>(null);
@@ -130,7 +131,7 @@ export const Projects: React.FC = () => {
     try {
       const { data, error } = await supabase
         .from('project_payment_milestones')
-        .select('id, percentage, label, created_at')
+        .select('id, percentage, label, created_at, tower_id')
         .eq('project_id', projectId)
         .order('created_at', { ascending: true });
       if (error) throw error;
@@ -144,12 +145,17 @@ export const Projects: React.FC = () => {
 
   const handleAddMilestone = async () => {
     if (!selectedProjectId) return;
+    if (!selectedMilestoneTowerId) {
+      setMilestoneError('Please select a tower first.');
+      return;
+    }
     const pct = parseFloat(newMilestonePercent);
     if (!pct || pct <= 0 || pct > 100) {
       setMilestoneError('Enter a percentage between 1 and 100.');
       return;
     }
-    const currentTotal = milestones.reduce((sum, m) => sum + m.percentage, 0);
+    const towerMilestones = milestones.filter(m => m.tower_id === selectedMilestoneTowerId);
+    const currentTotal = towerMilestones.reduce((sum, m) => sum + m.percentage, 0);
     if (currentTotal + pct > 100) {
       setMilestoneError(`This would bring the total released to ${(currentTotal + pct).toFixed(2)}%, over 100%. Only ${(100 - currentTotal).toFixed(2)}% remains.`);
       return;
@@ -160,6 +166,7 @@ export const Projects: React.FC = () => {
       const { data: { user } } = await supabase.auth.getUser();
       const { error } = await supabase.from('project_payment_milestones').insert([{
         project_id: selectedProjectId,
+        tower_id: selectedMilestoneTowerId,
         percentage: pct,
         label: newMilestoneLabel.trim() || null,
         created_by: user?.id || null,
@@ -1520,81 +1527,101 @@ export const Projects: React.FC = () => {
                 <h3 className="text-base font-bold text-slate-900">Payment Milestones</h3>
                 <p className="text-slate-500 text-sm">
                   Agreement Value is collected in staged percentages, not all at once. Adding a percentage
-                  here immediately increases the currently-due amount on every booking in this project.
+                  here immediately increases the currently-due amount on every booking in the selected tower.
                   GST/Stamp Duty/Registration/Other Charges become due at each booking's first payment;
                   Maintenance/Parking/Development Charges become due once possession is marked given.
                 </p>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                  <span className="text-sm font-semibold text-slate-700">Total Released</span>
-                  <span className={`text-lg font-extrabold ${milestones.reduce((s, m) => s + m.percentage, 0) >= 100 ? 'text-emerald-600' : 'text-indigo-600'}`}>
-                    {milestones.reduce((sum, m) => sum + m.percentage, 0).toFixed(2)}%
-                  </span>
-                </div>
-
-                {milestoneError && (
-                  <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl p-3 mb-4">{milestoneError}</div>
-                )}
-
-                {milestonesLoading ? (
-                  <p className="text-xs text-slate-400 py-6 text-center">Loading milestones...</p>
-                ) : milestones.length === 0 ? (
-                  <p className="text-xs text-slate-400 py-6 text-center italic">No payment milestones added yet -- 0% of the Agreement Value is currently due on any booking here.</p>
-                ) : (
-                  <div className="space-y-2 mb-4">
-                    {milestones.map(m => (
-                      <div key={m.id} className="flex items-center justify-between px-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl">
-                        <div>
-                          <span className="font-bold text-slate-800 text-sm">{m.percentage}%</span>
-                          {m.label && <span className="text-slate-500 text-xs ml-2">{m.label}</span>}
-                          <span className="text-slate-350 text-xxs ml-2">{new Date(m.created_at).toLocaleDateString('en-IN')}</span>
-                        </div>
-                        <button
-                          onClick={() => handleDeleteMilestone(m.id)}
-                          className="text-rose-500 hover:text-rose-700 text-xs font-semibold"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="border-t border-slate-100 pt-4 flex items-end gap-3">
-                  <div className="w-28">
-                    <label className="block text-xxs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Percentage *</label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="100"
-                      step="0.01"
-                      placeholder="e.g. 35"
-                      value={newMilestonePercent}
-                      onChange={(e) => setNewMilestonePercent(e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-sm focus:bg-white focus:outline-none"
-                    />
-                  </div>
-                  <div className="flex-1">
-                    <label className="block text-xxs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Label (optional)</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Plinth completion"
-                      value={newMilestoneLabel}
-                      onChange={(e) => setNewMilestoneLabel(e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-sm focus:bg-white focus:outline-none"
-                    />
-                  </div>
-                  <button
-                    onClick={handleAddMilestone}
-                    disabled={milestoneSubmitting || !newMilestonePercent}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold disabled:opacity-50"
-                  >
-                    {milestoneSubmitting ? 'Adding...' : 'Add Milestone'}
-                  </button>
-                </div>
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm mb-4">
+                <label className="block text-sm font-bold text-slate-700 uppercase tracking-wider mb-2">Select Tower</label>
+                <select
+                  value={selectedMilestoneTowerId}
+                  onChange={(e) => setSelectedMilestoneTowerId(e.target.value)}
+                  className="w-full sm:w-64 px-4 py-2 border border-slate-300 rounded-lg text-sm bg-slate-50 focus:bg-white"
+                >
+                  <option value="">-- Select a Tower --</option>
+                  {towers.filter(t => t.project_id === selectedProjectId).map(t => (
+                    <option key={t.id} value={t.id}>{t.tower_name}</option>
+                  ))}
+                </select>
               </div>
+
+              {selectedMilestoneTowerId ? (
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <span className="text-sm font-semibold text-slate-700">Total Released for Tower</span>
+                    <span className={`text-lg font-extrabold ${milestones.filter(m => m.tower_id === selectedMilestoneTowerId).reduce((s, m) => s + m.percentage, 0) >= 100 ? 'text-emerald-600' : 'text-indigo-600'}`}>
+                      {milestones.filter(m => m.tower_id === selectedMilestoneTowerId).reduce((sum, m) => sum + m.percentage, 0).toFixed(2)}%
+                    </span>
+                  </div>
+
+                  {milestoneError && (
+                    <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl p-3 mb-4">{milestoneError}</div>
+                  )}
+
+                  {milestonesLoading ? (
+                    <p className="text-xs text-slate-400 py-6 text-center">Loading milestones...</p>
+                  ) : milestones.filter(m => m.tower_id === selectedMilestoneTowerId).length === 0 ? (
+                    <p className="text-xs text-slate-400 py-6 text-center italic">No payment milestones added yet -- 0% of the Agreement Value is currently due on any booking here.</p>
+                  ) : (
+                    <div className="space-y-2 mb-4">
+                      {milestones.filter(m => m.tower_id === selectedMilestoneTowerId).map(m => (
+                        <div key={m.id} className="flex items-center justify-between px-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl">
+                          <div>
+                            <span className="font-bold text-slate-800 text-sm">{m.percentage}%</span>
+                            {m.label && <span className="text-slate-500 text-xs ml-2">{m.label}</span>}
+                            <span className="text-slate-350 text-xxs ml-2">{new Date(m.created_at).toLocaleDateString('en-IN')}</span>
+                          </div>
+                          <button
+                            onClick={() => handleDeleteMilestone(m.id)}
+                            className="text-rose-500 hover:text-rose-700 text-xs font-semibold"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="border-t border-slate-100 pt-4 flex items-end gap-3">
+                    <div className="w-28">
+                      <label className="block text-xxs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Percentage *</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="100"
+                        step="0.01"
+                        placeholder="e.g. 35"
+                        value={newMilestonePercent}
+                        onChange={(e) => setNewMilestonePercent(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-sm focus:bg-white focus:outline-none"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="block text-xxs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Label (optional)</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Plinth completion"
+                        value={newMilestoneLabel}
+                        onChange={(e) => setNewMilestoneLabel(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-sm focus:bg-white focus:outline-none"
+                      />
+                    </div>
+                    <button
+                      onClick={handleAddMilestone}
+                      disabled={milestoneSubmitting || !newMilestonePercent}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold disabled:opacity-50"
+                    >
+                      {milestoneSubmitting ? 'Adding...' : 'Add Milestone'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-8 text-center text-slate-500 text-sm">
+                  Please select a tower above to view and manage its payment milestones.
+                </div>
+              )}
             </div>
           )}
         </>

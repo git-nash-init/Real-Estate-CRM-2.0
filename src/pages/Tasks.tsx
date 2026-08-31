@@ -98,11 +98,15 @@ export const Tasks: React.FC = () => {
     }
 
     try {
-      const { data, error } = await supabase.from('user_profiles').select('id, full_name');
+      const { data, error } = await supabase.from('user_profiles').select('id, full_name, status');
       if (error) {
         reportQueryError('Tasks: users', error);
       } else {
-        setUsers(data || []);
+        // usersMap stays unfiltered -- it resolves a task's stored
+        // assigned_to/assigned_by id to a name for display, and must keep
+        // doing that correctly even after someone is offboarded. `users`
+        // is the Assign To picker source, so it excludes them.
+        setUsers((data || []).filter(u => u.status === 'active'));
         setUsersMap(new Map((data || []).map(u => [u.id, u.full_name || 'Unnamed'])));
       }
     } catch (err) {
@@ -149,7 +153,12 @@ export const Tasks: React.FC = () => {
   const resetForm = () => {
     setTitle('');
     setDescription('');
-    setAssignedTo('');
+    // Anyone who can't assign to others gets a disabled Assign To select
+    // showing only themselves -- but a disabled <select> never fires
+    // onChange, so leaving this '' meant their tasks always saved as
+    // assigned_to: null (silently unassigned, not even self-assigned).
+    // Default to self for those roles instead.
+    setAssignedTo(canAssignTasksToOthers(role) ? '' : (user?.id || ''));
     setDueDate('');
     setPriority('normal');
     setCreateError(null);

@@ -267,7 +267,7 @@ const ChangePasswordPanel: React.FC = () => {
 
 export const Settings: React.FC = () => {
   const { role } = useAuth();
-  const canUseWhatsApp = role === 'super_admin' || role === 'closing_manager' || role === 'closing_manager_tl';
+  const canUseWhatsApp = role === 'super_admin' || role === 'closing_manager' || role === 'closing_manager_tl' || role === 'presales' || role === 'presales_tl';
 
   return (
     <div className="space-y-6">

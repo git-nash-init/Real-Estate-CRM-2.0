@@ -50,6 +50,7 @@ const leaveStatusColors: Record<string, string> = {
 export const Attendance: React.FC = () => {
   const { user, role } = useAuth();
   const isSuperAdmin = role === 'super_admin';
+  const canViewTeam = isSuperAdmin || role === 'site_head' || role === 'receptionist';
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | null>(null);
   const [currentEmployeeName, setCurrentEmployeeName] = useState<string>('');
 
@@ -62,6 +63,14 @@ export const Attendance: React.FC = () => {
   const [allLeaveRequests, setAllLeaveRequests] = useState<(LeaveRequest & { employee_name?: string })[]>([]);
 
   const [tab, setTab] = useState<'my' | 'team' | 'leave'>('my');
+  const [filterEmployeeId, setFilterEmployeeId] = useState<string>('');
+  const [filterDateFrom, setFilterDateFrom] = useState<string>('');
+  const [filterDateTo, setFilterDateTo] = useState<string>('');
+  const [filterProjectId, setFilterProjectId] = useState<string>('');
+  const [filterNumber, setFilterNumber] = useState<string>('');
+  const [projectsList, setProjectsList] = useState<{id: string, name: string}[]>([]);
+  const [employeeProjectMap, setEmployeeProjectMap] = useState<Map<string, Set<string>>>(new Map());
+  const [employeePhoneMap, setEmployeePhoneMap] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [gettingLocation, setGettingLocation] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -96,9 +105,37 @@ export const Attendance: React.FC = () => {
     }
 
     try {
-      const { data, error } = await supabase.from('employees').select('id, first_name, last_name');
+      const { data, error } = await supabase.from('employees').select('id, first_name, last_name, user_id, mobile, whatsapp_number');
       if (error) reportQueryError('Attendance: employees', error);
-      else setEmployeesMap(new Map((data || []).map(e => [e.id, [e.first_name, e.last_name].filter(Boolean).join(' ')])));
+      else {
+        setEmployeesMap(new Map((data || []).map(e => [e.id, [e.first_name, e.last_name].filter(Boolean).join(' ')])));
+      const empProjectMap = new Map<string, Set<string>>();
+      const empPhoneMap = new Map<string, string>();
+      const userToEmp = new Map<string, string>();
+
+      (data || []).forEach(e => {
+        if (e.user_id) userToEmp.set(e.user_id, e.id);
+        const phones = [e.mobile, e.whatsapp_number].filter(Boolean).join(' ').toLowerCase();
+        empPhoneMap.set(e.id, phones);
+      });
+      setEmployeePhoneMap(empPhoneMap);
+
+      const { data: assignments } = await supabase.from('user_project_assignments').select('user_id, project_id').eq('is_active', true);
+      if (assignments) {
+        assignments.forEach(a => {
+          const empId = userToEmp.get(a.user_id);
+          if (empId) {
+            if (!empProjectMap.has(empId)) empProjectMap.set(empId, new Set());
+            empProjectMap.get(empId)!.add(a.project_id);
+          }
+        });
+      }
+      setEmployeeProjectMap(empProjectMap);
+
+      const { data: projs } = await supabase.from('projects').select('id, project_name');
+      if (projs) setProjectsList(projs.map(p => ({ id: p.id, name: p.project_name })));
+
+      }
     } catch (err) {
       reportQueryError('Attendance: employees', err);
     }
@@ -278,6 +315,21 @@ export const Attendance: React.FC = () => {
     else await fetchData();
   };
 
+  const filteredTeamAttendance = teamAttendance.filter(row => {
+    if (filterEmployeeId && row.employee_id !== filterEmployeeId) return false;
+    if (filterDateFrom && row.attendance_date < filterDateFrom) return false;
+    if (filterDateTo && row.attendance_date > filterDateTo) return false;
+    if (filterProjectId) {
+      const pSet = employeeProjectMap.get(row.employee_id);
+      if (!pSet || !pSet.has(filterProjectId)) return false;
+    }
+    if (filterNumber) {
+      const phones = employeePhoneMap.get(row.employee_id);
+      if (!phones || !phones.includes(filterNumber.toLowerCase())) return false;
+    }
+    return true;
+  });
+
   const handleReviewLeave = async (id: string, status: 'approved' | 'rejected') => {
     const { error } = await supabase
       .from('leave_requests')
@@ -285,6 +337,26 @@ export const Attendance: React.FC = () => {
       .eq('id', id);
     if (error) reportQueryError('Attendance: review leave', error);
     else await fetchData();
+  };
+
+  const handleDeleteLeaveRequest = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this leave request?')) return;
+    const { error } = await supabase.from('leave_requests').delete().eq('id', id);
+    if (error) reportQueryError('Attendance: delete leave request', error);
+    else {
+      setNotification({ type: 'success', message: 'Leave request deleted.' });
+      await fetchData();
+    }
+  };
+
+  const handleDeleteAttendance = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this attendance record?')) return;
+    const { error } = await supabase.from('attendance').delete().eq('id', id);
+    if (error) reportQueryError('Attendance: delete record', error);
+    else {
+      setNotification({ type: 'success', message: 'Attendance record deleted.' });
+      await fetchData();
+    }
   };
 
   const handleExport = (rows: AttendanceRow[], filename: string) => {
@@ -388,7 +460,9 @@ export const Attendance: React.FC = () => {
       )}
 
       <div className="flex rounded-xl border border-slate-200 overflow-hidden w-fit">
-        {([['my', 'My Attendance'], ['team', 'Team'], ['leave', 'Leave Requests']] as const).map(([value, label]) => (
+        {([['my', 'My Attendance'], ['team', 'Team'], ['leave', 'Leave Requests']] as const)
+          .filter(([value]) => value === 'my' || canViewTeam)
+          .map(([value, label]) => (
           <button
             key={value}
             onClick={() => setTab(value)}
@@ -441,14 +515,61 @@ export const Attendance: React.FC = () => {
 
       {tab === 'team' && (
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+          <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2"><Users className="h-4 w-4 text-indigo-600" /> Team Attendance</h3>
-            <button
-              onClick={() => handleExport(teamAttendance, 'team_attendance.csv')}
-              className="flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:underline"
-            >
-              <Download className="h-3.5 w-3.5" /> Export CSV
-            </button>
+            
+            <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+              <select
+                value={filterProjectId}
+                onChange={(e) => setFilterProjectId(e.target.value)}
+                className="w-full sm:w-40 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white"
+              >
+                <option value="">All Projects</option>
+                {projectsList.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+
+              <select
+                value={filterEmployeeId}
+                onChange={(e) => setFilterEmployeeId(e.target.value)}
+                className="w-full sm:w-40 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white"
+              >
+                <option value="">All Employees</option>
+                {Array.from(employeesMap.entries()).map(([id, name]) => (
+                  <option key={id} value={id}>{name}</option>
+                ))}
+              </select>
+
+              <input
+                type="text"
+                placeholder="Phone No"
+                value={filterNumber}
+                onChange={(e) => setFilterNumber(e.target.value)}
+                className="w-full sm:w-32 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white"
+              />
+              
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <input
+                  type="date"
+                  value={filterDateFrom}
+                  onChange={(e) => setFilterDateFrom(e.target.value)}
+                  className="w-full sm:w-36 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white"
+                />
+                <span className="text-slate-400 text-xs font-medium">to</span>
+                <input
+                  type="date"
+                  value={filterDateTo}
+                  onChange={(e) => setFilterDateTo(e.target.value)}
+                  className="w-full sm:w-36 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white"
+                />
+              </div>
+
+              <button
+                onClick={() => handleExport(filteredTeamAttendance, 'team_attendance.csv')}
+                className="flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:underline shrink-0"
+              >
+                <Download className="h-3.5 w-3.5" /> Export CSV
+              </button>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-sm">
@@ -459,10 +580,11 @@ export const Attendance: React.FC = () => {
                   <th className="py-3 px-6">Check In</th>
                   <th className="py-3 px-6">Check Out</th>
                   <th className="py-3 px-6">Status</th>
+                  {isSuperAdmin && <th className="py-3 px-6">Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {teamAttendance.length > 0 ? teamAttendance.map(r => (
+                {filteredTeamAttendance.length > 0 ? filteredTeamAttendance.map(r => (
                   <tr key={r.id}>
                     <td className="py-3 px-6 font-semibold text-slate-800">{employeesMap.get(r.employee_id) || '—'}</td>
                     <td className="py-3 px-6 text-slate-600">{new Date(r.attendance_date).toLocaleDateString('en-IN')}</td>
@@ -471,9 +593,14 @@ export const Attendance: React.FC = () => {
                     <td className="py-3 px-6">
                       <span className="inline-flex px-2 py-0.5 rounded-full text-xxs font-semibold bg-indigo-50 text-indigo-700 capitalize">{r.status}</span>
                     </td>
+                    {isSuperAdmin && (
+                      <td className="py-3 px-6">
+                        <button onClick={() => handleDeleteAttendance(r.id)} className="text-xxs text-slate-400 hover:text-rose-600 font-semibold hover:underline">Delete</button>
+                      </td>
+                    )}
                   </tr>
                 )) : (
-                  <tr><td colSpan={5} className="py-10 text-center text-slate-400 italic">No team attendance records.</td></tr>
+                  <tr><td colSpan={isSuperAdmin ? 6 : 5} className="py-10 text-center text-slate-400 italic">No team attendance records match the filters.</td></tr>
                 )}
               </tbody>
             </table>
@@ -558,6 +685,7 @@ export const Attendance: React.FC = () => {
                               <button onClick={() => handleReviewLeave(lr.id, 'rejected')} className="text-xxs text-rose-600 font-semibold hover:underline">Reject</button>
                             </div>
                           )}
+                          <button onClick={() => handleDeleteLeaveRequest(lr.id)} className="ml-2 text-xxs text-slate-400 hover:text-rose-600 font-semibold hover:underline border-l border-slate-200 pl-2">Delete</button>
                           {lr.status === 'pending' && lr.employee_id === currentEmployeeId && (
                             <span className="text-xxs text-slate-400 italic">Your own request — another Super Admin must review it</span>
                           )}

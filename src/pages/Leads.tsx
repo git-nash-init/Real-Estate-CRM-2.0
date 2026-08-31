@@ -921,44 +921,75 @@ export const Leads: React.FC = () => {
         insertedLead = data;
       }
 
-      // Channel Partner lead claim: 45-day window + verification code.
-      // Non-fatal if this fails — the lead itself is already saved; the CP
-      // attribution/commission tracking is a secondary record. Only on
-      // creation — editing an existing lead's CP attribution afterward
-      // doesn't re-trigger a new claim/verification code.
-      if (!editingLead && selectedChannelPartnerId && insertedLead?.id) {
-        const verificationCode = Math.random().toString(36).slice(2, 8).toUpperCase();
-        const claimExpiresAt = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString();
-        const { data: claimRow, error: claimErr } = await supabase
-          .from('cp_leads')
-          .insert([{
-            cp_id: selectedChannelPartnerId,
-            lead_id: insertedLead.id,
-            project_id: selectedProjectId || null,
-            status: 'pending',
-            claim_expires_at: claimExpiresAt,
-            verification_code: verificationCode,
-          }])
-          .select('id')
-          .single();
-        if (claimErr) {
-          reportQueryError('Leads: channel partner claim record', claimErr);
-        } else if (mobile.trim()) {
-          // Send the verification code to the CLIENT (the lead), not the
-          // CP — they show it at site visit to confirm the referral. Enqueued
-          // into whatsapp_outbox; the standalone gateway (whatsapp-gateway/)
-          // picks it up and sends it, throttled.
+      // Send Welcome Message for all new leads
+      if (!editingLead && insertedLead?.id) {
+        const projectNameStr = selectedProjectId ? (projectMap.get(selectedProjectId) || 'our project') : 'our project';
+        const welcomeMessage = `Dear ${customerName.trim()}, Thank you for visiting our site!\nWe truly appreciate your valuable time and interest in ${projectNameStr}.`;
+        
+        let cpClaimId = null;
+        let cpMobile = null;
+
+        if (selectedChannelPartnerId) {
+          const verificationCode = Math.random().toString(36).slice(2, 8).toUpperCase();
+          const claimExpiresAt = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString();
+          
+          // Get CP mobile
+          const { data: cpData } = await supabase.from('channel_partners').select('mobile').eq('id', selectedChannelPartnerId).single();
+          if (cpData && cpData.mobile) {
+             cpMobile = cpData.mobile.trim();
+          }
+
+          const { data: claimRow, error: claimErr } = await supabase
+            .from('cp_leads')
+            .insert([{
+              cp_id: selectedChannelPartnerId,
+              lead_id: insertedLead.id,
+              project_id: selectedProjectId || null,
+              status: 'pending',
+              claim_expires_at: claimExpiresAt,
+              verification_code: verificationCode,
+            }])
+            .select('id')
+            .single();
+          
+          if (claimErr) {
+            reportQueryError('Leads: channel partner claim record', claimErr);
+          } else {
+            cpClaimId = claimRow?.id;
+          }
+        }
+
+        const outboxRows = [];
+        
+        if (mobile.trim()) {
+           outboxRows.push({
+              to_phone: mobile.trim(),
+              message: welcomeMessage,
+              lead_id: insertedLead.id,
+              cp_lead_id: cpClaimId || null,
+              status: 'queued',
+              created_by: user?.id || null
+           });
+        }
+        
+        if (cpMobile) {
+           outboxRows.push({
+              to_phone: cpMobile,
+              message: welcomeMessage,
+              lead_id: insertedLead.id,
+              cp_lead_id: cpClaimId || null,
+              status: 'queued',
+              created_by: user?.id || null
+           });
+        }
+
+        if (outboxRows.length > 0) {
           const { error: outboxErr } = await supabase
             .from('whatsapp_outbox')
-            .insert([{
-              to_phone: mobile.trim(),
-              message: `Thank you for your interest! Your reference code is ${verificationCode}. Please share this code with our team during your site visit.`,
-              lead_id: insertedLead.id,
-              cp_lead_id: claimRow?.id || null,
-              status: 'queued',
-            }]);
+            .insert(outboxRows);
+          
           if (outboxErr) {
-            reportQueryError('Leads: verification code WhatsApp send', outboxErr);
+            reportQueryError('Leads: welcome WhatsApp send', outboxErr);
           }
         }
       }

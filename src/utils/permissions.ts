@@ -150,8 +150,8 @@ export const canUpdateBulkUploadLeadStatus = (
 };
 
 // A8: Tasks
-export const canAssignTasksToOthers = (role: Role) => 
-  ['super_admin', 'site_head', 'sourcing_manager_tl', 'presales_tl', 'closing_manager_tl'].includes(role as string);
+export const canAssignTasksToOthers = (role: Role) =>
+  ['super_admin', 'site_head', 'sourcing_manager_tl', 'presales_tl', 'closing_manager_tl', 'receptionist'].includes(role as string);
 
 export const canEditTask = (
   role: Role,

@@ -168,15 +168,40 @@ export const SiteVisits: React.FC = () => {
   const [sourcingManagers, setSourcingManagers] = useState<{ id: string; name: string }[]>([]);
   useEffect(() => {
     (async () => {
-      const { data: roleRow } = await supabase.from('roles').select('id').eq('name', 'sourcing_manager').maybeSingle();
-      if (!roleRow) return;
-      const { data: userRoles } = await supabase.from('user_roles').select('user_id').eq('role_id', roleRow.id);
+      const { data: roleRows } = await supabase.from('roles').select('id').in('name', ['sourcing_manager', 'sourcing_manager_tl']);
+      const roleIds = (roleRows || []).map(r => r.id);
+      if (roleIds.length === 0) return;
+      const { data: userRoles } = await supabase.from('user_roles').select('user_id').in('role_id', roleIds);
       const userIds = (userRoles || []).map(ur => ur.user_id);
       if (userIds.length === 0) return;
       const { data: profiles } = await supabase.from('user_profiles').select('id, full_name').in('id', userIds);
       setSourcingManagers((profiles || []).map(p => ({ id: p.id, name: p.full_name || 'Unnamed' })));
     })();
   }, []);
+
+  // Which Sourcing Managers are on which project -- the field previously
+  // showed every sourcing manager company-wide regardless of the selected
+  // project. Mirrors the projectTeamMap pattern already used in Leads.tsx
+  // for the identical field.
+  const [projectTeamMap, setProjectTeamMap] = useState<Map<string, Set<string>>>(new Map());
+  useEffect(() => {
+    supabase.from('user_project_assignments').select('user_id, project_id').eq('is_active', true)
+      .then(({ data, error }) => {
+        if (error) { reportQueryError('SiteVisits: project team assignments', error); return; }
+        const map = new Map<string, Set<string>>();
+        (data || []).forEach(row => {
+          if (!map.has(row.project_id)) map.set(row.project_id, new Set());
+          map.get(row.project_id)!.add(row.user_id);
+        });
+        setProjectTeamMap(map);
+      });
+  }, []);
+
+  // Sourcing Manager options scoped to whichever project is currently
+  // selected in the Walk-in Visit form -- empty until a project is picked.
+  const formSourcingManagers = quickProjectId
+    ? sourcingManagers.filter(sm => projectTeamMap.get(quickProjectId)?.has(sm.id))
+    : [];
 
   const fetchQuickVisits = useCallback(async () => {
     const { data, error } = await supabase
@@ -1255,7 +1280,7 @@ export const SiteVisits: React.FC = () => {
                   <select
                     required
                     value={quickProjectId}
-                    onChange={(e) => setQuickProjectId(e.target.value)}
+                    onChange={(e) => { setQuickProjectId(e.target.value); setQuickSourcingManagerName(''); }}
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                   >
                     <option value="">Select Project...</option>
@@ -1276,10 +1301,15 @@ export const SiteVisits: React.FC = () => {
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
                   >
                     <option value="">Select Sourcing Manager... (optional)</option>
-                    {sourcingManagers.map(sm => (
+                    {formSourcingManagers.map(sm => (
                       <option key={sm.id} value={sm.name}>{sm.name}</option>
                     ))}
                   </select>
+                  {!quickProjectId ? (
+                    <p className="text-[10px] text-slate-400 mt-1">Select a Project first to see its Sourcing Managers.</p>
+                  ) : formSourcingManagers.length === 0 && (
+                    <p className="text-[10px] text-amber-600 mt-1">No Sourcing Manager is assigned to this project yet.</p>
+                  )}
                 </div>
 
                 {/* Free text for everyone, including a channel partner --

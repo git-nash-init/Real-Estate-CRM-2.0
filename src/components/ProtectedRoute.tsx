@@ -13,7 +13,7 @@ interface ProtectedRouteProps {
 }
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowedRoles, excludedRoles, isAllowed }) => {
-  const { user, profile, role, loading } = useAuth();
+  const { user, profile, role, loading, logout } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -25,6 +25,19 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowe
   }
 
   if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+
+  // Fast-path check for an offboarded/deactivated account: useAuth's own
+  // realtime subscription and auth-state handlers already sign these
+  // sessions out shortly after the fact, but this catches an already-open
+  // tab immediately on next navigation rather than waiting on that. Only
+  // acts once `profile` has actually loaded (not the initial null placeholder
+  // before the first fetch resolves) so it can't misfire on a still-loading
+  // session. The real security boundary is the auth ban applied server-side
+  // when an employee is offboarded — this is a UX fast path, not enforcement.
+  if (profile && profile.status !== 'active') {
+    logout();
     return <Navigate to="/login" replace />;
   }
 

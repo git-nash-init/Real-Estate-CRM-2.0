@@ -65,6 +65,7 @@ interface ManagerLookup {
   id: string;
   name: string;
   designation: string;
+  employment_status: string | null;
 }
 
 // telecaller was removed as a role entirely -- the client considers it the
@@ -189,7 +190,7 @@ export const Employees: React.FC = () => {
         supabase.from('user_profiles').select('id, full_name, email'),
         supabase.from('roles').select('id, name'),
         supabase.from('user_roles').select('user_id, role_id'),
-        supabase.from('employees').select('id, first_name, last_name, designation'),
+        supabase.from('employees').select('id, first_name, last_name, designation, employment_status'),
         supabase.from('projects').select('id, project_name').order('project_name')
       ]);
 
@@ -208,10 +209,16 @@ export const Employees: React.FC = () => {
       }
 
       if (employeesLookupRes.data) {
+        // Kept unfiltered -- this also powers the read-only "reporting
+        // manager" name resolution on existing employees, which must keep
+        // showing the name regardless of the manager's current status.
+        // The Reporting Manager *picker* filters this down separately
+        // (see activeManagersLookup below).
         setManagersLookup(employeesLookupRes.data.map(e => ({
           id: e.id,
           name: `${e.first_name || ''} ${e.last_name || ''}`.trim() || 'Unnamed',
-          designation: e.designation || 'No Designation'
+          designation: e.designation || 'No Designation',
+          employment_status: e.employment_status
         })));
       }
     } catch (err) {
@@ -260,7 +267,11 @@ export const Employees: React.FC = () => {
       }
       if (deptFilter) query = query.eq('department', deptFilter);
       if (desigFilter) query = query.eq('designation', desigFilter);
+      // "All Statuses" hides offboarded (terminated) employees by default --
+      // offboarding is meant to make them disappear from the directory.
+      // Picking "Terminated" explicitly still shows them.
       if (statusFilter) query = query.eq('employment_status', statusFilter);
+      else query = query.neq('employment_status', 'terminated');
       if (roleFilter) {
         const matchingUserIds = Array.from(userRolesMap.entries())
           .filter(([, rName]) => rName === roleFilter)
@@ -307,21 +318,52 @@ export const Employees: React.FC = () => {
     await fetchEmployees();
   };
 
+  // Offboard an employee -- this used to be a hard DELETE FROM employees,
+  // which never touched user_profiles/user_roles/user_project_assignments
+  // or the actual Supabase auth account, so a "deleted" employee still
+  // showed up in every assignment picker and could still log in (and it
+  // also cascaded to silently wipe attendance/leave_requests history).
+  // Now it bans the login for real via the manage-employee-account Edge
+  // Function and revokes role/project access, without deleting anything --
+  // every historical record (leads, bookings, payments, etc.) keeps
+  // resolving their name exactly as it does today.
   const handleDeleteEmployee = async (emp: Employee) => {
-    if (window.confirm(`Are you sure you want to permanently delete employee ${emp.first_name} ${emp.last_name}?`)) {
-      setLoading(true);
-      try {
-        const { error } = await supabase.from('employees').delete().eq('id', emp.id);
-        if (error) throw error;
-        setNotification({ type: 'success', message: 'Employee deleted successfully.' });
-        fetchEmployees();
-        fetchAllEmployeesLite();
-        setSelectedEmployee(null);
-      } catch (err: any) {
-        setNotification({ type: 'error', message: err.message || 'Failed to delete employee' });
-      } finally {
-        setLoading(false);
+    if (!emp.user_id) {
+      setNotification({ type: 'error', message: 'This employee has no linked login account to offboard.' });
+      return;
+    }
+    if (!window.confirm(
+      `Offboard ${emp.first_name} ${emp.last_name}? They will be immediately blocked from logging in and removed from every assignment dropdown. Their name will still appear correctly on their past leads, bookings, and payments — nothing historical is deleted.`
+    )) return;
+
+    setLoading(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) {
+        throw new Error('Your login session has expired. Please sign out and sign back in, then try again.');
       }
+
+      const { data: fnData, error: fnError } = await supabase.functions.invoke('manage-employee-account', {
+        body: { action: 'offboard', employee_id: emp.id, user_id: emp.user_id },
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      if (fnError) {
+        const detail = (fnError as any)?.context?.body ? await (fnError as any).context.text().catch(() => null) : null;
+        throw new Error(detail || fnError.message);
+      }
+      if (fnData?.error) throw new Error(fnData.error);
+
+      setNotification({ type: 'success', message: 'Employee offboarded — login blocked, access revoked.' });
+      fetchEmployees();
+      fetchAllEmployeesLite();
+      fetchLookups();
+      setSelectedEmployee(null);
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to offboard employee' });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -809,6 +851,15 @@ export const Employees: React.FC = () => {
     }
   };
 
+  // Reporting Manager picker source -- excludes offboarded/inactive
+  // employees so they stop being assignable, but keeps whoever is already
+  // selected (even if now inactive) so opening an existing employee's edit
+  // form doesn't blank out their current manager and silently drop the
+  // assignment on save.
+  const activeManagersLookup = managersLookup.filter(m =>
+    m.employment_status?.toLowerCase() === 'active' || m.id === reportingManager
+  );
+
   // Filter and Search calculations
   // Search, department, designation, status and role filters are all
   // applied server-side in fetchEmployees now, so the current page's rows
@@ -1079,11 +1130,11 @@ export const Employees: React.FC = () => {
                               >
                                 <Edit2 className="h-3.5 w-3.5" />
                               </button>
-                              {currentUserRole === 'super_admin' && (
+                              {currentUserRole === 'super_admin' && emp.employment_status?.toLowerCase() !== 'terminated' && (
                                 <button
                                   onClick={() => handleDeleteEmployee(emp)}
                                   className="p-1.5 border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-50 hover:text-red-600 transition-colors"
-                                  title="Delete Employee"
+                                  title="Offboard Employee (blocks login, revokes access)"
                                 >
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </button>
@@ -1608,9 +1659,9 @@ export const Employees: React.FC = () => {
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
                         <option value="">No Reporting Manager...</option>
-                        {managersLookup.map(m => (
+                        {activeManagersLookup.map(m => (
                           <option key={m.id} value={m.id}>
-                            {m.name} ({m.designation})
+                            {m.name} ({m.designation}){m.employment_status?.toLowerCase() !== 'active' ? ' (inactive)' : ''}
                           </option>
                         ))}
                       </select>
