@@ -133,6 +133,7 @@ interface CommissionStructure {
   id: string;
   cp_id: string;
   project_id: string | null;
+  tower_id: string | null;
   structure_type: string;
   commission_percentage: number | null;
   fixed_amount: number | null;
@@ -157,6 +158,7 @@ export const ChannelPartnerDetails: React.FC = () => {
   const [partner, setPartner] = useState<ChannelPartner | null>(null);
   const [projectsMap, setProjectsMap] = useState<Map<string, string>>(new Map());
   const [towersMap, setTowersMap] = useState<Map<string, string>>(new Map());
+  const [towersList, setTowersList] = useState<{ id: string; project_id: string; tower_name: string }[]>([]);
   const [unitsMap, setUnitsMap] = useState<Map<string, string>>(new Map());
   const [assignedProjectIds, setAssignedProjectIds] = useState<string[]>([]);
   const [allProjects, setAllProjects] = useState<Project[]>([]);
@@ -202,6 +204,7 @@ export const ChannelPartnerDetails: React.FC = () => {
   // Referral Fee Structure Modal States
   const [isStructOpen, setIsStructOpen] = useState(false);
   const [structProjectId, setStructProjectId] = useState('');
+  const [structTowerId, setStructTowerId] = useState('');
   const [structType, setStructType] = useState('PERCENTAGE'); // PERCENTAGE, FIXED, SLAB
   const [structPercentage, setStructPercentage] = useState('');
   const [structFixedAmount, setStructFixedAmount] = useState('');
@@ -297,11 +300,12 @@ export const ChannelPartnerDetails: React.FC = () => {
     try {
       const { data, error: towerErr } = await supabase
         .from('project_towers')
-        .select('id, tower_name');
+        .select('id, project_id, tower_name');
       if (towerErr) {
         reportQueryError('Channel Partner details: towers lookup', towerErr);
       } else if (data) {
         setTowersMap(new Map(data.map(t => [t.id, t.tower_name || ''])));
+        setTowersList(data.map(t => ({ id: t.id, project_id: t.project_id, tower_name: t.tower_name || '' })));
       }
     } catch (err) {
       reportQueryError('Channel Partner details: towers lookup', err);
@@ -719,6 +723,7 @@ export const ChannelPartnerDetails: React.FC = () => {
   const openEditStructure = (s: CommissionStructure) => {
     setEditingStructureId(s.id);
     setStructProjectId(s.project_id || '');
+    setStructTowerId(s.tower_id || '');
     setStructType(s.structure_type);
     setStructPercentage(s.commission_percentage !== null ? String(s.commission_percentage) : '');
     setStructFixedAmount(s.fixed_amount !== null ? String(s.fixed_amount) : '');
@@ -735,6 +740,7 @@ export const ChannelPartnerDetails: React.FC = () => {
   const resetStructForm = () => {
     setEditingStructureId(null);
     setStructProjectId('');
+    setStructTowerId('');
     setStructType('PERCENTAGE');
     setStructPercentage('');
     setStructFixedAmount('');
@@ -766,10 +772,12 @@ export const ChannelPartnerDetails: React.FC = () => {
           .select('id')
           .eq('cp_id', id)
           .eq('status', 'active');
-        if (structProjectId) {
-          query.eq('project_id', structProjectId);
+        if (structTowerId) {
+          query.eq('tower_id', structTowerId);
+        } else if (structProjectId) {
+          query.eq('project_id', structProjectId).is('tower_id', null);
         } else {
-          query.is('project_id', null);
+          query.is('project_id', null).is('tower_id', null);
         }
         if (editingStructureId) {
           query.neq('id', editingStructureId);
@@ -777,13 +785,14 @@ export const ChannelPartnerDetails: React.FC = () => {
         const { data: overlapData, error: checkErr } = await query;
         if (checkErr) throw checkErr;
         if (overlapData && overlapData.length > 0) {
-          throw new Error('An active referral fee structure already exists for this Project configuration. Please set the existing one to Inactive first.');
+          throw new Error('An active referral fee structure already exists for this Project/Tower configuration. Please set the existing one to Inactive first.');
         }
       }
 
       const payload = {
         cp_id: id,
         project_id: structProjectId || null,
+        tower_id: structTowerId || null,
         structure_type: structType,
         commission_percentage: structType === 'PERCENTAGE' || structType === 'SLAB' ? parseFloat(structPercentage) || 0 : null,
         fixed_amount: structType === 'FIXED' ? parseFloat(structFixedAmount) || 0 : null,
@@ -857,11 +866,13 @@ export const ChannelPartnerDetails: React.FC = () => {
       const saleVal = booking.consideration_amount || booking.booking_amount || 0;
       setManualSaleValue(saleVal);
 
-      // Auto-load referral fee structure active for this CP + Project
-      const matchingStruct = structuresList.find(
-        s => s.status === 'active' && 
-        (s.project_id === booking.project_id || s.project_id === null)
-      );
+      // Auto-load referral fee structure active for this CP -- prefer a
+      // tower-specific rate, then fall back to a whole-project rate, then
+      // a general (no project/tower) rate.
+      const matchingStruct =
+        structuresList.find(s => s.status === 'active' && !!s.tower_id && s.tower_id === booking.tower_id) ||
+        structuresList.find(s => s.status === 'active' && !s.tower_id && s.project_id === booking.project_id) ||
+        structuresList.find(s => s.status === 'active' && !s.tower_id && s.project_id === null);
 
       if (matchingStruct) {
         setManualStructureId(matchingStruct.id);
@@ -1700,6 +1711,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                 <thead>
                   <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
                     <th className="py-2.5 px-4">Project</th>
+                    <th className="py-2.5 px-4">Tower</th>
                     <th className="py-2.5 px-4">Structure Type</th>
                     <th className="py-2.5 px-4">Percentage</th>
                     <th className="py-2.5 px-4">Fixed Amount</th>
@@ -1714,9 +1726,11 @@ export const ChannelPartnerDetails: React.FC = () => {
                   {structuresList.length > 0 ? (
                     structuresList.map(s => {
                       const projName = s.project_id ? projectsMap.get(s.project_id) : 'General (All Projects)';
+                      const towerName = s.tower_id ? towersMap.get(s.tower_id) : (s.project_id ? 'Whole Project' : '—');
                       return (
                         <tr key={s.id} className="hover:bg-slate-50/50">
                           <td className="py-3 px-4 font-semibold text-slate-800 text-xs">{projName}</td>
+                          <td className="py-3 px-4 text-slate-650 font-medium text-xs">{towerName}</td>
                           <td className="py-3 px-4 text-slate-655 font-mono text-xs">{s.structure_type}</td>
                           <td className="py-3 px-4 text-slate-700 font-mono text-xs">{s.commission_percentage !== null ? `${s.commission_percentage}%` : '—'}</td>
                           <td className="py-3 px-4 text-slate-700 font-mono text-xs">
@@ -2118,7 +2132,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Project (Optional)</label>
                   <select
                     value={structProjectId}
-                    onChange={(e) => setStructProjectId(e.target.value)}
+                    onChange={(e) => { setStructProjectId(e.target.value); setStructTowerId(''); }}
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
                   >
                     <option value="">General (All Projects)</option>
@@ -2127,6 +2141,22 @@ export const ChannelPartnerDetails: React.FC = () => {
                     ))}
                   </select>
                 </div>
+
+                {structProjectId && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Tower (Optional)</label>
+                    <select
+                      value={structTowerId}
+                      onChange={(e) => setStructTowerId(e.target.value)}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                    >
+                      <option value="">Whole Project (All Towers)</option>
+                      {towersList.filter(t => t.project_id === structProjectId).map(t => (
+                        <option key={t.id} value={t.id}>{t.tower_name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
