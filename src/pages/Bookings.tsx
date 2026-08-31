@@ -22,7 +22,8 @@ import {
   Plus,
   Users,
   Trash2,
-  Download
+  Download,
+  Pencil
 } from 'lucide-react';
 
 interface Booking {
@@ -170,6 +171,116 @@ export const Bookings: React.FC = () => {
   const [selectedStatus, setSelectedStatus] = useState('draft');
   const [selectedChannelPartnerId, setSelectedChannelPartnerId] = useState('');
   const [notes, setNotes] = useState('');
+
+  // Edit Booking (super_admin only) -- a separate, simpler modal from
+  // Create. Unit/project/tower reassignment is a structurally different,
+  // riskier operation (inventory hold/release, atomic reservation) than
+  // just correcting a booking's financial breakdown or notes, and isn't
+  // exposed here -- the unit picker in Create also only ever lists
+  // status='available' units, which would silently exclude an existing
+  // booking's own (booked) unit if this reused that same cascading UI.
+  const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
+  const [editRegistrationCharges, setEditRegistrationCharges] = useState('');
+  const [editLoading, setEditLoading] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const openEditBooking = (b: Booking) => {
+    setEditingBooking(b);
+    setConsiderationAmount((b.consideration_amount ?? b.booking_amount ?? 0).toString());
+    setGstAmount((b.gst_amount || 0).toString());
+    setStampDuty((b.stamp_duty || 0).toString());
+    setEditRegistrationCharges((b.registration_charges || 0).toString());
+    setDevelopmentCharges((b.development_charges || 0).toString());
+    setMaintenanceCharges((b.maintenance_charges || 0).toString());
+    setParkingCharges((b.parking_charges || 0).toString());
+    setOtherCharges((b.other_charges || 0).toString());
+    setBookingDate(b.booking_date ? new Date(b.booking_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]);
+    setNotes(b.notes || '');
+    setEditError(null);
+  };
+
+  const closeEditBooking = () => {
+    setEditingBooking(null);
+    setEditError(null);
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingBooking) return;
+
+    const parseAmt = (val: string) => {
+      const num = parseFloat(val);
+      return isNaN(num) || num < 0 ? 0 : num;
+    };
+
+    const baseAmt = parseAmt(considerationAmount);
+    if (baseAmt <= 0) {
+      setEditError('Agreement Value (Base) must be greater than zero.');
+      return;
+    }
+    if (!bookingDate) {
+      setEditError('Please select a Booking Date.');
+      return;
+    }
+
+    const gstAmt = parseAmt(gstAmount);
+    const sdAmt = parseAmt(stampDuty);
+    const regAmt = parseAmt(editRegistrationCharges);
+    const devAmt = parseAmt(developmentCharges);
+    const maintAmt = parseAmt(maintenanceCharges);
+    const parkAmt = parseAmt(parkingCharges);
+    const othAmt = parseAmt(otherCharges);
+    const totalAddCharges = gstAmt + sdAmt + regAmt + devAmt + maintAmt + parkAmt + othAmt;
+    const calculatedTotalPayable = baseAmt + totalAddCharges;
+
+    setEditError(null);
+    setEditLoading(true);
+    try {
+      const { error: updateErr } = await supabase
+        .from('bookings')
+        .update({
+          consideration_amount: baseAmt,
+          gst_amount: gstAmt,
+          stamp_duty: sdAmt,
+          registration_charges: regAmt,
+          development_charges: devAmt,
+          maintenance_charges: maintAmt,
+          parking_charges: parkAmt,
+          other_charges: othAmt,
+          total_additional_charges: totalAddCharges,
+          total_payable_amount: calculatedTotalPayable,
+          booking_amount: calculatedTotalPayable,
+          booking_date: new Date(bookingDate).toISOString(),
+          notes: notes.trim() || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', editingBooking.id);
+      if (updateErr) throw updateErr;
+
+      closeEditBooking();
+      setNotification({ type: 'success', message: 'Booking updated successfully.' });
+      await fetchBookings();
+      if (selectedBooking && selectedBooking.id === editingBooking.id) {
+        setSelectedBooking(prev => prev ? {
+          ...prev,
+          consideration_amount: baseAmt,
+          gst_amount: gstAmt,
+          stamp_duty: sdAmt,
+          registration_charges: regAmt,
+          development_charges: devAmt,
+          maintenance_charges: maintAmt,
+          parking_charges: parkAmt,
+          other_charges: othAmt,
+          total_payable_amount: calculatedTotalPayable,
+          booking_amount: calculatedTotalPayable,
+        } : prev);
+      }
+    } catch (err: any) {
+      setEditError(err.message || 'Failed to update booking.');
+    } finally {
+      setEditLoading(false);
+    }
+  };
 
   // Channel Partner lookups lists & map
   const [channelPartnersList, setChannelPartnersList] = useState<{ id: string; name: string; partner_code: string; company_name: string | null }[]>([]);
@@ -1637,6 +1748,15 @@ export const Bookings: React.FC = () => {
                               </button>
                               {isSuperAdmin(role) && (
                                 <button
+                                  onClick={() => openEditBooking(b)}
+                                  className="p-1.5 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-indigo-600 transition-colors"
+                                  title="Edit Booking"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                              {isSuperAdmin(role) && (
+                                <button
                                   onClick={() => handleDeleteBooking(b)}
                                   className="p-1.5 border border-slate-200 rounded-lg text-rose-500 hover:bg-rose-50 transition-colors"
                                   title="Delete Booking"
@@ -2646,6 +2766,161 @@ export const Bookings: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* EDIT BOOKING MODAL (super_admin only) */}
+      {editingBooking && (
+        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={closeEditBooking} />
+
+          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
+              <span className="font-bold tracking-tight">Edit Booking — {editingBooking.booking_number}</span>
+              <button type="button" onClick={closeEditBooking} className="p-1 rounded-lg text-indigo-200 hover:text-white focus:outline-none">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditSubmit}>
+              <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                {editError && (
+                  <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl flex items-start space-x-2.5">
+                    <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
+                    <span className="text-sm font-semibold leading-tight">{editError}</span>
+                  </div>
+                )}
+
+                {/* Locked identity fields -- unit/tower/project reassignment is a
+                    separate, riskier operation and isn't part of this form. */}
+                <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 text-xs space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400 font-semibold">Customer</span>
+                    <span className="text-slate-700 font-semibold">{editingBooking.customer_name || leadsMap.get(editingBooking.lead_id || '')?.customer_name || 'N/A'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400 font-semibold">Project / Unit</span>
+                    <span className="text-slate-700 font-semibold">
+                      {projectMap.get(editingBooking.project_id || '') || 'N/A'} — {inventoryMap.get(editingBooking.inventory_id || '')?.unit_number || 'N/A'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Agreement Value (Base) *</label>
+                    <input
+                      type="number" min="0" step="0.01" required
+                      value={considerationAmount}
+                      onChange={(e) => setConsiderationAmount(e.target.value)}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">GST Amount</label>
+                    <input
+                      type="number" min="0" step="0.01"
+                      value={gstAmount}
+                      onChange={(e) => setGstAmount(e.target.value)}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Stamp Duty</label>
+                    <input
+                      type="number" min="0" step="0.01"
+                      value={stampDuty}
+                      onChange={(e) => setStampDuty(e.target.value)}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Registration Charges</label>
+                    <input
+                      type="number" min="0" step="0.01"
+                      value={editRegistrationCharges}
+                      onChange={(e) => setEditRegistrationCharges(e.target.value)}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Development Charges</label>
+                    <input
+                      type="number" min="0" step="0.01"
+                      value={developmentCharges}
+                      onChange={(e) => setDevelopmentCharges(e.target.value)}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Maintenance Charges</label>
+                    <input
+                      type="number" min="0" step="0.01"
+                      value={maintenanceCharges}
+                      onChange={(e) => setMaintenanceCharges(e.target.value)}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Parking Charges</label>
+                    <input
+                      type="number" min="0" step="0.01"
+                      value={parkingCharges}
+                      onChange={(e) => setParkingCharges(e.target.value)}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Other Charges</label>
+                    <input
+                      type="number" min="0" step="0.01"
+                      value={otherCharges}
+                      onChange={(e) => setOtherCharges(e.target.value)}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Booking Date *</label>
+                  <input
+                    type="date" required
+                    value={bookingDate}
+                    onChange={(e) => setBookingDate(e.target.value)}
+                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Booking remarks / Comments</label>
+                  <textarea
+                    rows={3}
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    className="block w-full px-4 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-indigo-600 focus:outline-none transition-all"
+                  />
+                </div>
+              </div>
+
+              <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={closeEditBooking}
+                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={editLoading}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
+                >
+                  {editLoading ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* RECORD PAYMENT MODAL (CHILD OF VIEW MODAL) */}
       {isAddPaymentOpen && selectedBooking && (
         <div className="fixed inset-0 z-[60] overflow-y-auto flex items-center justify-center p-4">
