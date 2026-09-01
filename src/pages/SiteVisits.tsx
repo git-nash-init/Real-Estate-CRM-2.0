@@ -634,16 +634,34 @@ export const SiteVisits: React.FC = () => {
         }])
         .select('id')
         .single();
-      if (insertErr) throw insertErr;
+
+      let leadId = insertedLead?.id;
+
+      if (insertErr) {
+        // A DB trigger blocks inserting a lead that duplicates an existing
+        // one's phone+project (e.g. this same customer already has a lead
+        // in this project from an earlier walk-in visit) -- link this visit
+        // to that existing lead instead of failing outright, since from the
+        // user's side this is a legitimate "add to leads" action, not a
+        // mistaken duplicate submission.
+        const dupMatch = /lead id ([0-9a-f-]{36})/i.exec(insertErr.message || '');
+        if (!dupMatch) throw insertErr;
+        leadId = dupMatch[1];
+      }
 
       const { error: updateErr } = await supabase
         .from('quick_site_visits')
-        .update({ converted_to_lead_id: insertedLead.id })
+        .update({ converted_to_lead_id: leadId })
         .eq('id', visit.id);
       if (updateErr) throw updateErr;
 
-      setQuickVisits(prev => prev.map(v => v.id === visit.id ? { ...v, converted_to_lead_id: insertedLead.id } : v));
-      setNotification({ type: 'success', message: `${visit.customer_name} added to Leads.` });
+      setQuickVisits(prev => prev.map(v => v.id === visit.id ? { ...v, converted_to_lead_id: leadId } : v));
+      setNotification({
+        type: 'success',
+        message: insertErr
+          ? `${visit.customer_name} already had a lead in this project — linked this visit to it.`
+          : `${visit.customer_name} added to Leads.`,
+      });
     } catch (err: any) {
       reportQueryError('Site Visits: convert walk-in visit to lead', err);
       setNotification({ type: 'error', message: err.message || 'Failed to add this visit to Leads.' });
