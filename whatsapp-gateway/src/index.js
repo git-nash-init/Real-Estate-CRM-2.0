@@ -233,21 +233,43 @@ async function processOutboxOnce() {
     return;
   }
 
-  // Fetch a batch, not just the single oldest row. Sessions are per-sender
-  // (see the `sessions` map keyed by created_by) -- if the oldest queued
-  // message's sender isn't connected, a single-row fetch would return
-  // *only* that row, we'd skip it, and return without ever looking at
-  // newer messages from OTHER senders who are connected right now. That
-  // starves the whole queue behind one disconnected account indefinitely.
-  // Confirmed live: two messages from an account that never scanned its QR
-  // sat at the front of the queue for hours, blocking every message
-  // queued after them from a different, fully-connected sender.
+  // Fail fast: any row with no sender can never be sent by anyone. Checked
+  // as its own small, capped query so it can't be starved by the backlog
+  // filter below.
+  const { data: orphaned } = await supabase
+    .from('whatsapp_outbox')
+    .select('id')
+    .eq('status', 'queued')
+    .is('created_by', null)
+    .limit(20);
+  for (const r of orphaned || []) {
+    logger.error({ id: r.id }, 'Message has no created_by user_id, marking as failed');
+    await supabase.from('whatsapp_outbox').update({ status: 'failed', error: 'No sender (created_by) assigned' }).eq('id', r.id);
+  }
+
+  // Query directly for a currently-connected sender's oldest queued
+  // message, rather than fetching the oldest N queued rows overall and
+  // filtering client-side. The previous approach (fetch oldest 20, keep
+  // the first with a connected sender) still starved a connected sender
+  // whenever 20+ *older* messages existed from disconnected senders --
+  // confirmed live: 30+ backlogged messages from accounts that never
+  // scanned their QR sat ahead of a fully-connected sender's messages,
+  // so the "oldest 20" window never reached them and nothing ever sent.
+  // Querying by created_by directly means the size of that backlog can
+  // never matter.
+  const openSenderIds = Array.from(sessions.entries())
+    .filter(([, s]) => s.connectionState === 'open' && s.sock)
+    .map(([userId]) => userId);
+
+  if (openSenderIds.length === 0) return;
+
   const { data: rows, error } = await supabase
     .from('whatsapp_outbox')
     .select('*')
     .eq('status', 'queued')
+    .in('created_by', openSenderIds)
     .order('created_at', { ascending: true })
-    .limit(20);
+    .limit(1);
 
   if (error) {
     logger.error({ error }, 'Failed to poll outbox');
@@ -255,24 +277,7 @@ async function processOutboxOnce() {
   }
   if (!rows || rows.length === 0) return;
 
-  // Fail fast: any row with no sender can never be sent by anyone.
-  const orphaned = rows.filter((r) => !r.created_by);
-  for (const r of orphaned) {
-    logger.error({ id: r.id }, 'Message has no created_by user_id, marking as failed');
-    await supabase.from('whatsapp_outbox').update({ status: 'failed', error: 'No sender (created_by) assigned' }).eq('id', r.id);
-  }
-
-  const row = rows.find((r) => {
-    if (!r.created_by) return false;
-    const s = sessions.get(r.created_by);
-    return s && s.connectionState === 'open' && s.sock;
-  });
-
-  if (!row) {
-    logger.warn({ pending: rows.length }, 'No queued message has a currently-connected sender, skipping this cycle');
-    return;
-  }
-
+  const row = rows[0];
   const senderUserId = row.created_by;
   const session = sessions.get(senderUserId);
 
