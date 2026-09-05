@@ -1438,7 +1438,13 @@ export const Inventory: React.FC = () => {
 
             <form onSubmit={handleUnitSubmit}>
               {(() => {
-                const hasActiveBooking = !!(editingUnit && ['booked', 'sold'].includes(editingUnit.status.toLowerCase()));
+                // Sold units stay locked for everyone -- the sale is final.
+                // A booked-but-not-sold unit can still legitimately need
+                // renumbering (e.g. a data-entry mistake), so super admin
+                // gets an explicit override for that case specifically.
+                const isSold = !!(editingUnit && editingUnit.status.toLowerCase() === 'sold');
+                const isBooked = !!(editingUnit && editingUnit.status.toLowerCase() === 'booked');
+                const hasActiveBooking = (isSold || isBooked) && !(isBooked && isSuperAdmin);
                 return (
                   <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto text-left">
                     {unitError && (
@@ -1451,6 +1457,12 @@ export const Inventory: React.FC = () => {
                     {hasActiveBooking && (
                       <div className="bg-amber-50 border border-amber-200 text-amber-900 px-4 py-2.5 rounded-xl text-xs font-semibold">
                         ⚠️ This unit cannot be moved or renumbered because it has an active booking.
+                      </div>
+                    )}
+
+                    {isBooked && isSuperAdmin && (
+                      <div className="bg-amber-50 border border-amber-200 text-amber-900 px-4 py-2.5 rounded-xl text-xs font-semibold">
+                        ⚠️ Super admin override: this unit is booked. The linked booking stays attached to it, but double-check the booking record's unit details after making this change.
                       </div>
                     )}
 
@@ -1550,6 +1562,7 @@ export const Inventory: React.FC = () => {
                           onChange={(e) => setUnitConfig(e.target.value)}
                           className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                         >
+                          <option value="1 RK">1 RK</option>
                           <option value="1 BHK">1 BHK</option>
                           <option value="1.5 BHK">1.5 BHK</option>
                           <option value="2 BHK">2 BHK</option>
@@ -2003,6 +2016,7 @@ export const Inventory: React.FC = () => {
                       onChange={(e) => setBulkConfig(e.target.value)}
                       className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm"
                     >
+                      <option value="1 RK">1 RK</option>
                       <option value="1 BHK">1 BHK</option>
                       <option value="1.5 BHK">1.5 BHK</option>
                       <option value="2 BHK">2 BHK</option>
