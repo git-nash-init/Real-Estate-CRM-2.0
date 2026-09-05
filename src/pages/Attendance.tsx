@@ -47,10 +47,24 @@ const leaveStatusColors: Record<string, string> = {
   rejected: 'bg-rose-50 text-rose-700',
 };
 
+const LocationLink: React.FC<{ lat: number | null; lng: number | null }> = ({ lat, lng }) => {
+  if (lat === null || lng === null) return <span className="text-slate-400 text-xs">—</span>;
+  return (
+    <a
+      href={`https://www.google.com/maps?q=${lat},${lng}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:underline"
+    >
+      <MapPin className="h-3.5 w-3.5" /> View on Map
+    </a>
+  );
+};
+
 export const Attendance: React.FC = () => {
   const { user, role } = useAuth();
   const isSuperAdmin = role === 'super_admin';
-  const canViewTeam = isSuperAdmin || role === 'site_head' || role === 'receptionist';
+  const canViewTeam = isSuperAdmin || role === 'site_head' || role === 'project_admin' || role === 'receptionist';
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | null>(null);
   const [currentEmployeeName, setCurrentEmployeeName] = useState<string>('');
 
@@ -217,17 +231,35 @@ export const Attendance: React.FC = () => {
     }
   }, [notification]);
 
+  // High-accuracy GPS (used first, for the tightest location fix) routinely
+  // times out on mobile indoors -- office check-ins happen inside a building
+  // where satellites aren't reachable, so waiting on a GPS-only fix is
+  // exactly the "location fetch not working" complaint. Falls back to a
+  // network/wifi-based fix (fast, works indoors, coarser accuracy) instead
+  // of failing the check-in outright.
   const getLocation = (): Promise<{ latitude: number; longitude: number }> => {
-    return new Promise((resolve, reject) => {
-      if (!navigator.geolocation) {
-        reject(new Error('Geolocation is not supported by this browser.'));
-        return;
+    if (!navigator.geolocation) {
+      return Promise.reject(new Error('Geolocation is not supported by this browser.'));
+    }
+
+    const attempt = (options: PositionOptions) =>
+      new Promise<{ latitude: number; longitude: number }>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+          (err) => reject(err),
+          options
+        );
+      });
+
+    return attempt({ enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }).catch((err) => {
+      // A denied permission won't succeed on retry either -- surface it
+      // immediately with guidance instead of waiting through a second timeout.
+      if (err.code === err.PERMISSION_DENIED) {
+        throw new Error('Location permission denied. Please enable location access for this site in your browser/phone settings and try again.');
       }
-      navigator.geolocation.getCurrentPosition(
-        (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
-        (err) => reject(new Error(err.message)),
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-      );
+      return attempt({ enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }).catch((err2) => {
+        throw new Error(err2.message || 'Could not determine your location. Make sure location/GPS is turned on and try again.');
+      });
     });
   };
 
@@ -490,6 +522,7 @@ export const Attendance: React.FC = () => {
                 <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
                   <th className="py-3 px-6">Date</th>
                   <th className="py-3 px-6">Check In</th>
+                  <th className="py-3 px-6">Check In Location</th>
                   <th className="py-3 px-6">Check Out</th>
                   <th className="py-3 px-6">Status</th>
                 </tr>
@@ -499,13 +532,14 @@ export const Attendance: React.FC = () => {
                   <tr key={r.id}>
                     <td className="py-3 px-6 font-semibold text-slate-800">{new Date(r.attendance_date).toLocaleDateString('en-IN')}</td>
                     <td className="py-3 px-6 text-slate-600">{r.check_in ? new Date(r.check_in).toLocaleTimeString('en-IN') : '—'}</td>
+                    <td className="py-3 px-6"><LocationLink lat={r.check_in_latitude} lng={r.check_in_longitude} /></td>
                     <td className="py-3 px-6 text-slate-600">{r.check_out ? new Date(r.check_out).toLocaleTimeString('en-IN') : '—'}</td>
                     <td className="py-3 px-6">
                       <span className="inline-flex px-2 py-0.5 rounded-full text-xxs font-semibold bg-indigo-50 text-indigo-700 capitalize">{r.status}</span>
                     </td>
                   </tr>
                 )) : (
-                  <tr><td colSpan={4} className="py-10 text-center text-slate-400 italic">No attendance records yet.</td></tr>
+                  <tr><td colSpan={5} className="py-10 text-center text-slate-400 italic">No attendance records yet.</td></tr>
                 )}
               </tbody>
             </table>
@@ -578,6 +612,7 @@ export const Attendance: React.FC = () => {
                   <th className="py-3 px-6">Employee</th>
                   <th className="py-3 px-6">Date</th>
                   <th className="py-3 px-6">Check In</th>
+                  <th className="py-3 px-6">Check In Location</th>
                   <th className="py-3 px-6">Check Out</th>
                   <th className="py-3 px-6">Status</th>
                   {isSuperAdmin && <th className="py-3 px-6">Actions</th>}
@@ -589,6 +624,7 @@ export const Attendance: React.FC = () => {
                     <td className="py-3 px-6 font-semibold text-slate-800">{employeesMap.get(r.employee_id) || '—'}</td>
                     <td className="py-3 px-6 text-slate-600">{new Date(r.attendance_date).toLocaleDateString('en-IN')}</td>
                     <td className="py-3 px-6 text-slate-600">{r.check_in ? new Date(r.check_in).toLocaleTimeString('en-IN') : '—'}</td>
+                    <td className="py-3 px-6"><LocationLink lat={r.check_in_latitude} lng={r.check_in_longitude} /></td>
                     <td className="py-3 px-6 text-slate-600">{r.check_out ? new Date(r.check_out).toLocaleTimeString('en-IN') : '—'}</td>
                     <td className="py-3 px-6">
                       <span className="inline-flex px-2 py-0.5 rounded-full text-xxs font-semibold bg-indigo-50 text-indigo-700 capitalize">{r.status}</span>
@@ -600,7 +636,7 @@ export const Attendance: React.FC = () => {
                     )}
                   </tr>
                 )) : (
-                  <tr><td colSpan={isSuperAdmin ? 6 : 5} className="py-10 text-center text-slate-400 italic">No team attendance records match the filters.</td></tr>
+                  <tr><td colSpan={isSuperAdmin ? 7 : 6} className="py-10 text-center text-slate-400 italic">No team attendance records match the filters.</td></tr>
                 )}
               </tbody>
             </table>
