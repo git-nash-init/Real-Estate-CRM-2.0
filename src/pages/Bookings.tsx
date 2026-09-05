@@ -286,6 +286,13 @@ export const Bookings: React.FC = () => {
   const [channelPartnersList, setChannelPartnersList] = useState<{ id: string; name: string; partner_code: string; company_name: string | null }[]>([]);
   const [channelPartnerMap, setChannelPartnerMap] = useState<Map<string, string>>(new Map());
 
+  // Closing Manager -- who actually closed this deal. Distinct from
+  // sales_owner (the lead's original sourcing manager); bookings.closing_manager
+  // already existed in the schema and was read for display, but nothing ever
+  // set it, so every booking showed 'N/A' for it.
+  const [closingManagerList, setClosingManagerList] = useState<{ id: string; full_name: string }[]>([]);
+  const [selectedClosingManagerId, setSelectedClosingManagerId] = useState('');
+
   // Status updating loader
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
@@ -623,7 +630,7 @@ export const Bookings: React.FC = () => {
       // 2. Fetch User Profiles
       const { data: profData, error: profilesError } = await supabase
         .from('user_profiles')
-        .select('id, full_name');
+        .select('id, full_name, status');
       if (profilesError) {
         console.error('Supabase User Profiles API Error:', profilesError.message, profilesError.details);
       } else if (profData) {
@@ -653,6 +660,28 @@ export const Bookings: React.FC = () => {
       if (!cpError && cpData) {
         setChannelPartnersList(cpData as any);
         setChannelPartnerMap(new Map(cpData.map(c => [c.id, c.company_name || c.name || ''])));
+      }
+
+      // Fetch active Closing Managers (closing_manager / closing_manager_tl)
+      // for attribution on booking creation.
+      const [rolesRes, userRolesRes] = await Promise.all([
+        supabase.from('roles').select('id, name'),
+        supabase.from('user_roles').select('user_id, role_id'),
+      ]);
+      if (rolesRes.data && userRolesRes.data && profData) {
+        const roleMap = new Map(rolesRes.data.map(r => [r.id, r.name]));
+        const activeIds = new Set(profData.filter(p => p.status === 'active').map(p => p.id));
+        const nameMap = new Map(profData.map(p => [p.id, p.full_name]));
+        const cmIds = new Set(
+          userRolesRes.data
+            .filter(ur => ['closing_manager', 'closing_manager_tl'].includes(roleMap.get(ur.role_id) || ''))
+            .map(ur => ur.user_id)
+        );
+        setClosingManagerList(
+          Array.from(cmIds)
+            .filter(id => activeIds.has(id))
+            .map(id => ({ id, full_name: nameMap.get(id) || 'Unnamed' }))
+        );
       }
 
       // 4. Fetch Project Inventory
@@ -1063,7 +1092,8 @@ export const Bookings: React.FC = () => {
               booking_number: bookingNumber,
               customer_name: customerName,
               created_by: userId,
-              channel_partner_id: selectedChannelPartnerId || null
+              channel_partner_id: selectedChannelPartnerId || null,
+              closing_manager: selectedClosingManagerId || null
             }
           ])
           .select();
@@ -1113,7 +1143,8 @@ export const Bookings: React.FC = () => {
               booking_number: bookingNumber,
               customer_name: customerName,
               created_by: userId,
-              channel_partner_id: selectedChannelPartnerId || null
+              channel_partner_id: selectedChannelPartnerId || null,
+              closing_manager: selectedClosingManagerId || null
             }
           ]);
 
@@ -1128,6 +1159,7 @@ export const Bookings: React.FC = () => {
       setSelectedProjectId('');
       setSelectedTowerId('');
       setSelectedInventoryId('');
+      setSelectedClosingManagerId('');
       setConsiderationAmount('');
       setGstAmount('');
       setStampDuty('');
@@ -1985,6 +2017,18 @@ export const Bookings: React.FC = () => {
                           </div>
                         </div>
 
+                        {selectedBooking.closing_manager && (
+                          <div className="flex items-start space-x-2 text-slate-700">
+                            <User className="h-4 w-4 text-slate-400 mt-1 flex-shrink-0" />
+                            <div>
+                              <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Closing Manager</span>
+                              <span className="text-sm font-semibold text-slate-850">
+                                {profileMap.get(selectedBooking.closing_manager) || 'N/A'}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
                         {selectedBooking.channel_partner_id && (
                           <div className="flex items-start space-x-2 text-slate-700">
                             <Users className="h-4 w-4 text-indigo-500 mt-1 flex-shrink-0" />
@@ -2508,6 +2552,21 @@ export const Bookings: React.FC = () => {
                       <option key={cp.id} value={cp.id}>
                         {cp.company_name || cp.name}
                       </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Closing Manager Select */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Closing Manager</label>
+                  <select
+                    value={selectedClosingManagerId}
+                    onChange={(e) => setSelectedClosingManagerId(e.target.value)}
+                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
+                  >
+                    <option value="">Unassigned</option>
+                    {closingManagerList.map(cm => (
+                      <option key={cm.id} value={cm.id}>{cm.full_name}</option>
                     ))}
                   </select>
                 </div>
