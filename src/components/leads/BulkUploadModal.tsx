@@ -22,7 +22,18 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
   const isChannelPartner = role === 'channel_partner';
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // 'file' is the original CSV/Excel batch flow. 'single' reuses the exact
+  // same insert pipeline (bulk_lead_uploads record + source: 'bulk_upload'
+  // + bulk_upload_id) for one manually-typed lead, so it stays a distinct
+  // pool from the main Leads directory just like a CSV batch does --
+  // client's explicit ask: sourcing manager/presales who can bulk-upload
+  // should also be able to add a single lead here, not just via a file.
+  const [mode, setMode] = useState<'file' | 'single'>('file');
   const [file, setFile] = useState<File | null>(null);
+  const [singleName, setSingleName] = useState('');
+  const [singleMobile, setSingleMobile] = useState('');
+  const [singleConfig, setSingleConfig] = useState('');
+  const [singleBudget, setSingleBudget] = useState('');
   const [projectId, setProjectId] = useState('');
   const [channelPartnerId, setChannelPartnerId] = useState('');
   const [telecallerIds, setTelecallerIds] = useState<string[]>([]);
@@ -43,8 +54,13 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
   }, [isOpen]);
 
   const resetForm = () => {
+    setMode('file');
     setFile(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    setSingleName('');
+    setSingleMobile('');
+    setSingleConfig('');
+    setSingleBudget('');
     setProjectId('');
     setChannelPartnerId('');
     setTelecallerIds([]);
@@ -142,9 +158,12 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
   };
 
   const handleUpload = async () => {
-    if (!file) return setError('Please select an Excel file.');
+    if (mode === 'file' && !file) return setError('Please select an Excel file.');
+    if (mode === 'single' && (!singleName.trim() || !singleMobile.trim())) {
+      return setError('Please enter both Customer Name and Mobile Number.');
+    }
     if (!projectId) return setError('Please select a project.');
-    
+
     setLoading(true);
     setError(null);
     setSuccess(null);
@@ -156,22 +175,28 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
     }
 
     try {
-      // 1. Read Excel file
-      const data = await file.arrayBuffer();
-      const workbook = XLSX.read(data);
-      const firstSheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[firstSheetName];
-      // Skip header row
-      const json: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-      const rows = json.slice(1).filter(row => row.length > 0 && row[0] && row[1]); // Must have name and mobile
+      // 1. Get the rows to insert -- either parsed from the Excel file, or
+      // the single manually-typed lead.
+      let rows: any[];
+      if (mode === 'single') {
+        rows = [[singleName.trim(), singleMobile.trim(), singleConfig.trim(), singleBudget.trim()]];
+      } else {
+        const data = await file!.arrayBuffer();
+        const workbook = XLSX.read(data);
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        // Skip header row
+        const json: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        rows = json.slice(1).filter(row => row.length > 0 && row[0] && row[1]); // Must have name and mobile
 
-      if (rows.length === 0) {
-        throw new Error('The excel sheet is empty or invalid. Ensure you have Customer Name and Mobile Number.');
+        if (rows.length === 0) {
+          throw new Error('The excel sheet is empty or invalid. Ensure you have Customer Name and Mobile Number.');
+        }
       }
 
       // 2. Create Bulk Upload Directory Record
       const { data: bulkRecord, error: bulkErr } = await supabase.from('bulk_lead_uploads').insert({
-        file_name: file.name,
+        file_name: mode === 'single' ? `Manual Entry — ${singleName.trim()}` : file!.name,
         uploaded_by: user?.id,
         project_id: projectId,
         channel_partner_id: channelPartnerId || null
@@ -247,7 +272,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
         }
       }
 
-      setSuccess(`Successfully uploaded ${newLeads.length} leads.`);
+      setSuccess(mode === 'single' ? 'Lead added successfully.' : `Successfully uploaded ${newLeads.length} leads.`);
       setTimeout(() => {
         onUploadComplete();
         onClose();
@@ -268,7 +293,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between p-6 border-b border-slate-200 shrink-0">
-          <h2 className="text-xl font-semibold text-slate-800">Bulk Upload Leads</h2>
+          <h2 className="text-xl font-semibold text-slate-800">{mode === 'single' ? 'Add Single Lead' : 'Bulk Upload Leads'}</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors p-2 -mr-2">
             <X className="w-5 h-5" />
           </button>
@@ -278,31 +303,89 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
           {error && <div className="p-4 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>}
           {success && <div className="p-4 bg-emerald-50 text-emerald-700 rounded-lg text-sm">{success}</div>}
 
-          <div className="flex justify-between items-center bg-slate-50 p-4 rounded-lg border border-slate-200">
-            <div>
-              <p className="text-sm font-medium text-slate-700">Need the template?</p>
-              <p className="text-xs text-slate-500 mt-1">Download the empty Excel template with required columns.</p>
-            </div>
-            <button
-              onClick={handleDownloadTemplate}
-              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-            >
-              <Download className="w-4 h-4" />
-              Download Template
-            </button>
+          <div className="flex rounded-lg border border-slate-200 overflow-hidden w-fit">
+            {(['file', 'single'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={`px-4 py-2 text-xs font-semibold transition-all ${mode === m ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+              >
+                {m === 'file' ? 'Upload File' : 'Add Single Lead'}
+              </button>
+            ))}
           </div>
 
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Upload File *</label>
-              <input
-                type="file"
-                accept=".xlsx, .xls, .csv"
-                ref={fileInputRef}
-                onChange={(e) => setFile(e.target.files?.[0] || null)}
-                className="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 border border-slate-300 rounded-lg"
-              />
+          {mode === 'file' && (
+            <div className="flex justify-between items-center bg-slate-50 p-4 rounded-lg border border-slate-200">
+              <div>
+                <p className="text-sm font-medium text-slate-700">Need the template?</p>
+                <p className="text-xs text-slate-500 mt-1">Download the empty Excel template with required columns.</p>
+              </div>
+              <button
+                onClick={handleDownloadTemplate}
+                className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                <Download className="w-4 h-4" />
+                Download Template
+              </button>
             </div>
+          )}
+
+          <div className="space-y-4">
+            {mode === 'file' ? (
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Upload File *</label>
+                <input
+                  type="file"
+                  accept=".xlsx, .xls, .csv"
+                  ref={fileInputRef}
+                  onChange={(e) => setFile(e.target.files?.[0] || null)}
+                  className="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 border border-slate-300 rounded-lg"
+                />
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Customer Name *</label>
+                  <input
+                    type="text"
+                    value={singleName}
+                    onChange={(e) => setSingleName(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Mobile Number *</label>
+                  <input
+                    type="text"
+                    value={singleMobile}
+                    onChange={(e) => setSingleMobile(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Configuration</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 1 BHK"
+                    value={singleConfig}
+                    onChange={(e) => setSingleConfig(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Budget</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 35 L"
+                    value={singleBudget}
+                    onChange={(e) => setSingleBudget(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                  />
+                </div>
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Project *</label>
@@ -373,11 +456,11 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
           </button>
           <button
             onClick={handleUpload}
-            disabled={loading || !file || !projectId}
+            disabled={loading || !projectId || (mode === 'file' ? !file : !singleName.trim() || !singleMobile.trim())}
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-            {loading ? 'Uploading...' : 'Upload Leads'}
+            {loading ? (mode === 'single' ? 'Adding...' : 'Uploading...') : (mode === 'single' ? 'Add Lead' : 'Upload Leads')}
           </button>
         </div>
       </div>
