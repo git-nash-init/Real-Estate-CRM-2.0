@@ -156,6 +156,15 @@ async function connectToWhatsApp(userId) {
         session.loggedOut = true;
         session.connectedPhone = null;
         session.manualLogoutRequested = false;
+        // Auth state moved to per-file storage (whatsapp_auth_files) when
+        // pairing-persistence was rewritten -- this delete still targeted
+        // the old whatsapp_auth_state blob table, so the stale (now
+        // WhatsApp-invalidated) credentials never actually got cleared.
+        // Reconnecting then rehydrated those same dead creds from
+        // whatsapp_auth_files, Baileys reused them instead of registering
+        // fresh, WhatsApp rejected them as logged-out again, and the whole
+        // cycle repeated forever without ever producing a new QR code.
+        await supabase.from('whatsapp_auth_files').delete().eq('session_id', userId);
         await supabase.from('whatsapp_auth_state').delete().eq('session_id', userId);
         logger.warn({ userId }, 'Session cleared — reconnecting to generate a fresh QR code.');
         setTimeout(() => connectToWhatsApp(userId), 2000);
