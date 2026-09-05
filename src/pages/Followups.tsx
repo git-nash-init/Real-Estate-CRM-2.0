@@ -229,7 +229,8 @@ export const Followups: React.FC = () => {
             status: selectedStatus || 'pending',
             notes: notes.trim() || null,
             due_at: new Date(dueAt).toISOString(),
-            reminder_at: reminderAt ? new Date(reminderAt).toISOString() : null
+            reminder_at: reminderAt ? new Date(reminderAt).toISOString() : null,
+            created_by: user?.id
           }
         ]);
 
