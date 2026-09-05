@@ -303,22 +303,25 @@ export const SiteVisits: React.FC = () => {
       return;
     }
 
-    // A channel-partner-submitted visit always sends via the super admin's
-    // WhatsApp session -- if it isn't connected, don't save the visit at
-    // all, since the verification code would never reach anyone.
-    if (isChannelPartner) {
-      const { data: waSession } = await supabase
-        .from('whatsapp_session')
-        .select('status, last_heartbeat_at')
-        .eq('id', SWAPNIL_USER_ID)
-        .maybeSingle();
-      const fresh = waSession?.last_heartbeat_at
-        ? Date.now() - new Date(waSession.last_heartbeat_at).getTime() < 20000
-        : false;
-      if (!fresh || waSession?.status !== 'open') {
-        setQuickCreateError('Kindly ask the super admin (Swapnil) to log in to WhatsApp in order to send the message and add the site visit.');
-        return;
-      }
+    // The gateway now sends a queued message through ANY currently-open
+    // WhatsApp session, not only its own creator's -- so what actually
+    // matters here is whether at least one number is connected at all, not
+    // specifically Swapnil's. Checked once and reused for both branches
+    // below.
+    const { data: openSessions } = await supabase
+      .from('whatsapp_session')
+      .select('id, last_heartbeat_at')
+      .eq('status', 'open');
+    const anySessionOpen = (openSessions || []).some(
+      (s) => s.last_heartbeat_at && Date.now() - new Date(s.last_heartbeat_at).getTime() < 20000
+    );
+
+    // A channel-partner-submitted visit still hard-blocks if nothing is
+    // connected -- CPs have no WhatsApp session of their own to fall back
+    // on, and this keeps the existing "ask the admin" experience for them.
+    if (isChannelPartner && !anySessionOpen) {
+      setQuickCreateError('Kindly ask the super admin (Swapnil) to log in to WhatsApp in order to send the message and add the site visit.');
+      return;
     }
 
     setQuickCreateError(null);
@@ -387,6 +390,11 @@ export const SiteVisits: React.FC = () => {
         // undo that, but the admin needs to know the code wasn't sent.
         reportQueryError('Site Visits: walk-in visit code WhatsApp send', outboxErr);
         setNotification({ type: 'error', message: 'Visit logged, but the WhatsApp code could not be queued: ' + outboxErr.message });
+      } else if (!anySessionOpen) {
+        // Non-blocking for staff (unlike the Channel Partner path above) --
+        // the visit still saves and the code is queued; it'll go out
+        // automatically once any WhatsApp number reconnects.
+        setNotification({ type: 'error', message: 'Visit logged and the code is queued, but no WhatsApp number is currently connected — it will send once one reconnects.' });
       } else {
         setNotification({ type: 'success', message: 'Walk-in visit logged. Verification code sent to the customer and Channel Partner.' });
       }

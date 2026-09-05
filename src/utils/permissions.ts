@@ -65,12 +65,15 @@ export const canAddOwnLead = (role: Role) =>
   role !== 'channel_partner' && !canCreateLead(role);
 
 // Who can see the Own Leads tab at all -- everyone who can add to it (to
-// see their own), plus super_admin/site_head for oversight of everyone
-// else's self-added leads (super_admin already sees everything via
-// leads_select; site_head gets a dedicated RLS carve-out for is_own_lead
-// rows specifically, since their normal visibility is allocation-based).
+// see their own), plus super_admin/site_head/other project-management
+// roles for oversight of everyone else's self-added leads (super_admin
+// already sees everything via leads_select; the rest rely on a project-
+// scoped RLS carve-out for is_own_lead rows specifically, since their
+// normal visibility is allocation-based -- see leads_select's
+// `is_own_lead = true AND has_project_access(project_id)` clause).
 export const canViewOwnLeadsTab = (role: Role) =>
-  canAddOwnLead(role) || role === 'super_admin' || role === 'site_head';
+  canAddOwnLead(role) ||
+  ['super_admin', 'site_head', 'project_admin', 'sourcing_manager_tl', 'closing_manager_tl', 'presales_tl'].includes(role as string);
 
 // Pre Tagging (Walk-in Visits): converting a walk-in visit's customer into
 // a real lead. Per the client's explicit role list -- everyone except

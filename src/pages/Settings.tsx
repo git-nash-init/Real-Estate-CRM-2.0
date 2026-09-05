@@ -22,6 +22,8 @@ interface WhatsAppSession {
   pending_command: string | null;
   last_heartbeat_at: string | null;
   updated_at: string;
+  auth_persisted_at: string | null;
+  auth_persist_error: string | null;
 }
 
 const statusMeta: Record<string, { label: string; color: string; dot: string }> = {
@@ -142,6 +144,22 @@ const WhatsAppPanel: React.FC = () => {
           <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
           The gateway hasn't reported in — it may not be running. Start it with <code className="bg-amber-100 px-1 rounded">npm start</code> in the <code className="bg-amber-100 px-1 rounded">whatsapp-gateway/</code> folder.
         </div>
+      )}
+
+      {/* Session pairing is saved to the database in the background so a
+          gateway restart doesn't force re-scanning the QR code. If that
+          save is failing, the connection looks fine right up until the
+          next restart — surface it here instead of only in server logs. */}
+      {!isStale && effectiveStatus === 'open' && session?.auth_persist_error && (
+        <div className="flex items-start gap-2 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl p-3 text-xs mb-4">
+          <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+          <span>Connected, but this session isn't saving — a restart will require re-scanning the QR code. Error: {session.auth_persist_error}</span>
+        </div>
+      )}
+      {!isStale && effectiveStatus === 'open' && session?.auth_persisted_at && !session?.auth_persist_error && (
+        <p className="text-[10px] text-slate-400 mb-4 flex items-center gap-1">
+          <CheckCircle className="h-3 w-3 text-emerald-500" /> Session saved — survives a gateway restart. Last saved {new Date(session.auth_persisted_at).toLocaleTimeString()}.
+        </p>
       )}
 
       {!isStale && effectiveStatus !== 'open' && session?.qr_data_url && (

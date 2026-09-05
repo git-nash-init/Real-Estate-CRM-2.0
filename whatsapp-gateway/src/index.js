@@ -263,23 +263,53 @@ async function processOutboxOnce() {
 
   if (openSenderIds.length === 0) return;
 
-  const { data: rows, error } = await supabase
+  let row;
+  let usedFallbackSender = false;
+
+  const { data: ownSenderRows, error: ownSenderErr } = await supabase
     .from('whatsapp_outbox')
     .select('*')
     .eq('status', 'queued')
     .in('created_by', openSenderIds)
     .order('created_at', { ascending: true })
     .limit(1);
-
-  if (error) {
-    logger.error({ error }, 'Failed to poll outbox');
+  if (ownSenderErr) {
+    logger.error({ error: ownSenderErr }, 'Failed to poll outbox');
     return;
   }
-  if (!rows || rows.length === 0) return;
+  row = ownSenderRows?.[0];
 
-  const row = rows[0];
-  const senderUserId = row.created_by;
+  // Fall back to the oldest queued message overall, sent through whichever
+  // number IS connected, rather than leaving it stuck until its own sender
+  // pairs their number. Client's explicit choice: every member should be
+  // able to pair their own WhatsApp, but a message must still go out even
+  // when they haven't -- so an unpaired sender's message now sends from
+  // any connected number instead of sitting queued indefinitely.
+  if (!row) {
+    const { data: anyRows, error: anyErr } = await supabase
+      .from('whatsapp_outbox')
+      .select('*')
+      .eq('status', 'queued')
+      .order('created_at', { ascending: true })
+      .limit(1);
+    if (anyErr) {
+      logger.error({ error: anyErr }, 'Failed to poll outbox (fallback)');
+      return;
+    }
+    row = anyRows?.[0];
+    usedFallbackSender = true;
+  }
+
+  if (!row) return;
+
+  const senderUserId = usedFallbackSender ? openSenderIds[0] : row.created_by;
   const session = sessions.get(senderUserId);
+  if (usedFallbackSender) {
+    logger.warn(
+      { id: row.id, originalSender: row.created_by, sentVia: senderUserId },
+      'Sender not connected -- sending via fallback (any connected) session'
+    );
+  }
 
   const { data: claimed, error: claimErr } = await supabase
     .from('whatsapp_outbox')
