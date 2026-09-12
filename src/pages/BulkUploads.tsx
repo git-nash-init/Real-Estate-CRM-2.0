@@ -31,13 +31,14 @@ interface BatchLead {
 }
 
 // Values must match the DB's lead_status enum exactly (new, contacted,
-// interested, hot, site_visit_planned, site_visit_done, negotiation,
-// booking_done, not_reachable, call_back_later, lost, junk, ringing,
-// already_purchased, switch_off).
+// interested, exploring, hot, site_visit_planned, site_visit_done,
+// negotiation, booking_done, not_reachable, call_back_later, lost, junk,
+// ringing, already_purchased, switch_off).
 const STATUS_LABEL: Record<string, string> = {
   new: 'New',
   contacted: 'Contacted',
   interested: 'Interested',
+  exploring: 'Exploring',
   hot: 'Hot',
   site_visit_planned: 'Visit Planned',
   site_visit_done: 'Visit Done',

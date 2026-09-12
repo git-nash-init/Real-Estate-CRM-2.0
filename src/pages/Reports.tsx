@@ -50,13 +50,13 @@ interface AttendanceRow {
 }
 
 const leadStatuses = [
-  'new', 'contacted', 'interested', 'hot', 'site_visit_planned', 'site_visit_done',
+  'new', 'contacted', 'interested', 'exploring', 'hot', 'site_visit_planned', 'site_visit_done',
   'negotiation', 'booking_done', 'not_reachable', 'call_back_later', 'ringing',
   'already_purchased', 'switch_off', 'lost', 'junk',
 ];
 
 const statusColors: Record<string, string> = {
-  new: '#6366f1', contacted: '#3b82f6', interested: '#0ea5e9', hot: '#f97316',
+  new: '#6366f1', contacted: '#3b82f6', interested: '#0ea5e9', exploring: '#06b6d4', hot: '#f97316',
   site_visit_planned: '#a855f7', site_visit_done: '#8b5cf6', negotiation: '#eab308',
   booking_done: '#10b981', not_reachable: '#94a3b8', call_back_later: '#f59e0b',
   ringing: '#facc15', already_purchased: '#a855f7', switch_off: '#78716c',

@@ -2377,6 +2377,7 @@ export const Leads: React.FC = () => {
                         <option value="new">New Lead</option>
                         <option value="contacted">Contacted</option>
                         <option value="interested">Interested</option>
+                        <option value="exploring">Exploring</option>
                         <option value="hot">Hot</option>
                         <option value="site_visit_planned">Visit Scheduled</option>
                         <option value="site_visit_done">Visit Done</option>

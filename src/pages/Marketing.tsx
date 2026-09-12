@@ -51,7 +51,7 @@ interface OutboxCounts {
 }
 
 const leadStatusOptions = [
-  'new', 'contacted', 'interested', 'hot', 'site_visit_planned', 'site_visit_done',
+  'new', 'contacted', 'interested', 'exploring', 'hot', 'site_visit_planned', 'site_visit_done',
   'negotiation', 'booking_done', 'not_reachable', 'call_back_later', 'ringing',
   'already_purchased', 'switch_off', 'lost', 'junk',
 ];
