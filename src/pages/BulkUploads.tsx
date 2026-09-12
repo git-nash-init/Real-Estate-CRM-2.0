@@ -5,6 +5,7 @@ import { useAuth } from '../hooks/useAuth';
 import { BulkUploadModal } from '../components/leads/BulkUploadModal';
 import { canPerformBulkUpload, isSuperAdmin } from '../utils/permissions';
 import { exportRowsToExcel } from '../utils/exportExcel';
+import { reportQueryError } from '../services/queryLogger';
 
 interface BulkUploadRecord {
   id: string;
@@ -126,6 +127,66 @@ export const BulkUploads: React.FC = () => {
   const [projectMap, setProjectMap] = useState<Map<string, string>>(new Map());
   const [detailsLead, setDetailsLead] = useState<BatchLead | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+
+  // Remarks history (last 5, newest first) -- same lead_remarks table and
+  // cap-at-5 DB trigger as the main Leads directory; bulk-uploaded leads
+  // are still rows in the leads table, so this just reuses it here too.
+  const [leadRemarks, setLeadRemarks] = useState<{ id: string; remark: string; created_at: string }[]>([]);
+  const [newRemarkText, setNewRemarkText] = useState('');
+  const [addingRemark, setAddingRemark] = useState(false);
+  const [remarksError, setRemarksError] = useState<string | null>(null);
+
+  const fetchLeadRemarks = async (leadId: string) => {
+    const { data, error } = await supabase
+      .from('lead_remarks')
+      .select('id, remark, created_at')
+      .eq('lead_id', leadId)
+      .order('created_at', { ascending: false });
+    if (error) {
+      reportQueryError('Bulk Uploads: fetch remarks', error);
+      return;
+    }
+    setLeadRemarks(data || []);
+  };
+
+  const handleAddRemark = async () => {
+    if (!detailsLead || !newRemarkText.trim()) return;
+    setAddingRemark(true);
+    setRemarksError(null);
+    try {
+      const { error } = await supabase.from('lead_remarks').insert([{
+        lead_id: detailsLead.id,
+        remark: newRemarkText.trim(),
+        created_by: user?.id || null,
+      }]);
+      if (error) throw error;
+      setNewRemarkText('');
+      await fetchLeadRemarks(detailsLead.id);
+    } catch (err: any) {
+      setRemarksError(err.message || 'Failed to add remark.');
+    } finally {
+      setAddingRemark(false);
+    }
+  };
+
+  // Matches the leads_update/leads_delete RLS carve-out: super_admin/
+  // site_head unrestricted, the assigned telecaller, the sourcing manager
+  // this lead is attributed to, and a channel partner (RLS already
+  // guarantees a CP only ever sees leads attributed to them, so if they
+  // can see it here they can manage it).
+  const canManageLead = (lead: BatchLead) =>
+    role === 'super_admin' || role === 'site_head'
+    || lead.telecaller_id === user?.id
+    || (lead.sourcing_manager_id === user?.id && (role === 'sourcing_manager' || role === 'sourcing_manager_tl'))
+    || role === 'channel_partner';
+
+  const openDetailsLead = (lead: BatchLead) => {
+    setDetailsLead(lead);
+    setLeadRemarks([]);
+    setNewRemarkText('');
+    setRemarksError(null);
+    fetchLeadRemarks(lead.id);
+  };
 
   const fetchBatchLeads = async (uploadId: string) => {
     setBatchLoading(true);
@@ -292,109 +353,74 @@ export const BulkUploads: React.FC = () => {
                     <th className="px-6 py-3.5 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {batchLeads.map(lead => {
-                    // Matches the leads_update/leads_delete RLS carve-out:
-                    // super_admin/site_head unrestricted, the assigned
-                    // telecaller, the sourcing manager this lead is
-                    // attributed to, and a channel partner (RLS already
-                    // guarantees a CP only ever sees leads attributed to
-                    // them, so if they can see it here they can manage it).
-                    const canManageThisLead = role === 'super_admin' || role === 'site_head'
-                      || lead.telecaller_id === user?.id
-                      || (lead.sourcing_manager_id === user?.id && (role === 'sourcing_manager' || role === 'sourcing_manager_tl'))
-                      || role === 'channel_partner';
+                <tbody>
+                  {batchLeads.map((lead, index) => {
+                    const canManageThisLead = canManageLead(lead);
                     return (
-                      <React.Fragment key={lead.id}>
-                        <tr className="hover:bg-slate-50/50 transition-colors text-sm">
-                          <td className="px-6 py-4 font-semibold text-slate-900">{lead.customer_name || 'Unnamed'}</td>
-                          <td className="px-6 py-4 text-slate-600">{lead.mobile || 'N/A'}</td>
-                          <td className="px-6 py-4 text-slate-600">{projectMap.get(lead.project_id || '') || 'N/A'}</td>
-                          <td className="px-6 py-4 text-slate-600">{profileMap.get(lead.sourcing_manager_id || '') || 'N/A'}</td>
-                          <td className="px-6 py-4 text-slate-600">{profileMap.get(lead.owner_id || '') || 'N/A'}</td>
-                          <td className="px-6 py-4 text-slate-600">{profileMap.get(lead.telecaller_id || '') || 'N/A'}</td>
-                          <td className="px-6 py-4">
+                      <tr
+                        key={lead.id}
+                        className={`text-sm border-b-2 border-slate-200 transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'} hover:bg-indigo-50/40`}
+                      >
+                        <td className="px-6 py-4 font-semibold text-slate-900">{lead.customer_name || 'Unnamed'}</td>
+                        <td className="px-6 py-4 text-slate-600">{lead.mobile || 'N/A'}</td>
+                        <td className="px-6 py-4 text-slate-600">{projectMap.get(lead.project_id || '') || 'N/A'}</td>
+                        <td className="px-6 py-4 text-slate-600">{profileMap.get(lead.sourcing_manager_id || '') || 'N/A'}</td>
+                        <td className="px-6 py-4 text-slate-600">{profileMap.get(lead.owner_id || '') || 'N/A'}</td>
+                        <td className="px-6 py-4 text-slate-600">{profileMap.get(lead.telecaller_id || '') || 'N/A'}</td>
+                        <td className="px-6 py-4">
+                          {canManageThisLead ? (
+                            <select
+                              value={lead.status || 'new'}
+                              disabled={updatingId === lead.id}
+                              onChange={(e) => updateBatchLeadStatus(lead, e.target.value)}
+                              className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border-0 focus:ring-2 focus:ring-indigo-400 focus:outline-none disabled:opacity-50 ${statusBadgeClass(lead.status)}`}
+                            >
+                              {Object.entries(STATUS_LABEL).map(([value, label]) => (
+                                <option key={value} value={value}>{label}</option>
+                              ))}
+                            </select>
+                          ) : (
                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${statusBadgeClass(lead.status)}`}>
                               {STATUS_LABEL[lead.status || 'new'] || lead.status || 'New'}
                             </span>
-                          </td>
-                          <td className="px-6 py-4 text-right">
-                            <div className="inline-flex items-center gap-1.5">
-                              <a
-                                href={lead.mobile ? `tel:${lead.mobile}` : undefined}
-                                title={lead.mobile ? 'Call' : 'No mobile number'}
-                                className={`inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg transition-colors ${lead.mobile ? 'text-blue-600 hover:bg-blue-50' : 'opacity-40 cursor-not-allowed text-slate-400'}`}
-                              >
-                                <Phone className="h-3.5 w-3.5" />
-                              </a>
-                              <a
-                                href={lead.mobile ? `https://wa.me/${lead.mobile.replace(/\D/g, '')}` : undefined}
-                                target="_blank"
-                                rel="noreferrer"
-                                title={lead.mobile ? 'WhatsApp' : 'No mobile number'}
-                                className={`inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg transition-colors ${lead.mobile ? 'text-emerald-600 hover:bg-emerald-50' : 'opacity-40 cursor-not-allowed text-slate-400'}`}
-                              >
-                                <MessageCircle className="h-3.5 w-3.5" />
-                              </a>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="inline-flex items-center gap-1.5">
+                            <a
+                              href={lead.mobile ? `tel:${lead.mobile}` : undefined}
+                              title={lead.mobile ? 'Call' : 'No mobile number'}
+                              className={`inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg transition-colors ${lead.mobile ? 'text-blue-600 hover:bg-blue-50' : 'opacity-40 cursor-not-allowed text-slate-400'}`}
+                            >
+                              <Phone className="h-3.5 w-3.5" />
+                            </a>
+                            <a
+                              href={lead.mobile ? `https://wa.me/${lead.mobile.replace(/\D/g, '')}` : undefined}
+                              target="_blank"
+                              rel="noreferrer"
+                              title={lead.mobile ? 'WhatsApp' : 'No mobile number'}
+                              className={`inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg transition-colors ${lead.mobile ? 'text-emerald-600 hover:bg-emerald-50' : 'opacity-40 cursor-not-allowed text-slate-400'}`}
+                            >
+                              <MessageCircle className="h-3.5 w-3.5" />
+                            </a>
+                            <button
+                              onClick={() => openDetailsLead(lead)}
+                              className="px-3 py-1.5 border border-slate-200 bg-white text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-100 transition-colors"
+                            >
+                              DETAILS
+                            </button>
+                            {canDeleteBulk && (
                               <button
-                                onClick={() => setDetailsLead(lead)}
-                                className="px-3 py-1.5 border border-slate-200 bg-white text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-100 transition-colors"
+                                onClick={() => handleDeleteBatchLead(lead)}
+                                title="Delete this lead (Super Admin / Site Head only)"
+                                className="inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg text-rose-500 hover:bg-rose-50 transition-colors"
                               >
-                                DETAILS
+                                <Trash2 className="h-3.5 w-3.5" />
                               </button>
-                              {canDeleteBulk && (
-                                <button
-                                  onClick={() => handleDeleteBatchLead(lead)}
-                                  title="Delete this lead (Super Admin / Site Head only)"
-                                  className="inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg text-rose-500 hover:bg-rose-50 transition-colors"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                        {/* Status quick-actions -- only the telecaller this
-                            lead is assigned to can move it, matching the
-                            narrow leads_update RLS carve-out for bulk leads
-                            (everyone else is view-only here; full editing is
-                            super_admin-only in the main Leads directory). */}
-                        {canManageThisLead && (
-                          <tr className="bg-slate-50/50 border-b border-slate-100">
-                            <td colSpan={8} className="px-6 py-3">
-                              <div className="flex flex-wrap gap-2 items-center">
-                                <button disabled={updatingId === lead.id} onClick={() => updateBatchLeadStatus(lead, 'call_back_later')} className="px-3 py-1.5 border border-orange-500 bg-orange-500 text-black rounded-lg text-xs font-bold hover:bg-orange-600 transition-colors disabled:opacity-50">
-                                  CALL BACK
-                                </button>
-                                <button disabled={updatingId === lead.id} onClick={() => updateBatchLeadStatus(lead, 'lost')} className="px-3 py-1.5 border border-red-600 bg-red-600 text-black rounded-lg text-xs font-bold hover:bg-red-700 transition-colors disabled:opacity-50">
-                                  LOST
-                                </button>
-                                <button disabled={updatingId === lead.id} onClick={() => updateBatchLeadStatus(lead, 'booking_done')} className="px-3 py-1.5 border border-[#00FF00] bg-[#00FF00] text-black rounded-lg text-xs font-bold hover:bg-[#00cc00] transition-colors disabled:opacity-50">
-                                  BOOKED
-                                </button>
-                                <button disabled={updatingId === lead.id} onClick={() => updateBatchLeadStatus(lead, 'site_visit_planned')} className="px-3 py-1.5 border border-cyan-400 bg-cyan-400 text-black rounded-lg text-xs font-bold hover:bg-cyan-500 transition-colors disabled:opacity-50">
-                                  VISIT PLANNED
-                                </button>
-                                <button disabled={updatingId === lead.id} onClick={() => updateBatchLeadStatus(lead, 'junk')} className="px-3 py-1.5 border border-black bg-black text-red-600 rounded-lg text-xs font-bold hover:bg-gray-900 transition-colors disabled:opacity-50">
-                                  JUNK
-                                </button>
-                                <button disabled={updatingId === lead.id} onClick={() => updateBatchLeadStatus(lead, 'site_visit_done')} className="px-3 py-1.5 border border-[#5AB7B7] bg-[#5AB7B7] text-black rounded-lg text-xs font-bold hover:bg-[#4a9f9f] transition-colors disabled:opacity-50">
-                                  VISIT DONE
-                                </button>
-                                <button disabled={updatingId === lead.id} onClick={() => updateBatchLeadStatus(lead, 'ringing')} className="px-3 py-1.5 border border-yellow-400 bg-yellow-400 text-black rounded-lg text-xs font-bold hover:bg-yellow-500 transition-colors disabled:opacity-50">
-                                  RINGING
-                                </button>
-                                <button disabled={updatingId === lead.id} onClick={() => updateBatchLeadStatus(lead, 'already_purchased')} className="px-3 py-1.5 border border-purple-500 bg-purple-500 text-black rounded-lg text-xs font-bold hover:bg-purple-600 transition-colors disabled:opacity-50">
-                                  ALREADY PURCHASED
-                                </button>
-                                <button disabled={updatingId === lead.id} onClick={() => updateBatchLeadStatus(lead, 'switch_off')} className="px-3 py-1.5 border border-slate-500 bg-slate-500 text-white rounded-lg text-xs font-bold hover:bg-slate-600 transition-colors disabled:opacity-50">
-                                  SWITCH OFF
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
                     );
                   })}
                 </tbody>
@@ -405,21 +431,61 @@ export const BulkUploads: React.FC = () => {
 
         {detailsLead && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
-              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[90vh] flex flex-col">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 shrink-0">
                 <h3 className="font-bold text-slate-900">{detailsLead.customer_name || 'Lead Details'}</h3>
                 <button onClick={() => setDetailsLead(null)} className="text-slate-400 hover:text-slate-600">
                   <X className="w-5 h-5" />
                 </button>
               </div>
-              <div className="p-6 space-y-3 text-sm">
+              <div className="p-6 space-y-3 text-sm overflow-y-auto">
                 <div><span className="text-slate-400 text-xs font-bold uppercase">Mobile</span><p className="text-slate-800">{detailsLead.mobile || 'N/A'}</p></div>
                 <div><span className="text-slate-400 text-xs font-bold uppercase">Project</span><p className="text-slate-800">{projectMap.get(detailsLead.project_id || '') || 'N/A'}</p></div>
                 <div><span className="text-slate-400 text-xs font-bold uppercase">Sourcing Manager</span><p className="text-slate-800">{profileMap.get(detailsLead.sourcing_manager_id || '') || 'N/A'}</p></div>
                 <div><span className="text-slate-400 text-xs font-bold uppercase">Allocated To</span><p className="text-slate-800">{profileMap.get(detailsLead.owner_id || '') || 'N/A'}</p></div>
                 <div><span className="text-slate-400 text-xs font-bold uppercase">Presales (Telecaller)</span><p className="text-slate-800">{profileMap.get(detailsLead.telecaller_id || '') || 'N/A'}</p></div>
                 <div><span className="text-slate-400 text-xs font-bold uppercase">Status</span><p className="text-slate-800">{STATUS_LABEL[detailsLead.status || 'new'] || detailsLead.status}</p></div>
-                <div><span className="text-slate-400 text-xs font-bold uppercase">Notes</span><p className="text-slate-800 whitespace-pre-wrap">{detailsLead.notes || 'No notes.'}</p></div>
+
+                {/* Remarks (last 5, newest first) -- same lead_remarks
+                    table/logic as the main Leads directory. */}
+                <div className="border-t border-slate-100 pt-3">
+                  <span className="block text-xs font-bold text-slate-400 uppercase mb-2">Remarks (last 5, newest first)</span>
+                  {remarksError && (
+                    <div className="bg-rose-50 border border-rose-200 text-rose-800 px-3 py-2 rounded-lg text-xs mb-2">{remarksError}</div>
+                  )}
+                  {canManageLead(detailsLead) && (
+                    <div className="flex gap-2 mb-3">
+                      <input
+                        type="text"
+                        placeholder="Add a new remark..."
+                        value={newRemarkText}
+                        onChange={(e) => setNewRemarkText(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddRemark(); } }}
+                        className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-850 text-sm focus:bg-white focus:border-indigo-600 focus:outline-none transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddRemark}
+                        disabled={addingRemark || !newRemarkText.trim()}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm disabled:opacity-50 transition-all whitespace-nowrap"
+                      >
+                        {addingRemark ? 'Adding...' : 'Add'}
+                      </button>
+                    </div>
+                  )}
+                  {leadRemarks.length > 0 ? (
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {leadRemarks.map((r) => (
+                        <div key={r.id} className="bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+                          <p className="text-sm text-slate-800 whitespace-pre-wrap">{r.remark}</p>
+                          <p className="text-xxs text-slate-400 mt-1">{new Date(r.created_at).toLocaleString('en-IN')}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-400 italic">No remarks yet.</p>
+                  )}
+                </div>
               </div>
             </div>
           </div>
