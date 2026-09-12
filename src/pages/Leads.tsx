@@ -1208,6 +1208,19 @@ export const Leads: React.FC = () => {
     }
     return scoped;
   };
+  // Unlike scopeToProjectTeam (which needs a selected project and is only
+  // for the Create/Edit Lead form), the Directory filter dropdowns above
+  // just need the active-only map so a name that's shared between an
+  // active and a deactivated account doesn't show twice -- still keeping
+  // the currently-selected filter value visible even if it's inactive.
+  const withCurrentValueVisible = (activeMap: Map<string, string>, fullMap: Map<string, string>, currentValue: string) => {
+    if (currentValue && !activeMap.has(currentValue) && fullMap.has(currentValue)) {
+      const merged = new Map(activeMap);
+      merged.set(currentValue, `${fullMap.get(currentValue)} (inactive)`);
+      return merged;
+    }
+    return activeMap;
+  };
   const formSourcingManagerMap = scopeToProjectTeam(activeSourcingManagerMap, sourcingManagerMap, sourcingManagerId);
   const formTelecallerMap = scopeToProjectTeam(activeTelecallerMap, telecallerMap, telecallerId);
   const formClosingTeamMap = scopeToProjectTeam(activeClosingTeamMap, closingTeamMap, selectedOwnerId);
@@ -1390,7 +1403,7 @@ export const Leads: React.FC = () => {
               className="border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all w-full"
             >
               <option value="">All Sourcing Managers</option>
-              {Array.from(sourcingManagerMap.entries()).map(([id, name]) => (
+              {Array.from(withCurrentValueVisible(activeSourcingManagerMap, sourcingManagerMap, sourcingManagerFilter).entries()).map(([id, name]) => (
                 <option key={id} value={id}>{name}</option>
               ))}
             </select>
@@ -1402,7 +1415,7 @@ export const Leads: React.FC = () => {
               className="border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all w-full"
             >
               <option value="">All Closing Manager</option>
-              {Array.from(closingTeamMap.entries()).map(([id, name]) => (
+              {Array.from(withCurrentValueVisible(activeClosingTeamMap, closingTeamMap, closingManagerFilter).entries()).map(([id, name]) => (
                 <option key={id} value={id}>{name}</option>
               ))}
             </select>
