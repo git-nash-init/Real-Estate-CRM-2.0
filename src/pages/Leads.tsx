@@ -61,6 +61,10 @@ export const Leads: React.FC = () => {
   const [projectFilter, setProjectFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
   const [sourcingManagerFilter, setSourcingManagerFilter] = useState('');
+  // "Closing Manager" filter -- owner_id is what "Allocated To (Closing
+  // Manager)" elsewhere on this page actually refers to; there's no
+  // separate closing_manager column on leads.
+  const [closingManagerFilter, setClosingManagerFilter] = useState('');
 
   // Pagination states
   const [page, setPage] = useState(0);
@@ -348,6 +352,9 @@ export const Leads: React.FC = () => {
       if (sourcingManagerFilter) {
         query = query.eq('sourcing_manager_id', sourcingManagerFilter);
       }
+      if (closingManagerFilter) {
+        query = query.eq('owner_id', closingManagerFilter);
+      }
 
       // Apply Pagination
       const from = page * pageSize;
@@ -369,7 +376,7 @@ export const Leads: React.FC = () => {
       setLoading(false);
       setSyncing(false);
     }
-  }, [searchQuery, statusFilter, projectFilter, sourceFilter, sourcingManagerFilter, page, pageSize, role, assignedProjects]);
+  }, [searchQuery, statusFilter, projectFilter, sourceFilter, sourcingManagerFilter, closingManagerFilter, page, pageSize, role, assignedProjects]);
 
   // Resolve the current user's employee record, needed to attribute call logs.
   useEffect(() => {
@@ -482,6 +489,7 @@ export const Leads: React.FC = () => {
       }
       if (sourceFilter) query = query.eq('source', sourceFilter);
       if (sourcingManagerFilter) query = query.eq('sourcing_manager_id', sourcingManagerFilter);
+      if (closingManagerFilter) query = query.eq('owner_id', closingManagerFilter);
       query = query.order('created_at', { ascending: false });
 
       const { data, error } = await query;
@@ -1373,7 +1381,7 @@ export const Leads: React.FC = () => {
           </div>
         </div>
 
-        {/* Second Row Filters: Sourcing Manager */}
+        {/* Second Row Filters: Sourcing Manager, Closing Manager */}
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <div className="md:col-span-2">
             <select
@@ -1383,6 +1391,18 @@ export const Leads: React.FC = () => {
             >
               <option value="">All Sourcing Managers</option>
               {Array.from(sourcingManagerMap.entries()).map(([id, name]) => (
+                <option key={id} value={id}>{name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="md:col-span-2">
+            <select
+              value={closingManagerFilter}
+              onChange={handleFilterChange(setClosingManagerFilter)}
+              className="border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all w-full"
+            >
+              <option value="">All Closing Manager</option>
+              {Array.from(closingTeamMap.entries()).map(([id, name]) => (
                 <option key={id} value={id}>{name}</option>
               ))}
             </select>
