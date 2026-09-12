@@ -100,7 +100,9 @@ export const canConvertVisitToLead = (role: Role) =>
 // SiteVisits.tsx reuse for a different question (can this person manage
 // the follow-up/site-visit tied to a lead they're assigned to) that this
 // change was never meant to touch.
-export const canEditLeadRecord = (role: Role) => isSuperAdmin(role) || role === 'receptionist';
+// closing_manager added per client's explicit request -- they need to
+// edit lead details and add remarks, not just view.
+export const canEditLeadRecord = (role: Role) => isSuperAdmin(role) || role === 'receptionist' || role === 'closing_manager';
 
 export const canEditLead = (
   role: Role,
