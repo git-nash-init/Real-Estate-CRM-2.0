@@ -52,7 +52,8 @@ interface OutboxCounts {
 
 const leadStatusOptions = [
   'new', 'contacted', 'interested', 'hot', 'site_visit_planned', 'site_visit_done',
-  'negotiation', 'booking_done', 'not_reachable', 'call_back_later', 'lost', 'junk',
+  'negotiation', 'booking_done', 'not_reachable', 'call_back_later', 'ringing',
+  'already_purchased', 'switch_off', 'lost', 'junk',
 ];
 
 export const Marketing: React.FC = () => {

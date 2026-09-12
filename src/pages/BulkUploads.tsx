@@ -32,7 +32,8 @@ interface BatchLead {
 
 // Values must match the DB's lead_status enum exactly (new, contacted,
 // interested, hot, site_visit_planned, site_visit_done, negotiation,
-// booking_done, not_reachable, call_back_later, lost, junk).
+// booking_done, not_reachable, call_back_later, lost, junk, ringing,
+// already_purchased, switch_off).
 const STATUS_LABEL: Record<string, string> = {
   new: 'New',
   contacted: 'Contacted',
@@ -46,13 +47,16 @@ const STATUS_LABEL: Record<string, string> = {
   call_back_later: 'Call Back Later',
   lost: 'Lost',
   junk: 'Junk',
+  ringing: 'Ringing',
+  already_purchased: 'Already Purchased',
+  switch_off: 'Switch Off',
 };
 
 const statusBadgeClass = (status: string | null) => {
   const s = (status || 'new').toLowerCase();
   if (s === 'booking_done') return 'bg-emerald-50 text-emerald-700';
-  if (s === 'lost' || s === 'junk') return 'bg-rose-50 text-rose-700';
-  if (s === 'site_visit_planned' || s === 'site_visit_done') return 'bg-amber-50 text-amber-700';
+  if (s === 'lost' || s === 'junk' || s === 'already_purchased') return 'bg-rose-50 text-rose-700';
+  if (s === 'site_visit_planned' || s === 'site_visit_done' || s === 'ringing' || s === 'switch_off') return 'bg-amber-50 text-amber-700';
   return 'bg-indigo-50 text-indigo-700';
 };
 
@@ -375,6 +379,15 @@ export const BulkUploads: React.FC = () => {
                                 </button>
                                 <button disabled={updatingId === lead.id} onClick={() => updateBatchLeadStatus(lead, 'site_visit_done')} className="px-3 py-1.5 border border-[#5AB7B7] bg-[#5AB7B7] text-black rounded-lg text-xs font-bold hover:bg-[#4a9f9f] transition-colors disabled:opacity-50">
                                   VISIT DONE
+                                </button>
+                                <button disabled={updatingId === lead.id} onClick={() => updateBatchLeadStatus(lead, 'ringing')} className="px-3 py-1.5 border border-yellow-400 bg-yellow-400 text-black rounded-lg text-xs font-bold hover:bg-yellow-500 transition-colors disabled:opacity-50">
+                                  RINGING
+                                </button>
+                                <button disabled={updatingId === lead.id} onClick={() => updateBatchLeadStatus(lead, 'already_purchased')} className="px-3 py-1.5 border border-purple-500 bg-purple-500 text-black rounded-lg text-xs font-bold hover:bg-purple-600 transition-colors disabled:opacity-50">
+                                  ALREADY PURCHASED
+                                </button>
+                                <button disabled={updatingId === lead.id} onClick={() => updateBatchLeadStatus(lead, 'switch_off')} className="px-3 py-1.5 border border-slate-500 bg-slate-500 text-white rounded-lg text-xs font-bold hover:bg-slate-600 transition-colors disabled:opacity-50">
+                                  SWITCH OFF
                                 </button>
                               </div>
                             </td>

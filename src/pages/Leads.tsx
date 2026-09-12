@@ -2300,7 +2300,8 @@ export const Leads: React.FC = () => {
                         {/* Values must match the DB's lead_status enum exactly
                             (new, contacted, interested, hot, site_visit_planned,
                             site_visit_done, negotiation, booking_done,
-                            not_reachable, call_back_later, lost, junk) --
+                            not_reachable, call_back_later, lost, junk, ringing,
+                            already_purchased, switch_off) --
                             'visit_scheduled'/'booked' here previously didn't
                             exist in that enum, so saving either one always
                             failed with a Postgres enum error. */}
@@ -2314,6 +2315,9 @@ export const Leads: React.FC = () => {
                         <option value="booking_done">Booked</option>
                         <option value="not_reachable">Not Reachable</option>
                         <option value="call_back_later">Call Back Later</option>
+                        <option value="ringing">Ringing</option>
+                        <option value="already_purchased">Already Purchased</option>
+                        <option value="switch_off">Switch Off</option>
                         <option value="lost">Lost</option>
                         <option value="junk">Junk</option>
                       </select>
