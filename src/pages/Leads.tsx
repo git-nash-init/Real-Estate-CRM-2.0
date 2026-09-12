@@ -166,6 +166,24 @@ export const Leads: React.FC = () => {
   const [selectedSource, setSelectedSource] = useState('walk_in');
   const [selectedStatus, setSelectedStatus] = useState('new');
   const [selectedChannelPartnerId, setSelectedChannelPartnerId] = useState('');
+  // Sourcing Manager(s) allocated to whichever Channel Partner staff picked
+  // above -- client's explicit request: picking a CP should auto-select
+  // its allocated Sourcing Manager into the field below (or, if the CP has
+  // more than one allocated, restrict the choices to just that CP's set
+  // instead of every Sourcing Manager in the company).
+  const [selectedCpSourcingManagerIds, setSelectedCpSourcingManagerIds] = useState<string[]>([]);
+  const handleChannelPartnerSelect = async (cpId: string) => {
+    setSelectedChannelPartnerId(cpId);
+    if (!cpId) { setSelectedCpSourcingManagerIds([]); return; }
+    const { data, error } = await supabase
+      .from('channel_partner_sourcing_managers')
+      .select('sourcing_manager_id')
+      .eq('channel_partner_id', cpId);
+    if (error) { reportQueryError('Leads: CP sourcing manager allocations', error); return; }
+    const ids = (data || []).map((r: any) => r.sourcing_manager_id).filter(Boolean);
+    setSelectedCpSourcingManagerIds(ids);
+    if (ids.length === 1) setSourcingManagerId(ids[0]);
+  };
   // `notes` is only used as the initial remark on brand-new-lead creation
   // now -- editing an existing lead's remarks happens through the
   // lead_remarks history below instead of overwriting a single field.
@@ -931,6 +949,19 @@ export const Leads: React.FC = () => {
     setSelectedSource(lead.source || 'walk_in');
     setSelectedStatus(lead.status || 'new');
     setSelectedChannelPartnerId(lead.channel_partner_id || '');
+    // Restricts the Sourcing Manager dropdown the same way picking this CP
+    // fresh would -- without setSourcingManagerId, so it doesn't clobber
+    // this lead's actual saved value (set separately below) even if it
+    // isn't one of the CP's currently-allocated managers.
+    if (lead.channel_partner_id) {
+      supabase.from('channel_partner_sourcing_managers').select('sourcing_manager_id').eq('channel_partner_id', lead.channel_partner_id)
+        .then(({ data, error }) => {
+          if (error) { reportQueryError('Leads: CP sourcing manager allocations', error); return; }
+          setSelectedCpSourcingManagerIds((data || []).map((r: any) => r.sourcing_manager_id).filter(Boolean));
+        });
+    } else {
+      setSelectedCpSourcingManagerIds([]);
+    }
     setVisitType((lead as any).visit_type || 'Fresh');
     setVisitDate((lead as any).visit_date || new Date().toISOString().split('T')[0]);
     setResidenceAddress((lead as any).residence_address || '');
@@ -1165,6 +1196,7 @@ export const Leads: React.FC = () => {
     setSelectedSource('walk_in');
     setSelectedStatus('new');
     setSelectedChannelPartnerId('');
+    setSelectedCpSourcingManagerIds([]);
     setNotes('');
     setVisitType('Fresh');
     setVisitDate(new Date().toISOString().split('T')[0]);
@@ -2299,7 +2331,7 @@ export const Leads: React.FC = () => {
                           setSelectedSource(e.target.value);
                           // Don't let a stale CP attribution silently ride
                           // along once the field hiding above hides it from view.
-                          if (e.target.value !== 'channel_partner') setSelectedChannelPartnerId('');
+                          if (e.target.value !== 'channel_partner') { setSelectedChannelPartnerId(''); setSelectedCpSourcingManagerIds([]); }
                         }}
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all disabled:opacity-60 disabled:cursor-not-allowed"
                       >
@@ -2365,11 +2397,17 @@ export const Leads: React.FC = () => {
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
                         <option value="">Select Sourcing Manager...</option>
-                        {Array.from(formSourcingManagerMap.entries()).map(([id, name]) => (
-                          <option key={id} value={id}>{name}</option>
-                        ))}
+                        {selectedCpSourcingManagerIds.length > 0
+                          ? selectedCpSourcingManagerIds.map(id => (
+                              <option key={id} value={id}>{sourcingManagerMap.get(id) || 'Unknown'}</option>
+                            ))
+                          : Array.from(formSourcingManagerMap.entries()).map(([id, name]) => (
+                              <option key={id} value={id}>{name}</option>
+                            ))}
                       </select>
-                      {!selectedProjectId ? (
+                      {selectedCpSourcingManagerIds.length > 1 ? (
+                        <p className="text-[10px] text-slate-400 mt-1">Restricted to the Sourcing Manager(s) allocated to the selected Channel Partner.</p>
+                      ) : !selectedProjectId ? (
                         <p className="text-[10px] text-slate-400 mt-1">Select a Project first to see its Sourcing Managers.</p>
                       ) : formSourcingManagerMap.size === 0 && (
                         <p className="text-[10px] text-amber-600 mt-1">No Sourcing Manager is assigned to this project yet.</p>
@@ -2474,7 +2512,7 @@ export const Leads: React.FC = () => {
                           required
                           disabled={isChannelPartner}
                           value={selectedChannelPartnerId}
-                          onChange={(e) => setSelectedChannelPartnerId(e.target.value)}
+                          onChange={(e) => handleChannelPartnerSelect(e.target.value)}
                           className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all disabled:opacity-60 disabled:cursor-not-allowed"
                         >
                           <option value="">Select Channel Partner...</option>
