@@ -1117,7 +1117,27 @@ export const Bookings: React.FC = () => {
           item.id === selectedInventoryId ? { ...item, status: 'booked' } : item
         ));
       } else {
-        // Draft bookings: keep unit status available
+        // Draft bookings: hold the unit (not left available) -- client's
+        // explicit request: a unit with a draft booking should show as
+        // Hold, not Available, so other staff don't try to book it too.
+        // Same atomic available->hold guard as the confirmed path, so two
+        // draft bookings can never race onto the same unit.
+        const { data: heldUnits, error: holdUnitErr } = await supabase
+          .from('project_inventory')
+          .update({ status: 'hold', hold_by: userId, hold_at: new Date().toISOString(), hold_reason: 'Draft booking' })
+          .eq('id', selectedInventoryId)
+          .eq('status', 'available')
+          .select();
+
+        if (holdUnitErr) {
+          throw new Error(`Failed to hold unit: ${holdUnitErr.message}`);
+        }
+        if (!heldUnits || heldUnits.length === 0) {
+          setCreateError("Unit is no longer available. Please select another unit.");
+          setCreateLoading(false);
+          return;
+        }
+
         const { error: insertError } = await supabase
           .from('bookings')
           .insert([
@@ -1149,8 +1169,17 @@ export const Bookings: React.FC = () => {
           ]);
 
         if (insertError) {
+          // Rollback unit status back to available on failure
+          await supabase
+            .from('project_inventory')
+            .update({ status: 'available' })
+            .eq('id', selectedInventoryId);
           throw new Error(`Unable to create booking. Please try again. ${insertError.message}`);
         }
+
+        setInventoryList(prev => prev.map(item =>
+          item.id === selectedInventoryId ? { ...item, status: 'hold' } : item
+        ));
       }
 
       // Reset form states
@@ -1213,14 +1242,16 @@ export const Bookings: React.FC = () => {
           throw new Error("Booking record is missing a valid unit assignment.");
         }
 
-        // Try to lock and set unit status to booked atomically
+        // Try to lock and set unit status to booked atomically -- a draft
+        // booking's unit is held (not available) once created, so this
+        // transitions from hold, not available.
         const { data: updatedUnits, error: updateUnitErr } = await supabase
           .from('project_inventory')
-          .update({ status: 'booked' })
+          .update({ status: 'booked', hold_by: null, hold_at: null, hold_until: null, hold_reason: null })
           .eq('id', bookingRecord.inventory_id)
-          .eq('status', 'available')
+          .eq('status', 'hold')
           .select();
-        
+
         if (updateUnitErr) {
           throw new Error(`Failed to reserve unit: ${updateUnitErr.message}`);
         }
@@ -1236,10 +1267,10 @@ export const Bookings: React.FC = () => {
           .eq('status', 'draft');
         
         if (updateError) {
-          // Rollback unit status back to available
+          // Rollback unit status back to hold (its state before this attempt)
           await supabase
             .from('project_inventory')
-            .update({ status: 'available' })
+            .update({ status: 'hold' })
             .eq('id', bookingRecord.inventory_id);
           throw new Error("Unable to confirm booking. Please try again.");
         }

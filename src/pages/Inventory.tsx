@@ -1375,13 +1375,13 @@ export const Inventory: React.FC = () => {
                       <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
                         Units Map ({activeFloorUnits.length})
                       </h4>
-                      <div className="flex items-center space-x-2 text-xxs font-semibold">
-                        <span className="inline-block w-2.5 h-2.5 bg-emerald-100 border border-emerald-300 rounded"></span>
-                        <span className="text-slate-500 mr-2">Available</span>
-                        <span className="inline-block w-2.5 h-2.5 bg-indigo-100 border border-indigo-300 rounded"></span>
-                        <span className="text-slate-500 mr-2">Held</span>
-                        <span className="inline-block w-2.5 h-2.5 bg-blue-100 border border-blue-300 rounded"></span>
-                        <span className="text-slate-500">Booked</span>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xxs font-semibold">
+                        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 bg-emerald-500 rounded-full"></span><span className="text-slate-500">Available</span></span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 bg-amber-500 rounded-full"></span><span className="text-slate-500">Held</span></span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 bg-blue-500 rounded-full"></span><span className="text-slate-500">Booked</span></span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 bg-slate-400 rounded-full"></span><span className="text-slate-500">Blocked</span></span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 bg-purple-500 rounded-full"></span><span className="text-slate-500">Sold</span></span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 bg-rose-500 rounded-full"></span><span className="text-slate-500">Cancelled</span></span>
                       </div>
                     </div>
 
@@ -1389,21 +1389,31 @@ export const Inventory: React.FC = () => {
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                         {activeFloorUnits.map(unit => {
                           const statusLower = unit.status.toLowerCase();
+                          const statusStyles: Record<string, string> = {
+                            available: 'bg-emerald-100 border-emerald-400 text-emerald-900 hover:bg-emerald-200',
+                            hold: 'bg-amber-100 border-amber-400 text-amber-900 hover:bg-amber-200',
+                            booked: 'bg-blue-100 border-blue-400 text-blue-900 hover:bg-blue-200',
+                            blocked: 'bg-slate-200 border-slate-400 text-slate-800 hover:bg-slate-300',
+                            sold: 'bg-purple-100 border-purple-400 text-purple-900 hover:bg-purple-200',
+                            cancelled: 'bg-rose-100 border-rose-400 text-rose-900 hover:bg-rose-200',
+                          };
+                          const statusDot: Record<string, string> = {
+                            available: 'bg-emerald-500', hold: 'bg-amber-500', booked: 'bg-blue-500',
+                            blocked: 'bg-slate-500', sold: 'bg-purple-500', cancelled: 'bg-rose-500',
+                          };
                           return (
                             <button
                               key={unit.id}
                               onClick={() => setSelectedUnit(unit)}
-                              className={`p-4 rounded-xl border-2 text-left transition-all hover:scale-[1.01] hover:shadow-sm ${
-                                statusLower === 'available' ? 'bg-emerald-50/50 border-emerald-200 text-emerald-950 hover:bg-emerald-50' :
-                                statusLower === 'hold' ? 'bg-indigo-50/50 border-indigo-200 text-indigo-950 hover:bg-indigo-50' :
-                                statusLower === 'booked' ? 'bg-blue-50/50 border-blue-200 text-blue-950 hover:bg-blue-50' :
-                                statusLower === 'blocked' ? 'bg-slate-50 border-slate-200 text-slate-700' :
-                                'bg-rose-50/50 border-rose-200 text-rose-950'
-                              }`}
+                              className={`p-4 rounded-xl border-2 text-left transition-all hover:scale-[1.01] hover:shadow-sm ${statusStyles[statusLower] || 'bg-slate-100 border-slate-300 text-slate-800'}`}
                             >
                               <div className="flex justify-between items-start">
                                 <span className="text-sm font-bold">{unit.unit_number}</span>
                                 <span className="text-xxs font-semibold uppercase">{unit.configuration || 'N/A'}</span>
+                              </div>
+                              <div className="flex items-center gap-1 mt-2">
+                                <span className={`inline-block w-1.5 h-1.5 rounded-full ${statusDot[statusLower] || 'bg-slate-500'}`}></span>
+                                <span className="text-[10px] font-bold uppercase tracking-wide">{statusLower || 'unknown'}</span>
                               </div>
                             </button>
                           );
