@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
-import { canCreateBooking, canCancelBooking, isSuperAdmin } from '../utils/permissions';
+import { canCreateBooking, canCancelBooking, canReopenBooking, isSuperAdmin } from '../utils/permissions';
 import { computeCurrentlyDueTotal, totalMilestonePercentage } from '../utils/bookingDue';
 import { exportRowsToExcel } from '../utils/exportExcel';
 import {
@@ -1427,6 +1427,64 @@ export const Bookings: React.FC = () => {
     }
   };
 
+  // Reopen a cancelled booking back to confirmed -- super_admin/site_head
+  // only (canReopenBooking gates the button). Re-locks the unit atomically
+  // (status='available' -> 'booked') so this can never silently steal a
+  // unit that was re-booked to someone else after this one was cancelled;
+  // if that race is lost, the booking status is left untouched and the
+  // admin is told to pick a different unit via Edit Booking instead.
+  // Does NOT reinstate any channel-partner referral fee that was voided on
+  // cancellation -- that needs a deliberate look, not an automatic flip.
+  const [reopeningId, setReopeningId] = useState<string | null>(null);
+  const handleReopenBooking = async (booking: Booking) => {
+    if (booking.status?.toLowerCase() !== 'cancelled') return;
+    if (!booking.inventory_id) {
+      setNotification({ type: 'error', message: 'This booking has no unit assigned, so it cannot be reopened.' });
+      return;
+    }
+    if (!window.confirm(`Reopen booking ${booking.booking_number || ''} as Confirmed? This will re-lock unit ${inventoryMap.get(booking.inventory_id)?.unit_number || ''} if it's still available.`)) {
+      return;
+    }
+    setReopeningId(booking.id);
+    try {
+      const { data: relockedUnits, error: relockErr } = await supabase
+        .from('project_inventory')
+        .update({ status: 'booked' })
+        .eq('id', booking.inventory_id)
+        .eq('status', 'available')
+        .select();
+      if (relockErr) throw new Error(`Failed to re-lock unit: ${relockErr.message}`);
+      if (!relockedUnits || relockedUnits.length === 0) {
+        throw new Error('This unit is no longer available (likely booked to someone else since this booking was cancelled). Use Edit Booking to assign a different unit instead.');
+      }
+
+      const { error: updateErr } = await supabase
+        .from('bookings')
+        .update({ status: 'confirmed' })
+        .eq('id', booking.id)
+        .eq('status', 'cancelled');
+      if (updateErr) {
+        // Roll the unit lock back since the booking side failed.
+        await supabase.from('project_inventory').update({ status: 'available' }).eq('id', booking.inventory_id);
+        throw new Error('Unable to reopen booking. Please try again.');
+      }
+
+      setInventoryList(prev => prev.map(item => item.id === booking.inventory_id ? { ...item, status: 'booked' } : item));
+      setBookings(prev => prev.map(b => b.id === booking.id ? { ...b, status: 'confirmed' } : b));
+      if (selectedBooking && selectedBooking.id === booking.id) {
+        setSelectedBooking(prev => prev ? { ...prev, status: 'confirmed' } : null);
+      }
+
+      setNotification({ type: 'success', message: 'Booking reopened as Confirmed and the unit re-locked.' });
+      await fetchLookups();
+      await fetchBookings();
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to reopen booking.' });
+    } finally {
+      setReopeningId(null);
+    }
+  };
+
   // Search and project filter are both applied server-side in fetchBookings
   // now, so `bookings` is already the filtered set for the current page.
   const getFilteredBookings = () => {
@@ -1770,7 +1828,18 @@ export const Bookings: React.FC = () => {
                                   Cancel
                                 </button>
                               )}
-                              
+
+                              {/* Reopen Booking Action -- super_admin/site_head only */}
+                              {canReopenBooking(role) && b.status?.toLowerCase() === 'cancelled' && (
+                                <button
+                                  onClick={() => handleReopenBooking(b)}
+                                  disabled={reopeningId === b.id}
+                                  className="px-2.5 py-1.5 bg-emerald-50 border border-emerald-100 text-emerald-700 hover:bg-emerald-100 rounded-lg text-xs font-semibold disabled:opacity-50"
+                                >
+                                  {reopeningId === b.id ? 'Reopening...' : 'Reopen'}
+                                </button>
+                              )}
+
                               <button
                                 onClick={() => setSelectedBooking(b)}
                                 className="inline-flex items-center space-x-1 px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition-colors"
@@ -2281,6 +2350,15 @@ export const Bookings: React.FC = () => {
                     disabled={!canApproveBooking(selectedBooking)}
                   >
                     Cancel Booking
+                  </button>
+                )}
+                {canReopenBooking(role) && selectedBooking.status?.toLowerCase() === 'cancelled' && (
+                  <button
+                    onClick={() => handleReopenBooking(selectedBooking)}
+                    disabled={reopeningId === selectedBooking.id}
+                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition-colors disabled:opacity-50"
+                  >
+                    {reopeningId === selectedBooking.id ? 'Reopening...' : 'Reopen Booking'}
                   </button>
                 )}
               </div>

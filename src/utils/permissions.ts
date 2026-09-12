@@ -39,6 +39,12 @@ export const canCancelBooking = (role: Role) => role === 'super_admin';
 export const canEditPayment = (role: Role) => isAdminLevel(role);
 export const canCancelPayment = (role: Role) => role === 'super_admin';
 
+// Reopening a cancelled booking back to confirmed (re-locking its unit) --
+// client's explicit request, restricted to super_admin and site_head only
+// (deliberately narrower than isAdminLevel, which also includes
+// project_admin).
+export const canReopenBooking = (role: Role) => role === 'super_admin' || role === 'site_head';
+
 // A4: Marketing
 export const canSendMarketingBlast = (role: Role) => 
   ['super_admin', 'closing_manager', 'marketing_head'].includes(role as string);
