@@ -1583,17 +1583,32 @@ export const ChannelPartners: React.FC = () => {
                     the disabled attribute below. */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Allocated Sourcing Manager</label>
-                  <select
-                    value={formSourcingManagerId}
-                    disabled={!canApprove}
-                    onChange={(e) => setFormSourcingManagerId(e.target.value)}
-                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    <option value="">Select Sourcing Manager...</option>
+                  <div className="border border-slate-200 rounded-xl p-3 max-h-48 overflow-y-auto space-y-2 bg-slate-50">
+                    <label className={`flex items-center gap-2 text-sm text-slate-700 ${canApprove ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+                      <input
+                        type="radio"
+                        name="allocatedSourcingManager"
+                        checked={!formSourcingManagerId}
+                        disabled={!canApprove}
+                        onChange={() => setFormSourcingManagerId('')}
+                        className="text-indigo-600 focus:ring-indigo-500"
+                      />
+                      None
+                    </label>
                     {sourcingManagers.map(sm => (
-                      <option key={sm.id} value={sm.id}>{sm.name}</option>
+                      <label key={sm.id} className={`flex items-center gap-2 text-sm text-slate-700 ${canApprove ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+                        <input
+                          type="radio"
+                          name="allocatedSourcingManager"
+                          checked={formSourcingManagerId === sm.id}
+                          disabled={!canApprove}
+                          onChange={() => setFormSourcingManagerId(sm.id)}
+                          className="text-indigo-600 focus:ring-indigo-500"
+                        />
+                        {sm.name}
+                      </label>
                     ))}
-                  </select>
+                  </div>
                   <p className="text-[10px] text-slate-400 mt-1">
                     {canApprove
                       ? 'This Sourcing Manager auto-fills whenever this partner adds a lead.'
