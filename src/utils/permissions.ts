@@ -107,8 +107,14 @@ export const canConvertVisitToLead = (role: Role) =>
 // the follow-up/site-visit tied to a lead they're assigned to) that this
 // change was never meant to touch.
 // closing_manager added per client's explicit request -- they need to
-// edit lead details and add remarks, not just view.
-export const canEditLeadRecord = (role: Role) => isSuperAdmin(role) || role === 'receptionist' || role === 'closing_manager';
+// edit lead details and add remarks, not just view. closing_manager_tl
+// included too -- a TL can already be the "Allocated To" owner on a lead
+// (see closingTeamMap in Leads.tsx) and every other closing_manager
+// permission in this file already covers the TL variant alongside it, so
+// a TL who owns a lead was left unable to edit their own lead through
+// this button (reported live: the closing manager for a project, whose
+// actual role is closing_manager_tl, couldn't edit leads at all).
+export const canEditLeadRecord = (role: Role) => isSuperAdmin(role) || role === 'receptionist' || role === 'closing_manager' || role === 'closing_manager_tl';
 
 export const canEditLead = (
   role: Role,
