@@ -162,8 +162,15 @@ export const Leads: React.FC = () => {
   const [selectedSource, setSelectedSource] = useState('walk_in');
   const [selectedStatus, setSelectedStatus] = useState('new');
   const [selectedChannelPartnerId, setSelectedChannelPartnerId] = useState('');
+  // `notes` is only used as the initial remark on brand-new-lead creation
+  // now -- editing an existing lead's remarks happens through the
+  // lead_remarks history below instead of overwriting a single field.
   const [notes, setNotes] = useState('');
-  
+  const [leadRemarks, setLeadRemarks] = useState<{ id: string; remark: string; created_at: string }[]>([]);
+  const [newRemarkText, setNewRemarkText] = useState('');
+  const [addingRemark, setAddingRemark] = useState(false);
+  const [remarksError, setRemarksError] = useState<string | null>(null);
+
   // New Lead fields
   const [visitType, setVisitType] = useState('Fresh');
   const [visitDate, setVisitDate] = useState(new Date().toISOString().split('T')[0]);
@@ -861,6 +868,42 @@ export const Leads: React.FC = () => {
     return `LD-${Date.now()}`;
   };
 
+  // Newest-first, capped at 5 server-side (cap_lead_remarks_trigger) --
+  // this just displays whatever the DB already returns in that order.
+  const fetchLeadRemarks = async (leadId: string) => {
+    const { data, error } = await supabase
+      .from('lead_remarks')
+      .select('id, remark, created_at')
+      .eq('lead_id', leadId)
+      .order('created_at', { ascending: false });
+    if (error) {
+      reportQueryError('Leads: fetch remarks', error);
+      return;
+    }
+    setLeadRemarks(data || []);
+  };
+
+  const handleAddRemark = async () => {
+    if (!editingLead || !newRemarkText.trim()) return;
+    setAddingRemark(true);
+    setRemarksError(null);
+    try {
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      const { error } = await supabase.from('lead_remarks').insert([{
+        lead_id: editingLead.id,
+        remark: newRemarkText.trim(),
+        created_by: authUser?.id || null,
+      }]);
+      if (error) throw error;
+      setNewRemarkText('');
+      await fetchLeadRemarks(editingLead.id);
+    } catch (err: any) {
+      setRemarksError(err.message || 'Failed to add remark.');
+    } finally {
+      setAddingRemark(false);
+    }
+  };
+
   // Populates the shared create/edit form's state from an existing lead
   // and opens it in edit mode.
   const openEditLead = (lead: Lead) => {
@@ -873,7 +916,6 @@ export const Leads: React.FC = () => {
     setSelectedSource(lead.source || 'walk_in');
     setSelectedStatus(lead.status || 'new');
     setSelectedChannelPartnerId(lead.channel_partner_id || '');
-    setNotes(lead.notes || '');
     setVisitType((lead as any).visit_type || 'Fresh');
     setVisitDate((lead as any).visit_date || new Date().toISOString().split('T')[0]);
     setResidenceAddress((lead as any).residence_address || '');
@@ -884,6 +926,10 @@ export const Leads: React.FC = () => {
     setTelecallerId((lead as any).telecaller_id || '');
     setNextFollowupAt((lead as any).next_followup_at ? (lead as any).next_followup_at.slice(0, 16) : '');
     setCreateError(null);
+    setNewRemarkText('');
+    setRemarksError(null);
+    setLeadRemarks([]);
+    fetchLeadRemarks(lead.id);
     setIsCreateOpen(true);
   };
 
@@ -929,7 +975,6 @@ export const Leads: React.FC = () => {
         source: selectedSource || null,
         owner_id: selectedOwnerId || null,
         status: selectedStatus || 'new',
-        notes: notes.trim() || null,
         channel_partner_id: selectedChannelPartnerId || null,
         visit_type: visitType,
         visit_date: visitDate || null,
@@ -975,6 +1020,16 @@ export const Leads: React.FC = () => {
 
         if (insertError) throw new Error(insertError.message);
         insertedLead = data;
+
+        // The Remark field on a brand-new lead becomes its first history
+        // entry, instead of the old single leads.notes column.
+        if (insertedLead && notes.trim()) {
+          await supabase.from('lead_remarks').insert([{
+            lead_id: insertedLead.id,
+            remark: notes.trim(),
+            created_by: user?.id || null,
+          }]);
+        }
       }
 
       // Send Welcome Message for all new leads
@@ -1105,6 +1160,9 @@ export const Leads: React.FC = () => {
     setSourcingManagerId('');
     setTelecallerId('');
     setNextFollowupAt('');
+    setLeadRemarks([]);
+    setNewRemarkText('');
+    setRemarksError(null);
   };
 
   // Pagination bounds
@@ -1422,7 +1480,7 @@ export const Leads: React.FC = () => {
                               </button>
                             )}
                             <button
-                              onClick={() => setSelectedLead(lead)}
+                              onClick={() => { setSelectedLead(lead); setLeadRemarks([]); fetchLeadRemarks(lead.id); }}
                               className="inline-flex items-center space-x-1 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition-colors focus:outline-none"
                             >
                               <Eye className="h-3.5 w-3.5" />
@@ -1710,12 +1768,23 @@ export const Leads: React.FC = () => {
                 </div>
               </div>
 
-              {/* Notes */}
+              {/* Remarks (last 5, newest first) */}
               <div className="border-t border-slate-100 pt-5">
-                <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider mb-2">Audit Notes / Comments</span>
-                <div className="bg-slate-50 border border-slate-100 p-4 rounded-xl text-sm text-slate-700 leading-relaxed max-h-[150px] overflow-y-auto">
-                  {selectedLead.notes || 'No audit notes available for this lead.'}
-                </div>
+                <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider mb-2">Remarks (last 5, newest first)</span>
+                {leadRemarks.length > 0 ? (
+                  <div className="space-y-2 max-h-[200px] overflow-y-auto">
+                    {leadRemarks.map((r) => (
+                      <div key={r.id} className="bg-slate-50 border border-slate-100 rounded-xl px-4 py-2.5">
+                        <p className="text-sm text-slate-700 whitespace-pre-wrap">{r.remark}</p>
+                        <p className="text-xxs text-slate-400 mt-1">{new Date(r.created_at).toLocaleString('en-IN')}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bg-slate-50 border border-slate-100 p-4 rounded-xl text-sm text-slate-400 italic">
+                    No remarks available for this lead.
+                  </div>
+                )}
               </div>
             </div>
 
@@ -2361,17 +2430,60 @@ export const Leads: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Remark Textarea (Full Width) */}
-                <div className="text-left">
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Remark</label>
-                  <textarea
-                    placeholder="Provide any additional follow-up remark or notes..."
-                    rows={2}
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-850 text-sm focus:bg-white focus:border-indigo-600 focus:outline-none transition-all resize-none"
-                  />
-                </div>
+                {/* Remark(s) -- a brand-new lead gets a simple single Remark
+                    field (becomes its first history entry on save); an
+                    existing lead shows its remark history (newest first,
+                    capped at 5 server-side) plus a box to add another,
+                    added immediately rather than waiting for Save Changes. */}
+                {!editingLead ? (
+                  <div className="text-left">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Remark</label>
+                    <textarea
+                      placeholder="Provide any additional follow-up remark or notes..."
+                      rows={2}
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-850 text-sm focus:bg-white focus:border-indigo-600 focus:outline-none transition-all resize-none"
+                    />
+                  </div>
+                ) : (
+                  <div className="text-left">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Remarks (last 5, newest first)</label>
+                    {remarksError && (
+                      <div className="bg-rose-50 border border-rose-200 text-rose-800 px-3 py-2 rounded-lg text-xs mb-2">{remarksError}</div>
+                    )}
+                    <div className="flex gap-2 mb-3">
+                      <input
+                        type="text"
+                        placeholder="Add a new remark..."
+                        value={newRemarkText}
+                        onChange={(e) => setNewRemarkText(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddRemark(); } }}
+                        className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-850 text-sm focus:bg-white focus:border-indigo-600 focus:outline-none transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddRemark}
+                        disabled={addingRemark || !newRemarkText.trim()}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm disabled:opacity-50 transition-all whitespace-nowrap"
+                      >
+                        {addingRemark ? 'Adding...' : 'Add Remark'}
+                      </button>
+                    </div>
+                    {leadRemarks.length > 0 ? (
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {leadRemarks.map((r) => (
+                          <div key={r.id} className="bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+                            <p className="text-sm text-slate-800 whitespace-pre-wrap">{r.remark}</p>
+                            <p className="text-xxs text-slate-400 mt-1">{new Date(r.created_at).toLocaleString('en-IN')}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-400 italic">No remarks yet.</p>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Form Footer */}
