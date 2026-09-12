@@ -387,19 +387,26 @@ export const Leads: React.FC = () => {
 
   // Channel partner adding their own lead: resolve their own CP id, then
   // scope the Project dropdown to their channel_partner_projects assignments.
-  // Also resolve the Sourcing Manager allocated to them (channel_partners.
-  // sourcing_manager, set by super_admin/site_head on the CP record) so
-  // their New Lead form's Sourcing Manager field can auto-fill instead of
-  // being manually picked.
-  const [myCpSourcingManagerId, setMyCpSourcingManagerId] = useState<string | null>(null);
+  // Also resolve the Sourcing Manager(s) allocated to them
+  // (channel_partner_sourcing_managers, set by super_admin/site_head on the
+  // CP record) so their New Lead form's Sourcing Manager field can
+  // auto-fill when exactly one is allocated, or let them pick from just
+  // their allocated set when more than one is.
+  const [myCpSourcingManagerIds, setMyCpSourcingManagerIds] = useState<string[]>([]);
   useEffect(() => {
     if (!isChannelPartner || !user?.id) return;
-    supabase.from('channel_partners').select('id, sourcing_manager').eq('user_id', user.id).maybeSingle()
+    supabase.from('channel_partners').select('id').eq('user_id', user.id).maybeSingle()
       .then(({ data: ownCp, error }) => {
         if (error) { reportQueryError('Leads: own channel partner lookup', error); return; }
         if (!ownCp) return;
         setMyCpId(ownCp.id);
-        setMyCpSourcingManagerId(ownCp.sourcing_manager);
+        supabase.from('channel_partner_sourcing_managers').select('sourcing_manager_id').eq('channel_partner_id', ownCp.id)
+          .then(({ data: smRows, error: smErr }) => {
+            if (smErr) { reportQueryError('Leads: CP sourcing manager allocations', smErr); return; }
+            const ids = (smRows || []).map((r: any) => r.sourcing_manager_id).filter(Boolean);
+            setMyCpSourcingManagerIds(ids);
+            if (ids.length === 1) setSourcingManagerId(ids[0]);
+          });
         supabase.from('channel_partner_projects').select('project_id, projects(project_name)').eq('channel_partner_id', ownCp.id)
           .then(({ data: assignments, error: assignErr }) => {
             if (assignErr) { reportQueryError('Leads: CP project assignments', assignErr); return; }
@@ -743,13 +750,13 @@ export const Leads: React.FC = () => {
         if (isChannelPartner) {
           setSelectedSource('channel_partner');
           setSelectedChannelPartnerId(myCpId || '');
-          setSourcingManagerId(myCpSourcingManagerId || '');
+          setSourcingManagerId(myCpSourcingManagerIds.length === 1 ? myCpSourcingManagerIds[0] : '');
         }
         setIsCreateOpen(true);
       }
       setSearchParams({}, { replace: true });
     }
-  }, [searchParams, setSearchParams, hasCreateAccess, isChannelPartner, myCpId, myCpSourcingManagerId]);
+  }, [searchParams, setSearchParams, hasCreateAccess, isChannelPartner, myCpId, myCpSourcingManagerIds]);
 
   // "Own Leads" -- a separate, simpler self-service list for roles that
   // don't allocate leads to other people (sourcing_manager, telecaller,
@@ -1238,7 +1245,7 @@ export const Leads: React.FC = () => {
                 if (isChannelPartner) {
                   setSelectedSource('channel_partner');
                   setSelectedChannelPartnerId(myCpId || '');
-                  setSourcingManagerId(myCpSourcingManagerId || '');
+                  setSourcingManagerId(myCpSourcingManagerIds.length === 1 ? myCpSourcingManagerIds[0] : '');
                 }
                 setIsCreateOpen(true);
               }}
@@ -2284,20 +2291,38 @@ export const Leads: React.FC = () => {
                     <h4 className="font-bold text-xs text-indigo-600 border-b border-slate-100 pb-1.5 uppercase tracking-wider">Follow-up & Allocation</h4>
 
                     {/* Sourcing Manager is required for everyone, including
-                        a channel partner -- but a CP doesn't pick one, it's
-                        auto-filled from the Sourcing Manager allocated to
-                        them on their Channel Partner record (super_admin/
-                        site_head assign that during onboarding or later). */}
+                        a channel partner -- a CP with exactly one allocated
+                        Sourcing Manager gets it auto-filled (read-only);
+                        with more than one allocated, they pick from just
+                        their own allocated set instead of every Sourcing
+                        Manager in the company (super_admin/site_head assign
+                        the allocation itself, on the CP record). */}
                     {isChannelPartner ? (
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager</label>
-                        <div className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-100 text-slate-500 text-sm">
-                          {sourcingManagerMap.get(myCpSourcingManagerId || '') || 'Not allocated yet'}
+                      myCpSourcingManagerIds.length > 1 ? (
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager</label>
+                          <select
+                            value={sourcingManagerId}
+                            onChange={(e) => setSourcingManagerId(e.target.value)}
+                            className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
+                          >
+                            <option value="">Choose Sourcing Manager...</option>
+                            {myCpSourcingManagerIds.map(id => (
+                              <option key={id} value={id}>{sourcingManagerMap.get(id) || 'Unknown'}</option>
+                            ))}
+                          </select>
                         </div>
-                        {!myCpSourcingManagerId && (
-                          <p className="text-[10px] text-amber-600 mt-1">No Sourcing Manager is allocated to you yet — contact an admin before adding a lead.</p>
-                        )}
-                      </div>
+                      ) : (
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager</label>
+                          <div className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-100 text-slate-500 text-sm">
+                            {sourcingManagerMap.get(myCpSourcingManagerIds[0] || '') || 'Not allocated yet'}
+                          </div>
+                          {myCpSourcingManagerIds.length === 0 && (
+                            <p className="text-[10px] text-amber-600 mt-1">No Sourcing Manager is allocated to you yet — contact an admin before adding a lead.</p>
+                          )}
+                        </div>
+                      )
                     ) : (
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager</label>
