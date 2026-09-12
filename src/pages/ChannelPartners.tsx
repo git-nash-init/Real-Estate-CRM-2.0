@@ -1583,8 +1583,8 @@ export const ChannelPartners: React.FC = () => {
                     the disabled attribute below. */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Allocated Sourcing Manager</label>
-                  <div className="border border-slate-200 rounded-xl p-3 max-h-48 overflow-y-auto space-y-2 bg-slate-50">
-                    <label className={`flex items-center gap-2 text-sm text-slate-700 ${canApprove ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 max-h-[150px] overflow-y-auto space-y-2">
+                    <label className={`flex items-center space-x-2.5 text-xs text-slate-700 ${canApprove ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
                       <input
                         type="radio"
                         name="allocatedSourcingManager"
@@ -1593,10 +1593,10 @@ export const ChannelPartners: React.FC = () => {
                         onChange={() => setFormSourcingManagerId('')}
                         className="text-indigo-600 focus:ring-indigo-500"
                       />
-                      None
+                      <span>None</span>
                     </label>
                     {sourcingManagers.map(sm => (
-                      <label key={sm.id} className={`flex items-center gap-2 text-sm text-slate-700 ${canApprove ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+                      <label key={sm.id} className={`flex items-center space-x-2.5 text-xs text-slate-700 ${canApprove ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
                         <input
                           type="radio"
                           name="allocatedSourcingManager"
@@ -1605,9 +1605,12 @@ export const ChannelPartners: React.FC = () => {
                           onChange={() => setFormSourcingManagerId(sm.id)}
                           className="text-indigo-600 focus:ring-indigo-500"
                         />
-                        {sm.name}
+                        <span>{sm.name}</span>
                       </label>
                     ))}
+                    {sourcingManagers.length === 0 && (
+                      <p className="text-slate-400 text-xxs font-medium italic">No Sourcing Managers available.</p>
+                    )}
                   </div>
                   <p className="text-[10px] text-slate-400 mt-1">
                     {canApprove
