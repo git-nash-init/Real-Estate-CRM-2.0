@@ -167,10 +167,13 @@ export const Leads: React.FC = () => {
   const [selectedStatus, setSelectedStatus] = useState('new');
   const [selectedChannelPartnerId, setSelectedChannelPartnerId] = useState('');
   // Sourcing Manager(s) allocated to whichever Channel Partner staff picked
-  // above -- client's explicit request: picking a CP should auto-select
-  // its allocated Sourcing Manager into the field below (or, if the CP has
-  // more than one allocated, restrict the choices to just that CP's set
-  // instead of every Sourcing Manager in the company).
+  // above -- client's explicit request: the Sourcing Manager field must
+  // satisfy BOTH conditions at once -- assigned to the selected Project
+  // AND allocated to the selected Channel Partner -- not just one or the
+  // other. projectTeamMap (below) is fetched fresh from
+  // user_project_assignments each time the form loads, so an admin
+  // changing an employee's project assignments is reflected the next time
+  // this form is opened, without any extra caching to go stale.
   const [selectedCpSourcingManagerIds, setSelectedCpSourcingManagerIds] = useState<string[]>([]);
   const handleChannelPartnerSelect = async (cpId: string) => {
     setSelectedChannelPartnerId(cpId);
@@ -182,7 +185,12 @@ export const Leads: React.FC = () => {
     if (error) { reportQueryError('Leads: CP sourcing manager allocations', error); return; }
     const ids = (data || []).map((r: any) => r.sourcing_manager_id).filter(Boolean);
     setSelectedCpSourcingManagerIds(ids);
-    if (ids.length === 1) setSourcingManagerId(ids[0]);
+    // Auto-fill only when exactly one of the CP's allocated managers is
+    // also assigned to the currently-selected project -- must satisfy
+    // both conditions, not just the CP's raw allocation.
+    const projectTeamIds = selectedProjectId ? projectTeamMap.get(selectedProjectId) : undefined;
+    const eligible = projectTeamIds ? ids.filter(id => projectTeamIds.has(id)) : ids;
+    if (eligible.length === 1) setSourcingManagerId(eligible[0]);
   };
   // `notes` is only used as the initial remark on brand-new-lead creation
   // now -- editing an existing lead's remarks happens through the
@@ -2397,18 +2405,18 @@ export const Leads: React.FC = () => {
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                       >
                         <option value="">Select Sourcing Manager...</option>
-                        {selectedCpSourcingManagerIds.length > 0
-                          ? selectedCpSourcingManagerIds.map(id => (
-                              <option key={id} value={id}>{sourcingManagerMap.get(id) || 'Unknown'}</option>
-                            ))
-                          : Array.from(formSourcingManagerMap.entries()).map(([id, name]) => (
-                              <option key={id} value={id}>{name}</option>
-                            ))}
+                        {Array.from(
+                          selectedCpSourcingManagerIds.length > 0
+                            ? new Map(Array.from(formSourcingManagerMap.entries()).filter(([id]) => selectedCpSourcingManagerIds.includes(id)))
+                            : formSourcingManagerMap
+                        ).map(([id, name]) => (
+                          <option key={id} value={id}>{name}</option>
+                        ))}
                       </select>
-                      {selectedCpSourcingManagerIds.length > 1 ? (
-                        <p className="text-[10px] text-slate-400 mt-1">Restricted to the Sourcing Manager(s) allocated to the selected Channel Partner.</p>
-                      ) : !selectedProjectId ? (
+                      {!selectedProjectId ? (
                         <p className="text-[10px] text-slate-400 mt-1">Select a Project first to see its Sourcing Managers.</p>
+                      ) : selectedCpSourcingManagerIds.length > 0 ? (
+                        <p className="text-[10px] text-slate-400 mt-1">Restricted to Sourcing Manager(s) assigned to this project AND allocated to the selected Channel Partner.</p>
                       ) : formSourcingManagerMap.size === 0 && (
                         <p className="text-[10px] text-amber-600 mt-1">No Sourcing Manager is assigned to this project yet.</p>
                       )}
