@@ -14,6 +14,24 @@ export type Database = {
   }
   public: {
     Tables: {
+      app_secrets: {
+        Row: {
+          key: string
+          updated_at: string
+          value: string
+        }
+        Insert: {
+          key: string
+          updated_at?: string
+          value: string
+        }
+        Update: {
+          key?: string
+          updated_at?: string
+          value?: string
+        }
+        Relationships: []
+      }
       attendance: {
         Row: {
           approved_at: string | null
@@ -244,6 +262,7 @@ export type Database = {
           other_charges: number
           parking_charges: number
           payment_plan: string | null
+          possession_date: string | null
           project_id: string
           refund_amount: number
           registration_charges: number
@@ -282,6 +301,7 @@ export type Database = {
           other_charges?: number
           parking_charges?: number
           payment_plan?: string | null
+          possession_date?: string | null
           project_id: string
           refund_amount?: number
           registration_charges?: number
@@ -320,6 +340,7 @@ export type Database = {
           other_charges?: number
           parking_charges?: number
           payment_plan?: string | null
+          possession_date?: string | null
           project_id?: string
           refund_amount?: number
           registration_charges?: number
@@ -681,6 +702,7 @@ export type Database = {
           rera_number: string | null
           reviewed_at: string | null
           reviewed_by: string | null
+          sourcing_manager: string | null
           state: string | null
           status: string
           submitted_by: string | null
@@ -707,6 +729,7 @@ export type Database = {
           rera_number?: string | null
           reviewed_at?: string | null
           reviewed_by?: string | null
+          sourcing_manager?: string | null
           state?: string | null
           status?: string
           submitted_by?: string | null
@@ -733,6 +756,7 @@ export type Database = {
           rera_number?: string | null
           reviewed_at?: string | null
           reviewed_by?: string | null
+          sourcing_manager?: string | null
           state?: string | null
           status?: string
           submitted_by?: string | null
@@ -740,7 +764,61 @@ export type Database = {
           updated_at?: string
           whatsapp_number?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "channel_partner_requests_sourcing_manager_fkey"
+            columns: ["sourcing_manager"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      channel_partner_sourcing_managers: {
+        Row: {
+          assigned_by: string | null
+          channel_partner_id: string
+          created_at: string
+          id: string
+          sourcing_manager_id: string
+        }
+        Insert: {
+          assigned_by?: string | null
+          channel_partner_id: string
+          created_at?: string
+          id?: string
+          sourcing_manager_id: string
+        }
+        Update: {
+          assigned_by?: string | null
+          channel_partner_id?: string
+          created_at?: string
+          id?: string
+          sourcing_manager_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "channel_partner_sourcing_managers_assigned_by_fkey"
+            columns: ["assigned_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "channel_partner_sourcing_managers_channel_partner_id_fkey"
+            columns: ["channel_partner_id"]
+            isOneToOne: false
+            referencedRelation: "channel_partners"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "channel_partner_sourcing_managers_sourcing_manager_id_fkey"
+            columns: ["sourcing_manager_id"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       channel_partners: {
         Row: {
@@ -858,6 +936,7 @@ export type Database = {
           slab_min: number | null
           status: string
           structure_type: string
+          tower_id: string | null
           updated_at: string
         }
         Insert: {
@@ -875,6 +954,7 @@ export type Database = {
           slab_min?: number | null
           status?: string
           structure_type: string
+          tower_id?: string | null
           updated_at?: string
         }
         Update: {
@@ -892,6 +972,7 @@ export type Database = {
           slab_min?: number | null
           status?: string
           structure_type?: string
+          tower_id?: string | null
           updated_at?: string
         }
         Relationships: [
@@ -914,6 +995,13 @@ export type Database = {
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commission_structures_tower_id_fkey"
+            columns: ["tower_id"]
+            isOneToOne: false
+            referencedRelation: "project_towers"
             referencedColumns: ["id"]
           },
         ]
@@ -978,6 +1066,7 @@ export type Database = {
           commission_percentage: number | null
           cp_id: string
           created_at: string
+          first_payment_received_at: string | null
           id: string
           paid_amount: number
           payable_amount: number
@@ -985,6 +1074,7 @@ export type Database = {
           payout_reference: string | null
           pending_amount: number
           remarks: string | null
+          settlement_requested_at: string | null
           status: Database["public"]["Enums"]["commission_status"]
           updated_at: string
         }
@@ -996,6 +1086,7 @@ export type Database = {
           commission_percentage?: number | null
           cp_id: string
           created_at?: string
+          first_payment_received_at?: string | null
           id?: string
           paid_amount?: number
           payable_amount?: number
@@ -1003,6 +1094,7 @@ export type Database = {
           payout_reference?: string | null
           pending_amount?: number
           remarks?: string | null
+          settlement_requested_at?: string | null
           status?: Database["public"]["Enums"]["commission_status"]
           updated_at?: string
         }
@@ -1014,6 +1106,7 @@ export type Database = {
           commission_percentage?: number | null
           cp_id?: string
           created_at?: string
+          first_payment_received_at?: string | null
           id?: string
           paid_amount?: number
           payable_amount?: number
@@ -1021,6 +1114,7 @@ export type Database = {
           payout_reference?: string | null
           pending_amount?: number
           remarks?: string | null
+          settlement_requested_at?: string | null
           status?: Database["public"]["Enums"]["commission_status"]
           updated_at?: string
         }
@@ -1616,6 +1710,90 @@ export type Database = {
           },
         ]
       }
+      lead_remarks: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          lead_id: string
+          remark: string
+          seq: number
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          lead_id: string
+          remark: string
+          seq?: number
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          lead_id?: string
+          remark?: string
+          seq?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_remarks_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_remarks_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      lead_status_history: {
+        Row: {
+          changed_at: string
+          id: string
+          lead_id: string
+          new_status: string
+          old_status: string | null
+          owner_id: string | null
+        }
+        Insert: {
+          changed_at?: string
+          id?: string
+          lead_id: string
+          new_status: string
+          old_status?: string | null
+          owner_id?: string | null
+        }
+        Update: {
+          changed_at?: string
+          id?: string
+          lead_id?: string
+          new_status?: string
+          old_status?: string | null
+          owner_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_status_history_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_status_history_owner_id_fkey"
+            columns: ["owner_id"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       leads: {
         Row: {
           alternate_mobile: string | null
@@ -1634,6 +1812,7 @@ export type Database = {
           email: string | null
           family_status: string | null
           id: string
+          is_own_lead: boolean
           last_contact_at: string | null
           lead_number: string
           lead_score: number
@@ -1646,6 +1825,7 @@ export type Database = {
           owner_id: string | null
           preferred_language: string | null
           project_id: string
+          referral_name: string | null
           residence_address: string | null
           source: string | null
           sourcing_manager_id: string | null
@@ -1673,6 +1853,7 @@ export type Database = {
           email?: string | null
           family_status?: string | null
           id?: string
+          is_own_lead?: boolean
           last_contact_at?: string | null
           lead_number: string
           lead_score?: number
@@ -1685,6 +1866,7 @@ export type Database = {
           owner_id?: string | null
           preferred_language?: string | null
           project_id: string
+          referral_name?: string | null
           residence_address?: string | null
           source?: string | null
           sourcing_manager_id?: string | null
@@ -1712,6 +1894,7 @@ export type Database = {
           email?: string | null
           family_status?: string | null
           id?: string
+          is_own_lead?: boolean
           last_contact_at?: string | null
           lead_number?: string
           lead_score?: number
@@ -1724,6 +1907,7 @@ export type Database = {
           owner_id?: string | null
           preferred_language?: string | null
           project_id?: string
+          referral_name?: string | null
           residence_address?: string | null
           source?: string | null
           sourcing_manager_id?: string | null
@@ -2193,7 +2377,7 @@ export type Database = {
           configuration: string | null
           created_at: string
           facing: string | null
-          floor_id: string
+          floor_id: string | null
           hold_at: string | null
           hold_by: string | null
           hold_reason: string | null
@@ -2218,7 +2402,7 @@ export type Database = {
           configuration?: string | null
           created_at?: string
           facing?: string | null
-          floor_id: string
+          floor_id?: string | null
           hold_at?: string | null
           hold_by?: string | null
           hold_reason?: string | null
@@ -2243,7 +2427,7 @@ export type Database = {
           configuration?: string | null
           created_at?: string
           facing?: string | null
-          floor_id?: string
+          floor_id?: string | null
           hold_at?: string | null
           hold_by?: string | null
           hold_reason?: string | null
@@ -2285,6 +2469,58 @@ export type Database = {
           },
           {
             foreignKeyName: "project_inventory_tower_id_fkey"
+            columns: ["tower_id"]
+            isOneToOne: false
+            referencedRelation: "project_towers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_payment_milestones: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          label: string | null
+          percentage: number
+          project_id: string
+          tower_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          label?: string | null
+          percentage: number
+          project_id: string
+          tower_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          label?: string | null
+          percentage?: number
+          project_id?: string
+          tower_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_payment_milestones_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_payment_milestones_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_payment_milestones_tower_id_fkey"
             columns: ["tower_id"]
             isOneToOne: false
             referencedRelation: "project_towers"
@@ -2412,40 +2648,52 @@ export type Database = {
       }
       quick_site_visits: {
         Row: {
-          channel_partner_id: string
+          channel_partner_id: string | null
+          converted_to_lead_id: string | null
           created_at: string
           created_by: string | null
           customer_mobile: string
           customer_name: string
           id: string
+          presales_id: string | null
           project_id: string
-          referenced_by: string
+          referenced_by: string | null
+          sourcing_manager_id: string | null
+          sourcing_manager_name: string | null
           status: string
           verification_code: string
           visit_at: string
         }
         Insert: {
-          channel_partner_id: string
+          channel_partner_id?: string | null
+          converted_to_lead_id?: string | null
           created_at?: string
           created_by?: string | null
           customer_mobile: string
           customer_name: string
           id?: string
+          presales_id?: string | null
           project_id: string
-          referenced_by: string
+          referenced_by?: string | null
+          sourcing_manager_id?: string | null
+          sourcing_manager_name?: string | null
           status?: string
           verification_code: string
           visit_at: string
         }
         Update: {
-          channel_partner_id?: string
+          channel_partner_id?: string | null
+          converted_to_lead_id?: string | null
           created_at?: string
           created_by?: string | null
           customer_mobile?: string
           customer_name?: string
           id?: string
+          presales_id?: string | null
           project_id?: string
-          referenced_by?: string
+          referenced_by?: string | null
+          sourcing_manager_id?: string | null
+          sourcing_manager_name?: string | null
           status?: string
           verification_code?: string
           visit_at?: string
@@ -2459,8 +2707,22 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "quick_site_visits_converted_to_lead_id_fkey"
+            columns: ["converted_to_lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "quick_site_visits_created_by_fkey"
             columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "quick_site_visits_presales_id_fkey"
+            columns: ["presales_id"]
             isOneToOne: false
             referencedRelation: "user_profiles"
             referencedColumns: ["id"]
@@ -2470,6 +2732,13 @@ export type Database = {
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "quick_site_visits_sourcing_manager_id_fkey"
+            columns: ["sourcing_manager_id"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
             referencedColumns: ["id"]
           },
         ]
@@ -2667,79 +2936,122 @@ export type Database = {
           },
         ]
       }
-      tasks: {
+      staff_targets: {
         Row: {
           assigned_by: string | null
-          assigned_to: string | null
-          completed_at: string | null
+          assigned_to: string
           created_at: string
-          description: string | null
-          due_date: string | null
           id: string
-          lead_id: string | null
-          priority: Database["public"]["Enums"]["task_priority"]
-          project_id: string | null
-          status: Database["public"]["Enums"]["task_status"]
-          title: string
+          period_end: string
+          period_start: string
+          role: string
+          target_count: number
           updated_at: string
         }
         Insert: {
           assigned_by?: string | null
-          assigned_to?: string | null
-          completed_at?: string | null
+          assigned_to: string
           created_at?: string
-          description?: string | null
-          due_date?: string | null
           id?: string
-          lead_id?: string | null
-          priority?: Database["public"]["Enums"]["task_priority"]
-          project_id?: string | null
-          status?: Database["public"]["Enums"]["task_status"]
-          title: string
+          period_end: string
+          period_start: string
+          role: string
+          target_count: number
           updated_at?: string
         }
         Update: {
           assigned_by?: string | null
-          assigned_to?: string | null
-          completed_at?: string | null
+          assigned_to?: string
           created_at?: string
-          description?: string | null
-          due_date?: string | null
           id?: string
-          lead_id?: string | null
-          priority?: Database["public"]["Enums"]["task_priority"]
-          project_id?: string | null
-          status?: Database["public"]["Enums"]["task_status"]
-          title?: string
+          period_end?: string
+          period_start?: string
+          role?: string
+          target_count?: number
           updated_at?: string
         }
         Relationships: [
           {
-            foreignKeyName: "tasks_assigned_by_fkey"
+            foreignKeyName: "staff_targets_assigned_by_fkey"
             columns: ["assigned_by"]
             isOneToOne: false
             referencedRelation: "user_profiles"
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "tasks_assigned_to_fkey"
+            foreignKeyName: "staff_targets_assigned_to_fkey"
+            columns: ["assigned_to"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      target_completions: {
+        Row: {
+          assigned_to: string
+          completed_at: string
+          id: string
+          lead_id: string | null
+          role: string
+          source_id: string
+          source_type: string
+          staff_target_id: string
+        }
+        Insert: {
+          assigned_to: string
+          completed_at?: string
+          id?: string
+          lead_id?: string | null
+          role: string
+          source_id: string
+          source_type: string
+          staff_target_id: string
+        }
+        Update: {
+          assigned_to?: string
+          completed_at?: string
+          id?: string
+          lead_id?: string | null
+          role?: string
+          source_id?: string
+          source_type?: string
+          staff_target_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "target_completions_assigned_to_fkey"
             columns: ["assigned_to"]
             isOneToOne: false
             referencedRelation: "user_profiles"
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "tasks_lead_id_fkey"
+            foreignKeyName: "target_completions_lead_id_fkey"
             columns: ["lead_id"]
             isOneToOne: false
             referencedRelation: "leads"
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "tasks_project_id_fkey"
-            columns: ["project_id"]
+            foreignKeyName: "target_completions_staff_target_id_fkey"
+            columns: ["staff_target_id"]
             isOneToOne: false
-            referencedRelation: "projects"
+            referencedRelation: "closing_manager_kra"
+            referencedColumns: ["staff_target_id"]
+          },
+          {
+            foreignKeyName: "target_completions_staff_target_id_fkey"
+            columns: ["staff_target_id"]
+            isOneToOne: false
+            referencedRelation: "staff_target_progress"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "target_completions_staff_target_id_fkey"
+            columns: ["staff_target_id"]
+            isOneToOne: false
+            referencedRelation: "staff_targets"
             referencedColumns: ["id"]
           },
         ]
@@ -2894,6 +3206,27 @@ export type Database = {
           },
         ]
       }
+      whatsapp_auth_files: {
+        Row: {
+          content: string
+          filename: string
+          session_id: string
+          updated_at: string
+        }
+        Insert: {
+          content: string
+          filename: string
+          session_id: string
+          updated_at?: string
+        }
+        Update: {
+          content?: string
+          filename?: string
+          session_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       whatsapp_auth_state: {
         Row: {
           files: Json
@@ -3000,6 +3333,8 @@ export type Database = {
       }
       whatsapp_session: {
         Row: {
+          auth_persist_error: string | null
+          auth_persisted_at: string | null
           connected_phone: string | null
           id: string
           last_heartbeat_at: string | null
@@ -3009,6 +3344,8 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          auth_persist_error?: string | null
+          auth_persisted_at?: string | null
           connected_phone?: string | null
           id?: string
           last_heartbeat_at?: string | null
@@ -3018,6 +3355,8 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          auth_persist_error?: string | null
+          auth_persisted_at?: string | null
           connected_phone?: string | null
           id?: string
           last_heartbeat_at?: string | null
@@ -3030,7 +3369,72 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      closing_manager_kra: {
+        Row: {
+          assigned_to: string | null
+          bookings_closed: number | null
+          period_end: string | null
+          period_start: string | null
+          staff_target_id: string | null
+          visits_attended: number | null
+        }
+        Insert: {
+          assigned_to?: string | null
+          bookings_closed?: never
+          period_end?: string | null
+          period_start?: string | null
+          staff_target_id?: string | null
+          visits_attended?: never
+        }
+        Update: {
+          assigned_to?: string | null
+          bookings_closed?: never
+          period_end?: string | null
+          period_start?: string | null
+          staff_target_id?: string | null
+          visits_attended?: never
+        }
+        Relationships: [
+          {
+            foreignKeyName: "staff_targets_assigned_to_fkey"
+            columns: ["assigned_to"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      staff_target_progress: {
+        Row: {
+          assigned_by: string | null
+          assigned_to: string | null
+          completed_count: number | null
+          created_at: string | null
+          id: string | null
+          period_end: string | null
+          period_start: string | null
+          remaining_count: number | null
+          role: string | null
+          target_count: number | null
+          updated_at: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "staff_targets_assigned_by_fkey"
+            columns: ["assigned_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "staff_targets_assigned_to_fkey"
+            columns: ["assigned_to"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
       can_manage_leads: { Args: never; Returns: boolean }
@@ -3038,10 +3442,33 @@ export type Database = {
       current_user_has_role: { Args: { p_roles: string[] }; Returns: boolean }
       expire_cp_lead_claims: { Args: never; Returns: undefined }
       expire_quick_site_visits: { Args: never; Returns: undefined }
+      find_active_staff_target: {
+        Args: { p_date: string; p_role: string; p_user: string }
+        Returns: string
+      }
+      get_current_channel_partner_id: { Args: never; Returns: string }
       has_project_access: { Args: { p_project_id: string }; Returns: boolean }
       is_authenticated: { Args: never; Returns: boolean }
       is_super_admin: { Args: never; Returns: boolean }
       normalize_phone: { Args: { p: string }; Returns: string }
+      notify_due_followups: { Args: never; Returns: number }
+      notify_users: {
+        Args: {
+          p_entity: string
+          p_entity_id: string
+          p_message: string
+          p_title: string
+          p_type: string
+          p_user_ids: string[]
+        }
+        Returns: number
+      }
+      offboard_employee: { Args: { p_employee_id: string }; Returns: undefined }
+      shares_project_with_me: {
+        Args: { p_project_id: string }
+        Returns: boolean
+      }
+      user_ids_with_roles: { Args: { p_roles: string[] }; Returns: string[] }
       write_audit_log: {
         Args: {
           p_action: string
@@ -3117,6 +3544,10 @@ export type Database = {
         | "call_back_later"
         | "lost"
         | "junk"
+        | "ringing"
+        | "already_purchased"
+        | "switch_off"
+        | "exploring"
       meeting_status:
         | "scheduled"
         | "completed"
@@ -3152,13 +3583,6 @@ export type Database = {
         | "no_show"
         | "rescheduled"
         | "cancelled"
-      task_priority: "low" | "normal" | "high" | "urgent"
-      task_status:
-        | "pending"
-        | "in_progress"
-        | "completed"
-        | "cancelled"
-        | "overdue"
       user_status: "active" | "inactive" | "suspended"
     }
     CompositeTypes: {
@@ -3175,12 +3599,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -3204,11 +3628,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -3229,11 +3653,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -3254,11 +3678,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -3271,11 +3695,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
+    : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -3357,6 +3781,10 @@ export const Constants = {
         "call_back_later",
         "lost",
         "junk",
+        "ringing",
+        "already_purchased",
+        "switch_off",
+        "exploring",
       ],
       meeting_status: [
         "scheduled",
@@ -3397,14 +3825,6 @@ export const Constants = {
         "no_show",
         "rescheduled",
         "cancelled",
-      ],
-      task_priority: ["low", "normal", "high", "urgent"],
-      task_status: [
-        "pending",
-        "in_progress",
-        "completed",
-        "cancelled",
-        "overdue",
       ],
       user_status: ["active", "inactive", "suspended"],
     },

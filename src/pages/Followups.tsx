@@ -4,6 +4,7 @@ import { useAuth } from '../hooks/useAuth';
 import { canEditLead, isSuperAdmin } from '../utils/permissions';
 import { reportQueryError } from '../services/queryLogger';
 import { exportRowsToExcel } from '../utils/exportExcel';
+import { useHighlightParam } from '../hooks/useHighlightParam';
 import {
   Search,
   RefreshCw,
@@ -39,6 +40,7 @@ interface Lead {
   email: string | null;
   project_id: string | null;
   owner_id: string | null;
+  status: string | null;
 }
 
 export const Followups: React.FC = () => {
@@ -67,6 +69,27 @@ export const Followups: React.FC = () => {
 
   // Modal open states
   const [selectedFollowup, setSelectedFollowup] = useState<Followup | null>(null);
+
+  // A `followups_due` notification lands here with ?highlight=<followup
+  // id>. This list is server-filtered/paginated, so the record may not be
+  // on the current page/filter -- fetch it directly and open its detail
+  // modal rather than fighting the active filters.
+  const { highlightId, registerRow, rowClass, tryFocusRow, clearHighlightParam } = useHighlightParam();
+  useEffect(() => {
+    if (!highlightId) return;
+    supabase
+      .from('followups')
+      .select('*')
+      .eq('id', highlightId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error || !data) return;
+        setSelectedFollowup(data as Followup);
+        clearHighlightParam();
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId]);
+  useEffect(() => { tryFocusRow(); }, [followups, tryFocusRow]);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -101,7 +124,7 @@ export const Followups: React.FC = () => {
       const [projectsRes, profilesRes, leadsRes] = await Promise.all([
         supabase.from('projects').select('id, project_name'),
         supabase.from('user_profiles').select('id, full_name'),
-        supabase.from('leads').select('id, customer_name, mobile, email, project_id, owner_id')
+        supabase.from('leads').select('id, customer_name, mobile, email, project_id, owner_id, status')
       ]);
 
       if (projectsRes.data) {
@@ -668,8 +691,9 @@ export const Followups: React.FC = () => {
                     <th className="py-3.5 px-6">Customer / Lead</th>
                     <th className="py-3.5 px-6">Associated Project</th>
                     <th className="py-3.5 px-6">Sourcing Manager</th>
+                    <th className="py-3.5 px-6">Lead Status</th>
                     <th className="py-3.5 px-6">Scheduled Date & Time</th>
-                    <th className="py-3.5 px-6">Status</th>
+                    <th className="py-3.5 px-6">Follow-up Status</th>
                     <th className="py-3.5 px-6 text-right">Actions</th>
                   </tr>
                 </thead>
@@ -679,7 +703,7 @@ export const Followups: React.FC = () => {
                       const lead = leadsMap.get(f.lead_id || '');
                       const canManage = canEditLead(role, user?.id, lead?.owner_id || null, null, null);
                       return (
-                        <tr key={f.id} className="hover:bg-slate-50/50 transition-colors group">
+                        <tr key={f.id} ref={registerRow(f.id)} className={`hover:bg-slate-50/50 transition-colors group ${rowClass(f.id)}`}>
                           <td className="py-4 px-6">
                             <span className="block font-semibold text-slate-900">{lead?.customer_name || 'N/A'}</span>
                             <span className="block text-xs text-slate-400">{lead?.mobile || 'No contact'}</span>
@@ -689,6 +713,16 @@ export const Followups: React.FC = () => {
                           </td>
                           <td className="py-4 px-6 text-sm text-slate-600">
                             {profileMap.get(lead?.owner_id || '') || 'N/A'}
+                          </td>
+                          <td className="py-4 px-6">
+                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize ${
+                              lead?.status?.toLowerCase() === 'booking_done' ? 'bg-emerald-50 text-emerald-700' :
+                              (lead?.status?.toLowerCase() === 'lost' || lead?.status?.toLowerCase() === 'junk' || lead?.status?.toLowerCase() === 'already_purchased') ? 'bg-rose-50 text-rose-700' :
+                              (lead?.status?.toLowerCase() === 'site_visit_planned' || lead?.status?.toLowerCase() === 'site_visit_done') ? 'bg-amber-50 text-amber-700' :
+                              'bg-indigo-50 text-indigo-700'
+                            }`}>
+                              {(lead?.status || 'new').replace(/_/g, ' ')}
+                            </span>
                           </td>
                           <td className="py-4 px-6">
                             <div className="flex items-center space-x-2 text-sm text-slate-700">
@@ -758,7 +792,7 @@ export const Followups: React.FC = () => {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={6} className="py-20 text-center text-slate-400">
+                      <td colSpan={7} className="py-20 text-center text-slate-400">
                         <div className="flex flex-col items-center justify-center space-y-3">
                           <div className="bg-slate-50 p-4 rounded-full text-slate-300">
                             <PhoneCall className="h-8 w-8" />
@@ -884,13 +918,21 @@ export const Followups: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="flex items-start space-x-2 text-slate-700 col-span-2">
+                      <div className="flex items-start space-x-2 text-slate-700">
                         <User className="h-4 w-4 text-slate-400 mt-1 flex-shrink-0" />
                         <div>
                           <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Assigned Sourcing Manager</span>
                           <span className="text-sm font-semibold">
                             {profileMap.get(lead?.owner_id || '') || 'N/A'}
                           </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-start space-x-2 text-slate-700">
+                        <Bookmark className="h-4 w-4 text-slate-400 mt-1 flex-shrink-0" />
+                        <div>
+                          <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Lead Status</span>
+                          <span className="text-sm font-semibold capitalize">{(lead?.status || 'new').replace(/_/g, ' ')}</span>
                         </div>
                       </div>
                     </div>
