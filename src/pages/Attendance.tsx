@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
+import { useHighlightParam } from '../hooks/useHighlightParam';
 import {
   ClipboardCheck,
   MapPin,
@@ -62,7 +63,7 @@ const LocationLink: React.FC<{ lat: number | null; lng: number | null }> = ({ la
 };
 
 export const Attendance: React.FC = () => {
-  const { user, role } = useAuth();
+  const { user, role, assignedProjects } = useAuth();
   const isSuperAdmin = role === 'super_admin';
   const canViewTeam = isSuperAdmin || role === 'site_head' || role === 'project_admin' || role === 'receptionist';
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | null>(null);
@@ -77,6 +78,15 @@ export const Attendance: React.FC = () => {
   const [allLeaveRequests, setAllLeaveRequests] = useState<(LeaveRequest & { employee_name?: string })[]>([]);
 
   const [tab, setTab] = useState<'my' | 'team' | 'leave'>('my');
+
+  // A `leave_approved`/`leave_rejected` notification lands here with
+  // ?highlight=<leave_request id> -- switch to the Leave Requests tab and
+  // ring-highlight that row in "My Leave Requests".
+  const { highlightId, registerRow, rowClass, tryFocusRow } = useHighlightParam();
+  useEffect(() => {
+    if (highlightId) setTab('leave');
+  }, [highlightId]);
+  useEffect(() => { if (tab === 'leave') tryFocusRow(); }, [tab, myLeaveRequests, tryFocusRow]);
   const [filterEmployeeId, setFilterEmployeeId] = useState<string>('');
   const [filterDateFrom, setFilterDateFrom] = useState<string>('');
   const [filterDateTo, setFilterDateTo] = useState<string>('');
@@ -147,7 +157,13 @@ export const Attendance: React.FC = () => {
       setEmployeeProjectMap(empProjectMap);
 
       const { data: projs } = await supabase.from('projects').select('id, project_name');
-      if (projs) setProjectsList(projs.map(p => ({ id: p.id, name: p.project_name })));
+      if (projs) {
+        const filteredProjs = projs.filter(p => isSuperAdmin || (assignedProjects && assignedProjects.includes(p.id)));
+        setProjectsList(filteredProjs.map(p => ({ id: p.id, name: p.project_name })));
+        if (!isSuperAdmin && assignedProjects && assignedProjects.length === 1) {
+          setFilterProjectId(assignedProjects[0]);
+        }
+      }
 
       }
     } catch (err) {
@@ -220,7 +236,7 @@ export const Attendance: React.FC = () => {
     }
 
     setLoading(false);
-  }, [user]);
+  }, [user, isSuperAdmin, assignedProjects]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -348,6 +364,12 @@ export const Attendance: React.FC = () => {
   };
 
   const filteredTeamAttendance = teamAttendance.filter(row => {
+    // If not super_admin, scope to user's assigned projects
+    if (!isSuperAdmin && assignedProjects && assignedProjects.length > 0) {
+      const pSet = employeeProjectMap.get(row.employee_id);
+      const inAssignedProject = pSet && assignedProjects.some(pid => pSet.has(pid));
+      if (!inAssignedProject) return false;
+    }
     if (filterEmployeeId && row.employee_id !== filterEmployeeId) return false;
     if (filterDateFrom && row.attendance_date < filterDateFrom) return false;
     if (filterDateTo && row.attendance_date > filterDateTo) return false;
@@ -493,7 +515,7 @@ export const Attendance: React.FC = () => {
 
       <div className="flex rounded-xl border border-slate-200 overflow-hidden w-fit">
         {([['my', 'My Attendance'], ['team', 'Team'], ['leave', 'Leave Requests']] as const)
-          .filter(([value]) => value === 'my' || canViewTeam)
+          .filter(([value]) => value === 'my' || value === 'leave' || canViewTeam)
           .map(([value, label]) => (
           <button
             key={value}
@@ -568,9 +590,21 @@ export const Attendance: React.FC = () => {
                 className="w-full sm:w-40 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white"
               >
                 <option value="">All Employees</option>
-                {Array.from(employeesMap.entries()).map(([id, name]) => (
-                  <option key={id} value={id}>{name}</option>
-                ))}
+                {Array.from(employeesMap.entries())
+                  .filter(([id]) => {
+                    if (filterProjectId) {
+                      const pSet = employeeProjectMap.get(id);
+                      return pSet && pSet.has(filterProjectId);
+                    }
+                    if (!isSuperAdmin && assignedProjects && assignedProjects.length > 0) {
+                      const pSet = employeeProjectMap.get(id);
+                      return pSet && assignedProjects.some(pid => pSet.has(pid));
+                    }
+                    return true;
+                  })
+                  .map(([id, name]) => (
+                    <option key={id} value={id}>{name}</option>
+                  ))}
               </select>
 
               <input
@@ -663,7 +697,7 @@ export const Attendance: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {myLeaveRequests.length > 0 ? myLeaveRequests.map(lr => (
-                    <tr key={lr.id}>
+                    <tr key={lr.id} ref={registerRow(lr.id)} className={rowClass(lr.id)}>
                       <td className="py-3 px-6 text-slate-800 font-semibold">
                         {new Date(lr.start_date).toLocaleDateString('en-IN')} – {new Date(lr.end_date).toLocaleDateString('en-IN')}
                       </td>

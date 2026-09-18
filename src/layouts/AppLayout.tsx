@@ -6,6 +6,7 @@ import { useWhatsAppSentToast } from '../hooks/useWhatsAppSentToast';
 import { QueryFailureOverlay } from '../components/QueryFailureOverlay';
 import { GlobalSearch } from '../components/GlobalSearch';
 import { canAccessBulkUploadPage } from '../utils/permissions';
+import { notificationTarget } from '../utils/notificationRoutes';
 import {
   LayoutDashboard,
   UserCheck,
@@ -19,7 +20,7 @@ import {
   Megaphone,
   Briefcase,
   ClipboardCheck,
-  CheckSquare,
+  Target,
   BarChart3,
   Settings,
   LogOut,
@@ -30,7 +31,8 @@ import {
   ChevronDown,
   Bell,
   Wallet,
-  FileSpreadsheet
+  FileSpreadsheet,
+  MessageSquare
 } from 'lucide-react';
 
 export const AppLayout: React.FC = () => {
@@ -47,6 +49,19 @@ export const AppLayout: React.FC = () => {
   const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
   const { notifications, unreadCount, markAsRead, markAllAsRead, justArrived, dismissJustArrived } = useNotifications();
   const { toast: waSentToast, dismiss: dismissWaSent } = useWhatsAppSentToast();
+
+  // Single click handler for both the bell dropdown and the "just arrived"
+  // toast -- marks read, closes whichever UI is open, and navigates to the
+  // record's page with a ?highlight= param the destination page picks up
+  // (see useHighlightParam) to scroll/ring-highlight that specific row and
+  // open its detail modal where one exists.
+  const handleNotificationClick = (n: { id: string; related_entity: string | null; related_id: string | null }) => {
+    markAsRead(n.id);
+    setNotifDropdownOpen(false);
+    dismissJustArrived();
+    const target = notificationTarget(n, role);
+    if (target) navigate(target);
+  };
 
   // Channel Partner scoping: client's explicit requirement is that a CP
   // sees ONLY their own leads/bulk-assigned leads, bookings and brokerage
@@ -90,9 +105,12 @@ export const AppLayout: React.FC = () => {
     { name: 'Marketing', path: '/marketing', icon: Megaphone, hiddenForRoles: ['channel_partner', 'receptionist', 'crm'] },
     { name: 'Employees', path: '/employees', icon: Briefcase, allowedRoles: ['super_admin'] },
     { name: 'Attendance', path: '/attendance', icon: ClipboardCheck, hiddenForRoles: ['channel_partner'] },
-    { name: 'Tasks', path: '/tasks', icon: CheckSquare, hiddenForRoles: ['channel_partner'] },
+    { name: 'Targets', path: '/targets', icon: Target, hiddenForRoles: ['channel_partner'] },
     { name: 'Reports', path: '/reports', icon: BarChart3 },
     { name: 'Expenses', path: '/expenses', icon: Wallet, allowedRoles: ['super_admin'] },
+    // Every WhatsApp message sent from the CRM, across every user/module --
+    // super_admin only, per the client's explicit request.
+    { name: 'WhatsApp Messages', path: '/whatsapp-messages', icon: MessageSquare, allowedRoles: ['super_admin'] },
     // Open to every role -- everyone needs somewhere to change their own
     // password, even channel_partner (otherwise excluded from most of the
     // app). The WhatsApp panel inside Settings.tsx is separately gated.
@@ -277,13 +295,7 @@ export const AppLayout: React.FC = () => {
                       notifications.map((n) => (
                         <button
                           key={n.id}
-                          onClick={() => {
-                            markAsRead(n.id);
-                            if (n.related_entity === 'bulk_upload' && n.related_id) {
-                              setNotifDropdownOpen(false);
-                              navigate(`/leads?bulk_upload_id=${n.related_id}`);
-                            }
-                          }}
+                          onClick={() => handleNotificationClick(n)}
                           className={`w-full text-left px-4 py-2.5 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors ${n.is_read ? 'opacity-60' : ''}`}
                         >
                           <div className="flex items-start gap-2">
@@ -379,13 +391,8 @@ export const AppLayout: React.FC = () => {
 
       {/* Existing notification toast — bottom-centre */}
       {justArrived && (
-        <div 
-          onClick={() => {
-            dismissJustArrived();
-            if (justArrived.related_entity === 'bulk_upload' && justArrived.related_id) {
-              navigate(`/leads?bulk_upload_id=${justArrived.related_id}`);
-            }
-          }}
+        <div
+          onClick={() => handleNotificationClick(justArrived)}
           className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[80] bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-bottom-4 duration-200 cursor-pointer"
         >
           <Bell className="h-4 w-4 text-indigo-400 flex-shrink-0" />

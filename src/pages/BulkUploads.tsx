@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../services/supabaseClient';
-import { Upload, FileSpreadsheet, User, Calendar, ExternalLink, ArrowLeft, Phone, MessageCircle, X, Trash2, Download } from 'lucide-react';
+import { Upload, FileSpreadsheet, User, Calendar, ExternalLink, ArrowLeft, Phone, MessageCircle, X, Trash2, Download, Search, Filter, ChevronDown } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { BulkUploadModal } from '../components/leads/BulkUploadModal';
 import { canPerformBulkUpload, isSuperAdmin } from '../utils/permissions';
 import { exportRowsToExcel } from '../utils/exportExcel';
 import { reportQueryError } from '../services/queryLogger';
+import { useHighlightParam } from '../hooks/useHighlightParam';
 
 interface BulkUploadRecord {
   id: string;
@@ -69,6 +70,13 @@ export const BulkUploads: React.FC = () => {
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const { role, user } = useAuth();
   const canUpload = canPerformBulkUpload(role);
+
+  // ── Upload list filters ────────────────────────────────────────────────
+  const [searchFile, setSearchFile] = useState('');
+  const [filterProject, setFilterProject] = useState('');
+  const [filterUploader, setFilterUploader] = useState('');
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
   // Deleting an entire batch (and every lead in it) or an individual lead
   // out of a batch is super_admin/site_head only -- enforced for real by
   // bulk_lead_uploads_delete / leads_delete RLS, this just gates the button.
@@ -114,6 +122,13 @@ export const BulkUploads: React.FC = () => {
       setLoading(false);
     }
   };
+
+  // ── Batch leads filters ───────────────────────────────────────────────
+  const [batchSearch, setBatchSearch] = useState('');
+  const [batchFilterStatus, setBatchFilterStatus] = useState('');
+  const [batchFilterSourcingMgr, setBatchFilterSourcingMgr] = useState('');
+  const [batchFilterOwner, setBatchFilterOwner] = useState('');
+  const [batchFilterTelecaller, setBatchFilterTelecaller] = useState('');
 
   // Drill-down into one upload's leads -- this used to navigate away to
   // /leads?bulk_upload_id=..., but bulk-uploaded leads are a separate thing
@@ -214,7 +229,129 @@ export const BulkUploads: React.FC = () => {
   const openBatch = (upload: BulkUploadRecord) => {
     setViewingUpload(upload);
     fetchBatchLeads(upload.id);
+    // reset batch filters on each new drill-down
+    setBatchSearch('');
+    setBatchFilterStatus('');
+    setBatchFilterSourcingMgr('');
+    setBatchFilterOwner('');
+    setBatchFilterTelecaller('');
   };
+
+  // ── Derived: filtered upload list ─────────────────────────────────────
+  const filteredUploads = useMemo(() => {
+    let list = uploads;
+    if (searchFile.trim()) {
+      const q = searchFile.trim().toLowerCase();
+      list = list.filter(u => u.file_name?.toLowerCase().includes(q));
+    }
+    if (filterProject) {
+      list = list.filter(u => u.project_id === filterProject);
+    }
+    if (filterUploader) {
+      list = list.filter(u => u.uploaded_by === filterUploader);
+    }
+    if (filterDateFrom) {
+      const from = new Date(filterDateFrom).getTime();
+      list = list.filter(u => new Date(u.created_at).getTime() >= from);
+    }
+    if (filterDateTo) {
+      // end of that day
+      const to = new Date(filterDateTo + 'T23:59:59').getTime();
+      list = list.filter(u => new Date(u.created_at).getTime() <= to);
+    }
+    return list;
+  }, [uploads, searchFile, filterProject, filterUploader, filterDateFrom, filterDateTo]);
+
+  // Unique project / uploader options derived from the loaded upload list
+  const uploadProjectOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    uploads.forEach(u => {
+      if (u.project_id && u.project?.project_name)
+        seen.set(u.project_id, u.project.project_name);
+    });
+    return Array.from(seen.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [uploads]);
+
+  const uploadUploaderOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    uploads.forEach(u => {
+      if (u.uploaded_by && u.uploader?.full_name)
+        seen.set(u.uploaded_by, u.uploader.full_name);
+    });
+    return Array.from(seen.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [uploads]);
+
+  const uploadFiltersActive = !!(searchFile || filterProject || filterUploader || filterDateFrom || filterDateTo);
+
+  // ── Derived: filtered batch leads ─────────────────────────────────────
+  const filteredBatchLeads = useMemo(() => {
+    let list = batchLeads;
+    if (batchSearch.trim()) {
+      const q = batchSearch.trim().toLowerCase();
+      list = list.filter(l =>
+        (l.customer_name || '').toLowerCase().includes(q) ||
+        (l.mobile || '').toLowerCase().includes(q)
+      );
+    }
+    if (batchFilterStatus) {
+      list = list.filter(l => (l.status || 'new') === batchFilterStatus);
+    }
+    if (batchFilterSourcingMgr) {
+      list = list.filter(l => l.sourcing_manager_id === batchFilterSourcingMgr);
+    }
+    if (batchFilterOwner) {
+      list = list.filter(l => l.owner_id === batchFilterOwner);
+    }
+    if (batchFilterTelecaller) {
+      list = list.filter(l => l.telecaller_id === batchFilterTelecaller);
+    }
+    return list;
+  }, [batchLeads, batchSearch, batchFilterStatus, batchFilterSourcingMgr, batchFilterOwner, batchFilterTelecaller]);
+
+  // Unique person options from the loaded batch
+  const batchSourcingMgrOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    batchLeads.forEach(l => { if (l.sourcing_manager_id) seen.set(l.sourcing_manager_id, profileMap.get(l.sourcing_manager_id) || l.sourcing_manager_id); });
+    return Array.from(seen.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [batchLeads, profileMap]);
+
+  const batchOwnerOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    batchLeads.forEach(l => { if (l.owner_id) seen.set(l.owner_id, profileMap.get(l.owner_id) || l.owner_id); });
+    return Array.from(seen.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [batchLeads, profileMap]);
+
+  const batchTelecallerOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    batchLeads.forEach(l => { if (l.telecaller_id) seen.set(l.telecaller_id, profileMap.get(l.telecaller_id) || l.telecaller_id); });
+    return Array.from(seen.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [batchLeads, profileMap]);
+
+  const batchFiltersActive = !!(batchSearch || batchFilterStatus || batchFilterSourcingMgr || batchFilterOwner || batchFilterTelecaller);
+
+  // A `bulk_upload_assignment` notification lands here with ?highlight=<id>
+  // -- once the uploads list has loaded, open that upload's drill-down
+  // directly (this is the actual destination the old, broken
+  // /leads?bulk_upload_id= link was trying to reach).
+  const { highlightId, registerRow, rowClass, tryFocusRow } = useHighlightParam();
+  useEffect(() => {
+    if (!highlightId || loading) return;
+    const match = uploads.find(u => u.id === highlightId);
+    if (match) {
+      openBatch(match);
+      tryFocusRow();
+    } else {
+      // Not in the loaded list (older than the default ordering shows, or
+      // RLS-scoped out) -- fetch it directly so the click still resolves.
+      supabase
+        .from('bulk_lead_uploads')
+        .select(`id, file_name, created_at, uploaded_by, project_id, channel_partner_id`)
+        .eq('id', highlightId)
+        .maybeSingle()
+        .then(({ data }) => { if (data) openBatch(data as BulkUploadRecord); });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId, loading, uploads]);
 
   const closeBatch = () => {
     setViewingUpload(null);
@@ -311,6 +448,11 @@ export const BulkUploads: React.FC = () => {
             </h1>
             <p className="text-sm text-slate-500 mt-1">
               {viewingUpload.project?.project_name || 'Unknown project'} · Uploaded by {viewingUpload.uploader?.full_name || 'Unknown'}
+              {batchFiltersActive && (
+                <span className="ml-2 text-indigo-600 font-semibold">
+                  — {filteredBatchLeads.length} / {batchLeads.length} leads
+                </span>
+              )}
             </p>
           </div>
           {isSuperAdmin(role) && batchLeads.length > 0 && (
@@ -322,6 +464,96 @@ export const BulkUploads: React.FC = () => {
             </button>
           )}
         </div>
+
+        {/* ── Batch leads filter bar ───────────────────────────── */}
+        {!batchLoading && batchLeads.length > 0 && (
+          <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 shadow-sm">
+            <div className="flex flex-wrap gap-3 items-end">
+              {/* Name / Mobile search */}
+              <div className="relative flex-1 min-w-[180px]">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search name or mobile…"
+                  value={batchSearch}
+                  onChange={e => setBatchSearch(e.target.value)}
+                  className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:border-indigo-500 focus:outline-none transition-colors"
+                />
+              </div>
+              {/* Status */}
+              <div className="relative min-w-[140px]">
+                <select
+                  value={batchFilterStatus}
+                  onChange={e => setBatchFilterStatus(e.target.value)}
+                  className="w-full appearance-none pl-3 pr-7 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:border-indigo-500 focus:outline-none transition-colors"
+                >
+                  <option value="">All Statuses</option>
+                  {Object.entries(STATUS_LABEL).map(([v, l]) => (
+                    <option key={v} value={v}>{l}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+              </div>
+              {/* Sourcing Manager */}
+              {batchSourcingMgrOptions.length > 0 && (
+                <div className="relative min-w-[160px]">
+                  <select
+                    value={batchFilterSourcingMgr}
+                    onChange={e => setBatchFilterSourcingMgr(e.target.value)}
+                    className="w-full appearance-none pl-3 pr-7 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:border-indigo-500 focus:outline-none transition-colors"
+                  >
+                    <option value="">All Sourcing Managers</option>
+                    {batchSourcingMgrOptions.map(([id, name]) => (
+                      <option key={id} value={id}>{name}</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+                </div>
+              )}
+              {/* Allocated To (Owner) */}
+              {batchOwnerOptions.length > 0 && (
+                <div className="relative min-w-[150px]">
+                  <select
+                    value={batchFilterOwner}
+                    onChange={e => setBatchFilterOwner(e.target.value)}
+                    className="w-full appearance-none pl-3 pr-7 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:border-indigo-500 focus:outline-none transition-colors"
+                  >
+                    <option value="">All Owners</option>
+                    {batchOwnerOptions.map(([id, name]) => (
+                      <option key={id} value={id}>{name}</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+                </div>
+              )}
+              {/* Telecaller */}
+              {batchTelecallerOptions.length > 0 && (
+                <div className="relative min-w-[150px]">
+                  <select
+                    value={batchFilterTelecaller}
+                    onChange={e => setBatchFilterTelecaller(e.target.value)}
+                    className="w-full appearance-none pl-3 pr-7 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:border-indigo-500 focus:outline-none transition-colors"
+                  >
+                    <option value="">All Telecallers</option>
+                    {batchTelecallerOptions.map(([id, name]) => (
+                      <option key={id} value={id}>{name}</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+                </div>
+              )}
+              {/* Clear filters */}
+              {batchFiltersActive && (
+                <button
+                  onClick={() => { setBatchSearch(''); setBatchFilterStatus(''); setBatchFilterSourcingMgr(''); setBatchFilterOwner(''); setBatchFilterTelecaller(''); }}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-rose-600 border border-rose-200 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" /> Clear Filters
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {batchError && (
           <div className="p-4 bg-red-50 text-red-700 rounded-lg text-sm border border-red-200">{batchError}</div>
@@ -336,6 +568,12 @@ export const BulkUploads: React.FC = () => {
             <FileSpreadsheet className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-slate-900 mb-1">No leads visible here</h3>
             <p className="text-slate-500">Either this batch has no leads, or none are allocated to you.</p>
+          </div>
+        ) : filteredBatchLeads.length === 0 ? (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
+            <Filter className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-slate-900 mb-1">No leads match filters</h3>
+            <p className="text-slate-500">Try adjusting or clearing the active filters.</p>
           </div>
         ) : (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -354,7 +592,7 @@ export const BulkUploads: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {batchLeads.map((lead, index) => {
+                  {filteredBatchLeads.map((lead, index) => {
                     const canManageThisLead = canManageLead(lead);
                     return (
                       <tr
@@ -496,7 +734,7 @@ export const BulkUploads: React.FC = () => {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
             <Upload className="w-6 h-6 text-indigo-600" />
@@ -504,6 +742,11 @@ export const BulkUploads: React.FC = () => {
           </h1>
           <p className="text-sm text-slate-500 mt-1">
             Directory of all Excel lead uploads. Click an upload to view its leads.
+            {uploadFiltersActive && (
+              <span className="ml-2 text-indigo-600 font-semibold">
+                — {filteredUploads.length} / {uploads.length} uploads
+              </span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -528,6 +771,87 @@ export const BulkUploads: React.FC = () => {
         </div>
       </div>
 
+      {/* ── Upload list filter bar ──────────────────────────────── */}
+      {!loading && uploads.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 shadow-sm mb-6">
+          <div className="flex flex-wrap gap-3 items-end">
+            {/* Filename search */}
+            <div className="relative flex-1 min-w-[180px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search filename…"
+                value={searchFile}
+                onChange={e => setSearchFile(e.target.value)}
+                className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:border-indigo-500 focus:outline-none transition-colors"
+              />
+            </div>
+            {/* Project */}
+            {uploadProjectOptions.length > 0 && (
+              <div className="relative min-w-[160px]">
+                <select
+                  value={filterProject}
+                  onChange={e => setFilterProject(e.target.value)}
+                  className="w-full appearance-none pl-3 pr-7 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:border-indigo-500 focus:outline-none transition-colors"
+                >
+                  <option value="">All Projects</option>
+                  {uploadProjectOptions.map(([id, name]) => (
+                    <option key={id} value={id}>{name}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+              </div>
+            )}
+            {/* Uploaded by */}
+            {uploadUploaderOptions.length > 0 && (
+              <div className="relative min-w-[160px]">
+                <select
+                  value={filterUploader}
+                  onChange={e => setFilterUploader(e.target.value)}
+                  className="w-full appearance-none pl-3 pr-7 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:border-indigo-500 focus:outline-none transition-colors"
+                >
+                  <option value="">All Uploaders</option>
+                  {uploadUploaderOptions.map(([id, name]) => (
+                    <option key={id} value={id}>{name}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+              </div>
+            )}
+            {/* Date from */}
+            <div className="flex items-center gap-2">
+              <div className="flex flex-col">
+                <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">From</label>
+                <input
+                  type="date"
+                  value={filterDateFrom}
+                  onChange={e => setFilterDateFrom(e.target.value)}
+                  className="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:border-indigo-500 focus:outline-none transition-colors"
+                />
+              </div>
+              <div className="flex flex-col">
+                <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">To</label>
+                <input
+                  type="date"
+                  value={filterDateTo}
+                  onChange={e => setFilterDateTo(e.target.value)}
+                  className="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:border-indigo-500 focus:outline-none transition-colors"
+                />
+              </div>
+            </div>
+            {/* Clear filters */}
+            {uploadFiltersActive && (
+              <button
+                onClick={() => { setSearchFile(''); setFilterProject(''); setFilterUploader(''); setFilterDateFrom(''); setFilterDateTo(''); }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-rose-600 border border-rose-200 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors self-end"
+              >
+                <X className="w-3.5 h-3.5" /> Clear Filters
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <BulkUploadModal
         isOpen={isUploadOpen}
         onClose={() => setIsUploadOpen(false)}
@@ -550,6 +874,12 @@ export const BulkUploads: React.FC = () => {
           <h3 className="text-lg font-medium text-slate-900 mb-1">No uploads found</h3>
           <p className="text-slate-500">You haven't uploaded any bulk leads yet.</p>
         </div>
+      ) : filteredUploads.length === 0 ? (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
+          <Filter className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+          <h3 className="text-lg font-medium text-slate-900 mb-1">No uploads match filters</h3>
+          <p className="text-slate-500">Try adjusting or clearing the active filters.</p>
+        </div>
       ) : (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="overflow-x-auto">
@@ -564,8 +894,8 @@ export const BulkUploads: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {uploads.map((upload) => (
-                  <tr key={upload.id} className="hover:bg-slate-50 transition-colors">
+                {filteredUploads.map((upload) => (
+                  <tr key={upload.id} ref={registerRow(upload.id)} className={`hover:bg-slate-50 transition-colors ${rowClass(upload.id)}`}>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
                         <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">

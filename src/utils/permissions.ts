@@ -166,20 +166,12 @@ export const canUpdateBulkUploadLeadStatus = (
   return false;
 };
 
-// A8: Tasks
-export const canAssignTasksToOthers = (role: Role) =>
-  ['super_admin', 'site_head', 'sourcing_manager_tl', 'presales_tl', 'closing_manager_tl', 'receptionist'].includes(role as string);
-
-export const canEditTask = (
-  role: Role,
-  currentUserId: Id,
-  assigneeId: Id,
-  creatorId: Id
-) => {
-  if (isAdminLevel(role)) return true;
-  if (currentUserId && (currentUserId === assigneeId || currentUserId === creatorId)) return true;
-  return false;
-};
+// A8: Targets
+// Only super_admin and site_head set/assign targets (create, manually
+// (re)assign to any sourcing/closing/presales staff member, delete) --
+// per the client's explicit "target would be provided by site head and
+// super admin only".
+export const canManageTargets = (role: Role) => role === 'super_admin' || role === 'site_head';
 
 // A9: Bulk Uploads
 // channel_partner is included deliberately -- the client explicitly asked
@@ -200,6 +192,12 @@ export const canPerformBulkUpload = (role: Role) =>
 // A10: New Booking Button
 export const canCreateBooking = (role: Role) =>
   ['super_admin', 'project_admin', 'site_head', 'closing_manager', 'closing_manager_tl'].includes(role as string);
+
+// A11: WhatsApp Messages log -- super_admin ONLY. Every other role queues
+// sends (Leads, Marketing, ChannelPartners, SiteVisits, Employees all
+// insert into whatsapp_outbox) but only super_admin gets to see the full
+// list of everything sent from the CRM across every user/module.
+export const canViewWhatsAppMessages = (role: Role) => role === 'super_admin';
 
 // D: Expenses -- super_admin ONLY, per the client's explicit instruction
 // ("it will be at my personal level, nobody else should have access to it").

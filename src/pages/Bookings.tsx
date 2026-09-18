@@ -5,6 +5,7 @@ import { useAuth } from '../hooks/useAuth';
 import { canCreateBooking, canCancelBooking, canReopenBooking, isSuperAdmin } from '../utils/permissions';
 import { computeCurrentlyDueTotal, totalMilestonePercentage } from '../utils/bookingDue';
 import { exportRowsToExcel } from '../utils/exportExcel';
+import { useHighlightParam } from '../hooks/useHighlightParam';
 import {
   Search,
   RefreshCw,
@@ -69,6 +70,7 @@ interface Lead {
   owner_id: string | null;
   sourcing_manager_id: string | null;
   channel_partner_id: string | null;
+  bulk_upload_id: string | null;
 }
 
 interface InventoryUnit {
@@ -133,8 +135,16 @@ export const Bookings: React.FC = () => {
   
   // Lists for creation form dropdowns
   const [leadsList, setLeadsList] = useState<Lead[]>([]);
+  // Bulk-uploaded leads must be converted to normal leads before they can
+  // be booked -- the Select Lead dropdown on Create Booking only offers
+  // leads that aren't still sitting as raw bulk-upload data, and scoped to assigned projects.
+  const bookableLeadsList = leadsList.filter(l => 
+    !l.bulk_upload_id && 
+    (isSuperAdmin(role) || !assignedProjects || assignedProjects.length === 0 || (!!l.project_id && assignedProjects.includes(l.project_id)))
+  );
   const [inventoryList, setInventoryList] = useState<InventoryUnit[]>([]);
   const [towersList, setTowersList] = useState<Tower[]>([]);
+  const [projectTeamMap, setProjectTeamMap] = useState<Map<string, Set<string>>>(new Map());
 
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -142,6 +152,29 @@ export const Bookings: React.FC = () => {
 
   // Modal states
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
+
+  // A notification (booking created/cancelled, payment recorded) lands here
+  // with ?highlight=<booking id>. Bookings is server-paginated, so the
+  // record may not be on whatever page happens to be loaded -- fetch it
+  // directly and open its detail modal rather than hunting for it.
+  const { highlightId, registerRow, rowClass, tryFocusRow, clearHighlightParam } = useHighlightParam();
+  useEffect(() => {
+    if (!highlightId) return;
+    supabase
+      .from('bookings')
+      .select('*')
+      .eq('id', highlightId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error || !data) return;
+        setSelectedBooking(data as Booking);
+        clearHighlightParam();
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId]);
+  // Bonus: if the highlighted booking happens to already be on the
+  // currently-loaded page, ring-highlight its row too.
+  useEffect(() => { tryFocusRow(); }, [bookings, tryFocusRow]);
   const [confirmingBooking, setConfirmingBooking] = useState<Booking | null>(null);
   const [cancellingBooking, setCancellingBooking] = useState<Booking | null>(null);
   const [cancelReason, setCancelReason] = useState('');
@@ -305,7 +338,12 @@ export const Bookings: React.FC = () => {
   const [addPaymentError, setAddPaymentError] = useState<string | null>(null);
 
   // Add Payment Form Fields
-  const [addPaymentType, setAddPaymentType] = useState('Booking');
+  // 'OCR' matches this modal's own first option below and the canonical
+  // payment_type taxonomy used across Payments.tsx / bookingDue.ts (OCR /
+  // GST / Stamp Duty Registration / Development / Maintenance / Other
+  // Charges) -- the old 'Booking' / 'Installment' / 'Other' set was stale
+  // and inconsistent with that taxonomy.
+  const [addPaymentType, setAddPaymentType] = useState('OCR');
   const [addAmount, setAddAmount] = useState('');
   const [addDueDate, setAddDueDate] = useState('');
   const [addReceivedDate, setAddReceivedDate] = useState(new Date().toISOString().split('T')[0]);
@@ -559,42 +597,12 @@ export const Bookings: React.FC = () => {
         }
       }
 
-      // First payment on a booking with a Channel Partner attached ->
-      // flag their referral fee record as settlement-eligible and notify
-      // them to request it. activeTotal is the total BEFORE this insert,
-      // so activeTotal === 0 with this payment actually received/paid
-      // means this is the first real money landing on the booking.
-      const isActivePayment = addPaymentStatus === 'received' || addPaymentStatus === 'paid';
-      if (activeTotal === 0 && isActivePayment && selectedBooking.channel_partner_id) {
-        try {
-          await supabase
-            .from('cp_commissions')
-            .update({ first_payment_received_at: new Date().toISOString() })
-            .eq('booking_id', selectedBooking.id)
-            .is('first_payment_received_at', null);
-
-          const { data: cpRow } = await supabase
-            .from('channel_partners')
-            .select('user_id, name')
-            .eq('id', selectedBooking.channel_partner_id)
-            .maybeSingle();
-
-          if (cpRow?.user_id) {
-            await supabase.from('notifications').insert([{
-              user_id: cpRow.user_id,
-              notification_type: 'cp_settlement_eligible',
-              title: 'Settlement Available',
-              message: `The first payment has been received for booking ${selectedBooking.booking_number || selectedBooking.id}. You can now request your referral fee settlement.`,
-              related_entity: 'booking',
-              related_id: selectedBooking.id,
-            }]);
-          }
-        } catch (notifyErr) {
-          // Payment itself is already saved -- a failed notification
-          // shouldn't undo that.
-          reportQueryError('Bookings: CP settlement notification', notifyErr);
-        }
-      }
+      // CP settlement-eligibility (first payment on a CP-linked booking)
+      // and its notification to the Channel Partner are now handled by the
+      // notify_payment_recorded DB trigger -- it fires for every payment
+      // insert regardless of code path, so this frontend-only version
+      // (which silently never fired for non-super_admin users, since RLS
+      // blocked the notification insert) has been removed.
 
       setIsAddPaymentOpen(false);
       setAddAmount('');
@@ -640,10 +648,13 @@ export const Bookings: React.FC = () => {
       // 3. Fetch Leads
       const { data: leadData, error: leadsError } = await supabase
         .from('leads')
-        .select('id, customer_name, mobile, email, project_id, owner_id, sourcing_manager_id, channel_partner_id');
+        .select('id, customer_name, mobile, email, project_id, owner_id, sourcing_manager_id, channel_partner_id, bulk_upload_id');
       if (leadsError) {
         console.error('Supabase Leads API Error:', leadsError.message, leadsError.details);
       } else if (leadData) {
+        // Kept unfiltered -- also used to search/display existing bookings
+        // by customer name, including any that predate the "no bulk leads
+        // in Select Lead" rule below.
         setLeadsList(leadData as any);
         setLeadsMap(new Map(leadData.map(l => [l.id, l as any])));
       }
@@ -663,11 +674,20 @@ export const Bookings: React.FC = () => {
       }
 
       // Fetch active Closing Managers (closing_manager / closing_manager_tl)
-      // for attribution on booking creation.
-      const [rolesRes, userRolesRes] = await Promise.all([
+      // for attribution on booking creation, and project team assignments to scope by project.
+      const [rolesRes, userRolesRes, assignmentsRes] = await Promise.all([
         supabase.from('roles').select('id, name'),
         supabase.from('user_roles').select('user_id, role_id'),
+        supabase.from('user_project_assignments').select('user_id, project_id').eq('is_active', true),
       ]);
+      if (assignmentsRes.data) {
+        const teamMap = new Map<string, Set<string>>();
+        assignmentsRes.data.forEach(row => {
+          if (!teamMap.has(row.project_id)) teamMap.set(row.project_id, new Set());
+          teamMap.get(row.project_id)!.add(row.user_id);
+        });
+        setProjectTeamMap(teamMap);
+      }
       if (rolesRes.data && userRolesRes.data && profData) {
         const roleMap = new Map(rolesRes.data.map(r => [r.id, r.name]));
         const activeIds = new Set(profData.filter(p => p.status === 'active').map(p => p.id));
@@ -840,19 +860,34 @@ export const Bookings: React.FC = () => {
   };
 
   const handleDeleteBooking = async (booking: Booking) => {
-    if (!window.confirm(`Are you sure you want to delete Booking ${booking.booking_number || booking.id}?`)) {
+    if (!window.confirm(`Are you sure you want to delete Booking ${booking.booking_number || booking.id}? The unit will be freed up and made available again.`)) {
       return;
     }
-    
+
     try {
       const { error: deleteErr } = await supabase
         .from('bookings')
         .delete()
         .eq('id', booking.id);
-      
+
       if (deleteErr) throw deleteErr;
-      
-      setNotification({ type: 'success', message: 'Booking deleted successfully.' });
+
+      // The unit's status was set to 'booked'/'sold' when this booking was
+      // created -- deleting the booking used to leave it stuck there
+      // forever with nothing pointing at it (confirmed live: a unit sat
+      // permanently "booked" after its booking was deleted, and the
+      // status-transition guard in Inventory.tsx then refused to let an
+      // admin move it back out of that state). Free it back to available
+      // now that the booking backing that status is gone.
+      if (booking.inventory_id) {
+        const { error: invErr } = await supabase
+          .from('project_inventory')
+          .update({ status: 'available' })
+          .eq('id', booking.inventory_id);
+        if (invErr) console.error('Failed to free up unit after booking deletion:', invErr.message);
+      }
+
+      setNotification({ type: 'success', message: 'Booking deleted and unit freed up successfully.' });
       handleSync();
     } catch (err: any) {
       console.error('Error deleting booking:', err);
@@ -879,6 +914,9 @@ export const Bookings: React.FC = () => {
           setSelectedProjectId(lead.project_id);
           setSelectedTowerId('');
           setSelectedInventoryId('');
+          if (selectedClosingManagerId && !projectTeamMap.get(lead.project_id)?.has(selectedClosingManagerId)) {
+            setSelectedClosingManagerId('');
+          }
         }
         if (lead.channel_partner_id) {
           setSelectedChannelPartnerId(lead.channel_partner_id);
@@ -887,7 +925,7 @@ export const Bookings: React.FC = () => {
         }
       }
     }
-  }, [selectedLeadId, leadsMap]);
+  }, [selectedLeadId, leadsMap, projectTeamMap, selectedClosingManagerId]);
 
   // Auto-fill base price from selected unit
   useEffect(() => {
@@ -907,13 +945,19 @@ export const Bookings: React.FC = () => {
   useEffect(() => {
     if (isCreateOpen) {
       fetchLookups();
+      if (!isSuperAdmin(role) && assignedProjects && assignedProjects.length === 1) {
+        setSelectedProjectId(assignedProjects[0]);
+      }
     }
-  }, [isCreateOpen, fetchLookups]);
+  }, [isCreateOpen, fetchLookups, role, assignedProjects]);
 
   const handleProjectChange = (projectId: string) => {
     setSelectedProjectId(projectId);
     setSelectedTowerId('');
     setSelectedInventoryId('');
+    if (selectedClosingManagerId && !projectTeamMap.get(projectId)?.has(selectedClosingManagerId)) {
+      setSelectedClosingManagerId('');
+    }
   };
 
   const handleTowerChange = (towerId: string) => {
@@ -1597,6 +1641,18 @@ export const Bookings: React.FC = () => {
   const startRange = page * pageSize + 1;
   const endRange = Math.min((page + 1) * pageSize, totalCount);
 
+  // Scoped project and closing managers for booking creation form
+  const currentCreateProjectId = selectedProjectId || (!isSuperAdmin(role) && assignedProjects && assignedProjects.length === 1 ? assignedProjects[0] : '');
+  const visibleClosingManagers = currentCreateProjectId
+    ? closingManagerList.filter(cm => projectTeamMap.get(currentCreateProjectId)?.has(cm.id))
+    : (!isSuperAdmin(role) && assignedProjects && assignedProjects.length > 0)
+      ? closingManagerList.filter(cm => assignedProjects.some(pid => projectTeamMap.get(pid)?.has(cm.id)))
+      : [];
+
+  const createProjectEntries = Array.from(projectMap.entries()).filter(
+    ([id]) => isSuperAdmin(role) || (assignedProjects && assignedProjects.includes(id))
+  );
+
   // Filter available towers based on selected project
   const availableTowers = towersList.filter(t => t.project_id === selectedProjectId);
 
@@ -1795,7 +1851,7 @@ export const Bookings: React.FC = () => {
                       const bMilestonePercent = towerMilestonePercent.get(b.tower_id || '') || 0;
                       const bCurrentlyDue = computeCurrentlyDueTotal(b, bMilestonePercent, !!bookingHasPaymentMap.get(b.id));
                       return (
-                        <tr key={b.id} className="hover:bg-slate-50/50 transition-colors">
+                        <tr key={b.id} ref={registerRow(b.id)} className={`hover:bg-slate-50/50 transition-colors ${rowClass(b.id)}`}>
                           <td className="py-4 px-6 font-semibold text-slate-900">
                             {lead?.customer_name || b.customer_name || 'Unnamed Client'}
                             {b.customer_name && lead?.customer_name && b.customer_name !== lead.customer_name && (
@@ -2635,8 +2691,12 @@ export const Bookings: React.FC = () => {
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                   >
                     <option value="">Choose Lead...</option>
-                    {leadsList.length > 0 ? (
-                      leadsList.map(l => (
+                    {/* Bulk-uploaded leads stay on the Bulk Uploads page --
+                        a booking is only ever created against a real lead.
+                        A bulk lead that genuinely needs a booking must be
+                        converted to a normal lead first (Bulk Uploads page). */}
+                    {bookableLeadsList.length > 0 ? (
+                      bookableLeadsList.map(l => (
                         <option key={l.id} value={l.id}>
                           {l.customer_name || 'Unnamed Lead'}
                         </option>
@@ -2674,10 +2734,21 @@ export const Bookings: React.FC = () => {
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                   >
                     <option value="">Unassigned</option>
-                    {closingManagerList.map(cm => (
-                      <option key={cm.id} value={cm.id}>{cm.full_name}</option>
-                    ))}
+                    {!currentCreateProjectId && isSuperAdmin(role) ? (
+                      <option value="" disabled>Please select a lead or project first</option>
+                    ) : visibleClosingManagers.length === 0 ? (
+                      <option value="" disabled>No Closing Managers assigned to this project</option>
+                    ) : (
+                      visibleClosingManagers.map(cm => (
+                        <option key={cm.id} value={cm.id}>{cm.full_name}</option>
+                      ))
+                    )}
                   </select>
+                  {!currentCreateProjectId && isSuperAdmin(role) ? (
+                    <p className="text-[10px] text-slate-400 mt-1">Select a Lead or Project first to see its Closing Managers.</p>
+                  ) : visibleClosingManagers.length === 0 && currentCreateProjectId ? (
+                    <p className="text-[10px] text-amber-600 mt-1">No Closing Managers are assigned to this project yet.</p>
+                  ) : null}
                 </div>
 
                 {/* Project Select */}
@@ -2690,12 +2761,12 @@ export const Bookings: React.FC = () => {
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                   >
                     <option value="">Choose Project...</option>
-                    {projectMap.size > 0 ? (
-                      Array.from(projectMap.entries()).map(([id, name]) => (
+                    {createProjectEntries.length > 0 ? (
+                      createProjectEntries.map(([id, name]) => (
                         <option key={id} value={id}>{name}</option>
                       ))
                     ) : (
-                      <option value="" disabled>No projects available (Database is empty)</option>
+                      <option value="" disabled>No projects available</option>
                     )}
                   </select>
                 </div>
@@ -3121,9 +3192,12 @@ export const Bookings: React.FC = () => {
                       onChange={(e) => setAddPaymentType(e.target.value)}
                       className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                     >
-                      <option value="Booking">Booking Deposit</option>
-                      <option value="Installment">Installment</option>
-                      <option value="Other">Other</option>
+                      <option value="OCR">OCR</option>
+                      <option value="GST">GST</option>
+                      <option value="Stamp Duty Registration">Stamp Duty Registration</option>
+                      <option value="Development Charges">Development Charges</option>
+                      <option value="Maintenance Charges">Maintenance Charges</option>
+                      <option value="Other Charges">Other Charges</option>
                     </select>
                   </div>
 

@@ -822,8 +822,12 @@ export type Database = {
       }
       channel_partners: {
         Row: {
+          account_name: string | null
+          account_number: string | null
           address: string | null
           alternate_mobile: string | null
+          bank_branch: string | null
+          bank_name: string | null
           city: string | null
           company_name: string | null
           cp_code: string
@@ -831,6 +835,7 @@ export type Database = {
           email: string | null
           gst_number: string | null
           id: string
+          ifsc_code: string | null
           kyc_status: Database["public"]["Enums"]["kyc_status"]
           kyc_verified_at: string | null
           kyc_verified_by: string | null
@@ -847,8 +852,12 @@ export type Database = {
           whatsapp_number: string | null
         }
         Insert: {
+          account_name?: string | null
+          account_number?: string | null
           address?: string | null
           alternate_mobile?: string | null
+          bank_branch?: string | null
+          bank_name?: string | null
           city?: string | null
           company_name?: string | null
           cp_code: string
@@ -856,6 +865,7 @@ export type Database = {
           email?: string | null
           gst_number?: string | null
           id?: string
+          ifsc_code?: string | null
           kyc_status?: Database["public"]["Enums"]["kyc_status"]
           kyc_verified_at?: string | null
           kyc_verified_by?: string | null
@@ -872,8 +882,12 @@ export type Database = {
           whatsapp_number?: string | null
         }
         Update: {
+          account_name?: string | null
+          account_number?: string | null
           address?: string | null
           alternate_mobile?: string | null
+          bank_branch?: string | null
+          bank_name?: string | null
           city?: string | null
           company_name?: string | null
           cp_code?: string
@@ -881,6 +895,7 @@ export type Database = {
           email?: string | null
           gst_number?: string | null
           id?: string
+          ifsc_code?: string | null
           kyc_status?: Database["public"]["Enums"]["kyc_status"]
           kyc_verified_at?: string | null
           kyc_verified_by?: string | null
@@ -1068,6 +1083,7 @@ export type Database = {
           created_at: string
           first_payment_received_at: string | null
           id: string
+          invoice_number: string | null
           paid_amount: number
           payable_amount: number
           payout_date: string | null
@@ -1088,6 +1104,7 @@ export type Database = {
           created_at?: string
           first_payment_received_at?: string | null
           id?: string
+          invoice_number?: string | null
           paid_amount?: number
           payable_amount?: number
           payout_date?: string | null
@@ -1108,6 +1125,7 @@ export type Database = {
           created_at?: string
           first_payment_received_at?: string | null
           id?: string
+          invoice_number?: string | null
           paid_amount?: number
           payable_amount?: number
           payout_date?: string | null

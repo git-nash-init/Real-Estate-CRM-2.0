@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { canCreateLead, canEditLeadRecord, canAddOwnLead, canViewOwnLeadsTab, isSuperAdmin } from '../utils/permissions';
 import { reportQueryError } from '../services/queryLogger';
 import { supabase } from '../services/supabaseClient';
 import { exportRowsToExcel } from '../utils/exportExcel';
+import { useHighlightParam } from '../hooks/useHighlightParam';
 import {
   uploadWhatsAppAttachment,
   removeWhatsAppAttachment,
@@ -52,6 +53,8 @@ interface Lead {
   telecaller_id: string | null;
   sourcing_manager_id: string | null;
   bulk_upload_id: string | null;
+  referral_name: string | null;
+  visit_date: string | null;
 }
 
 export const Leads: React.FC = () => {
@@ -123,7 +126,6 @@ export const Leads: React.FC = () => {
   const [waSubmitting, setWaSubmitting] = useState(false);
   const [waError, setWaError] = useState<string | null>(null);
   const [waSuccess, setWaSuccess] = useState(false);
-  const [waGatewayOnline, setWaGatewayOnline] = useState<boolean | null>(null);
   const [waAttachment, setWaAttachment] = useState<UploadedAttachment | null>(null);
   const [waUploading, setWaUploading] = useState(false);
   const waFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -211,6 +213,7 @@ export const Leads: React.FC = () => {
   const [sourcingManagerId, setSourcingManagerId] = useState('');
   const [telecallerId, setTelecallerId] = useState('');
   const [nextFollowupAt, setNextFollowupAt] = useState('');
+  const [referralName, setReferralName] = useState('');
 
   // Channel partner list & lookup map
   const [channelPartners, setChannelPartners] = useState<{ id: string; name: string; partner_code: string; company_name: string | null }[]>([]);
@@ -479,6 +482,21 @@ export const Leads: React.FC = () => {
     fetchLeads();
   }, [fetchLeads]);
 
+  // Live refresh -- so the Visit Date column (and everything else) updates
+  // the moment someone edits a lead, without a manual refresh. A blanket
+  // refetch rather than patching the changed row in place, since the
+  // directory is server-paginated/filtered and the changed row may not
+  // even belong on the currently-loaded page.
+  useEffect(() => {
+    const channel = supabase
+      .channel('leads-directory-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, () => {
+        fetchLeads();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchLeads]);
+
   // Trigger sync refetch
   const handleSync = async () => {
     if (syncing) return;
@@ -580,24 +598,8 @@ export const Leads: React.FC = () => {
     setWaMessage(`Hi ${lead.customer_name || 'there'}, `);
     setWaError(null);
     setWaSuccess(false);
-    setWaGatewayOnline(null);
     setWaAttachment(null);
     setWaUploading(false);
-
-    // Surface up front whether the gateway is actually running, rather
-    // than silently queueing a message that will sit unsent. The gateway
-    // heartbeats into whatsapp_session every few seconds; a stale
-    // heartbeat means the process isn't up. Same 20s staleness threshold
-    // Settings.tsx uses.
-    const { data } = await supabase
-      .from('whatsapp_session')
-      .select('status, last_heartbeat_at')
-      .eq('id', 'default')
-      .maybeSingle();
-    const fresh = data?.last_heartbeat_at
-      ? Date.now() - new Date(data.last_heartbeat_at).getTime() < 20000
-      : false;
-    setWaGatewayOnline(fresh && data?.status === 'open');
   };
 
   const handleWaFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -788,9 +790,45 @@ export const Leads: React.FC = () => {
         }
         setIsCreateOpen(true);
       }
-      setSearchParams({}, { replace: true });
+      // Strip only `new` -- a bare {} would also wipe a ?highlight= param
+      // from a notification click landing on this same page load.
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('new');
+        return next;
+      }, { replace: true });
     }
   }, [searchParams, setSearchParams, hasCreateAccess, isChannelPartner, myCpId, myCpSourcingManagerIds]);
+
+  // A notification (lead assigned/sourcing/presales) lands here with
+  // ?highlight=<lead id>. Leads is server-paginated and heavily filtered,
+  // so rather than hunting for the row in whatever page happens to be
+  // loaded, fetch the lead directly and open its detail view. Bulk-uploaded
+  // leads are deliberately excluded from this list (see the
+  // .is('bulk_upload_id', null) filters below) -- redirect those to their
+  // real home on the Bulk Uploads page instead.
+  const navigate = useNavigate();
+  const { highlightId, clearHighlightParam } = useHighlightParam();
+  useEffect(() => {
+    if (!highlightId) return;
+    supabase
+      .from('leads')
+      .select('*')
+      .eq('id', highlightId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error || !data) return;
+        if (data.bulk_upload_id) {
+          navigate(`/bulk-uploads?highlight=${data.bulk_upload_id}`, { replace: true });
+          return;
+        }
+        setSelectedLead(data as Lead);
+        setLeadRemarks([]);
+        fetchLeadRemarks(data.id);
+        clearHighlightParam();
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId]);
 
   // "Own Leads" -- a separate, simpler self-service list for roles that
   // don't allocate leads to other people (sourcing_manager, telecaller,
@@ -979,6 +1017,7 @@ export const Leads: React.FC = () => {
     setSourcingManagerId((lead as any).sourcing_manager_id || '');
     setTelecallerId((lead as any).telecaller_id || '');
     setNextFollowupAt((lead as any).next_followup_at ? (lead as any).next_followup_at.slice(0, 16) : '');
+    setReferralName((lead as any).referral_name || '');
     setCreateError(null);
     setNewRemarkText('');
     setRemarksError(null);
@@ -1039,6 +1078,7 @@ export const Leads: React.FC = () => {
         sourcing_manager_id: sourcingManagerId || null,
         telecaller_id: telecallerId || null,
         next_followup_at: nextFollowupAt ? new Date(nextFollowupAt).toISOString() : null,
+        referral_name: referralName.trim() || null,
       };
 
       let insertedLead: { id: string } | null = null;
@@ -1215,6 +1255,7 @@ export const Leads: React.FC = () => {
     setSourcingManagerId('');
     setTelecallerId('');
     setNextFollowupAt('');
+    setReferralName('');
     setLeadRemarks([]);
     setNewRemarkText('');
     setRemarksError(null);
@@ -1483,7 +1524,7 @@ export const Leads: React.FC = () => {
                     <th className="py-3.5 px-6">Sourcing Manager</th>
                     <th className="py-3.5 px-6">Allocated To</th>
                     <th className="py-3.5 px-6">Status</th>
-                    <th className="py-3.5 px-6">Created Date</th>
+                    <th className="py-3.5 px-6">Visit Date</th>
                     <th className="py-3.5 px-6 text-right">Actions</th>
                   </tr>
                 </thead>
@@ -1522,7 +1563,7 @@ export const Leads: React.FC = () => {
                           </span>
                         </td>
                         <td className="py-4 px-6 text-xs text-slate-400">
-                          {new Date(lead.created_at).toLocaleDateString('en-IN')}
+                          {lead.visit_date ? new Date(lead.visit_date).toLocaleDateString('en-IN') : '—'}
                         </td>
                         <td className="py-4 px-6 text-right">
                           <div className="inline-flex items-center gap-1.5">
@@ -1836,6 +1877,17 @@ export const Leads: React.FC = () => {
                   </div>
                 )}
 
+                {/* Referral Name */}
+                {selectedLead.referral_name && (
+                  <div className="flex items-start space-x-2.5 text-slate-700">
+                    <Users className="h-4 w-4 text-slate-400 mt-1 flex-shrink-0" />
+                    <div>
+                      <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Referral Name</span>
+                      <span className="text-sm font-semibold">{selectedLead.referral_name}</span>
+                    </div>
+                  </div>
+                )}
+
                 {/* Created Date */}
                 <div className="flex items-start space-x-2.5 text-slate-700">
                   <Calendar className="h-4 w-4 text-slate-400 mt-1 flex-shrink-0" />
@@ -1924,16 +1976,6 @@ export const Leads: React.FC = () => {
                   </span>
                 </div>
 
-                {waGatewayOnline === false && (
-                  <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-xs">
-                    <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-                    <span>
-                      WhatsApp isn't connected right now, so this message will sit in the queue until it is.
-                      Connect it under <strong>Settings → WhatsApp Connection</strong>.
-                    </span>
-                  </div>
-                )}
-
                 {waSuccess ? (
                   <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-4 text-sm">
                     Message queued. It will be delivered from the connected WhatsApp account shortly.
@@ -1994,23 +2036,39 @@ export const Leads: React.FC = () => {
                 )}
               </div>
 
-              <div className="bg-slate-50 px-6 py-4 flex justify-end gap-2 border-t border-slate-100">
-                <button
-                  onClick={() => setWaLead(null)}
-                  disabled={waSubmitting}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl disabled:opacity-50"
-                >
-                  {waSuccess ? 'Close' : 'Cancel'}
-                </button>
+              <div className="bg-slate-50 px-6 py-4 border-t border-slate-100 space-y-2">
                 {!waSuccess && (
                   <button
-                    onClick={handleWhatsAppSend}
-                    disabled={waSubmitting || waUploading || (!waMessage.trim() && !waAttachment)}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={() => {
+                      const digits = (waLead.mobile || '').replace(/[^0-9]/g, '');
+                      const withCountryCode = digits.length === 10 ? `91${digits}` : digits;
+                      window.open(`https://wa.me/${withCountryCode}?text=${encodeURIComponent(waMessage)}`, '_blank', 'noopener,noreferrer');
+                    }}
+                    disabled={!waLead.mobile || !waMessage.trim()}
+                    className="w-full flex items-center justify-center gap-1.5 px-4 py-2 border border-emerald-200 bg-white hover:bg-emerald-50 text-emerald-700 rounded-xl text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Opens WhatsApp with this message pre-filled — you review and hit send yourself, from your own WhatsApp"
                   >
-                    <Send className="h-3.5 w-3.5" /> {waSubmitting ? 'Sending...' : 'Send Message'}
+                    <MessageCircle className="h-3.5 w-3.5" /> Open in WhatsApp (send yourself)
                   </button>
                 )}
+                <div className="flex justify-end gap-2">
+                  <button
+                    onClick={() => setWaLead(null)}
+                    disabled={waSubmitting}
+                    className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl disabled:opacity-50"
+                  >
+                    {waSuccess ? 'Close' : 'Cancel'}
+                  </button>
+                  {!waSuccess && (
+                    <button
+                      onClick={handleWhatsAppSend}
+                      disabled={waSubmitting || waUploading || (!waMessage.trim() && !waAttachment)}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Send className="h-3.5 w-3.5" /> {waSubmitting ? 'Sending...' : 'Send Automatically'}
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -2503,6 +2561,17 @@ export const Leads: React.FC = () => {
                         type="date"
                         value={nextFollowupAt}
                         onChange={(e) => setNextFollowupAt(e.target.value)}
+                        className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-850 text-sm focus:bg-white focus:outline-none transition-all"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Referral Name</label>
+                      <input
+                        type="text"
+                        placeholder="Name of the person who referred this lead"
+                        value={referralName}
+                        onChange={(e) => setReferralName(e.target.value)}
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-850 text-sm focus:bg-white focus:outline-none transition-all"
                       />
                     </div>

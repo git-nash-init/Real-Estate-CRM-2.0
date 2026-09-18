@@ -4,6 +4,9 @@ import { useAuth } from '../hooks/useAuth';
 import { canEditPayment, canCancelPayment, isSuperAdmin } from '../utils/permissions';
 import { exportRowsToExcel } from '../utils/exportExcel';
 import { totalMilestonePercentage, computeDueByCategory } from '../utils/bookingDue';
+import { useHighlightParam } from '../hooks/useHighlightParam';
+import { downloadCpTaxInvoicePdf } from '../utils/cpBillPdf';
+import { parseDescription } from '../utils/projectDescription';
 import {
   Search,
   RefreshCw,
@@ -62,6 +65,7 @@ interface Booking {
   possession_date?: string | null;
   lead_id: string;
   status: string;
+  booking_date?: string | null;
 }
 
 interface Project {
@@ -136,6 +140,24 @@ export const Payments: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
   const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
+
+  // A `payment_recorded` notification lands here with ?highlight=<payment
+  // id>. Payments is fully loaded client-side and filtered/paginated in
+  // memory, so once it's found in `payments`, clear any active filters
+  // that would hide it, jump to its page, and open its detail modal.
+  const { highlightId, registerRow, rowClass, tryFocusRow, clearHighlightParam } = useHighlightParam();
+  useEffect(() => {
+    if (!highlightId || loading) return;
+    const match = payments.find(p => p.id === highlightId);
+    if (!match) return;
+    setActiveView('customer');
+    setSearchQuery(''); setProjectFilter(''); setBookingFilter('');
+    setTypeFilter(''); setModeFilter(''); setStatusFilter('');
+    setDueDateFilter(''); setReceivedDateFilter('');
+    setSelectedPayment(match);
+    clearHighlightParam();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId, loading, payments]);
   const [receiptPayment, setReceiptPayment] = useState<Payment | null>(null);
   const [cancellingPayment, setCancellingPayment] = useState<Payment | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -191,7 +213,7 @@ export const Payments: React.FC = () => {
       // 4. Fetch Bookings (load all valid ones)
       const { data: bookData, error: bookErr } = await supabase
         .from('bookings')
-        .select('id, booking_number, customer_name, project_id, tower_id, inventory_id, booking_amount, consideration_amount, total_additional_charges, total_payable_amount, gst_amount, stamp_duty, registration_charges, development_charges, maintenance_charges, other_charges, possession_date, lead_id, status');
+        .select('id, booking_number, customer_name, project_id, tower_id, inventory_id, booking_amount, consideration_amount, total_additional_charges, total_payable_amount, gst_amount, stamp_duty, registration_charges, development_charges, maintenance_charges, other_charges, possession_date, lead_id, status, booking_date');
       if (bookErr) throw bookErr;
       setBookings(bookData || []);
       setBookingMap(new Map(bookData?.map(b => [b.id, b]) || []));
@@ -225,7 +247,7 @@ export const Payments: React.FC = () => {
       // 6. Fetch Channel Partners
       const { data: cpData, error: cpErr } = await supabase
         .from('channel_partners')
-        .select('id, name, company_name, partner_code, cp_code');
+        .select('id, name, company_name, partner_code, cp_code, mobile, pan_number, gst_number');
       if (cpErr) throw cpErr;
       setCpMap(new Map(cpData?.map(cp => [cp.id, cp]) || []));
 
@@ -371,6 +393,116 @@ export const Payments: React.FC = () => {
     } finally {
       setSettlementRequestingId(null);
     }
+  };
+
+  // Channel-partner-only: generates a GST tax invoice for one referral fee
+  // obligation once the super admin has approved it (not while still
+  // pending), pre-filled from whatever the CRM has on file. The invoiced
+  // amount is `payable_amount` -- the exact amount the super admin typed
+  // into the Approve dialog (ChannelPartnerDetails.tsx handleApproveAction),
+  // which is validated there to never exceed the full commission_amount on
+  // the deal, though it can be less. Fields the CRM doesn't collect (SFDC
+  // UID, CRN, REAP ID, Service Account Code, developer GSTIN/RERA if not
+  // entered on the project) are left blank for the CP/admin to fill in by
+  // hand -- never guessed at.
+  const [downloadingBillId, setDownloadingBillId] = useState<string | null>(null);
+  // The CP supplies their own invoice number the FIRST time they download a
+  // given referral fee's invoice (see the "Enter Invoice Number" modal
+  // below) -- it's then saved onto cp_commissions.invoice_number, so every
+  // later download of that same invoice reuses it automatically instead of
+  // asking again (and, since it's the actual invoice number, must stay
+  // the same across re-downloads rather than changing each time).
+  const [invoiceNumberCommission, setInvoiceNumberCommission] = useState<any>(null);
+  const [invoiceNumberInput, setInvoiceNumberInput] = useState('');
+  const handleDownloadCpBill = async (commission: any, invoiceNumber: string) => {
+    setDownloadingBillId(commission.id);
+    try {
+      const booking = bookingMap.get(commission.booking_id);
+      if (!booking) throw new Error('Could not load the booking for this referral fee.');
+
+      if (!commission.invoice_number) {
+        const { error: invNoErr } = await supabase
+          .from('cp_commissions')
+          .update({ invoice_number: invoiceNumber })
+          .eq('id', commission.id);
+        if (invNoErr) throw invNoErr;
+        setCpCommissions(prev => prev.map(c => c.id === commission.id ? { ...c, invoice_number: invoiceNumber } : c));
+      }
+
+      const [{ data: cp, error: cpErr }, { data: project, error: projErr }] = await Promise.all([
+        supabase.from('channel_partners').select('name, company_name, mobile, email, address, pan_number, gst_number, account_name, bank_name, bank_branch, account_number, ifsc_code').eq('id', commission.cp_id).maybeSingle(),
+        supabase.from('projects').select('project_name, builder_name, address, city, state, pincode, description').eq('id', booking.project_id).maybeSingle(),
+      ]);
+      if (cpErr) throw cpErr;
+      if (projErr) throw projErr;
+      if (!cp) throw new Error('Could not load Channel Partner details.');
+
+      // Project RERA is packed into the projects.description JSON blob,
+      // same convention Projects.tsx uses for that column.
+      const projMeta = parseDescription(project?.description || null);
+
+      const unit = inventoryMap.get(booking.inventory_id);
+      const wing = towerMap.get(unit?.tower_id || booking.tower_id || '') || '';
+      const developerAddressParts = [project?.address, project?.city, project?.state, project?.pincode].filter(Boolean);
+
+      const approvedAmount = commission.payable_amount || 0;
+      const gstApplicable = !!cp.gst_number;
+      const cgstAmount = gstApplicable ? Math.round(approvedAmount * 0.09 * 100) / 100 : 0;
+      const sgstAmount = gstApplicable ? Math.round(approvedAmount * 0.09 * 100) / 100 : 0;
+
+      downloadCpTaxInvoicePdf({
+        cpName: cp.company_name || cp.name || '',
+        cpAddress: cp.address || '',
+        cpTel: cp.mobile || '',
+        cpEmail: cp.email || '',
+
+        invoiceNumber,
+        invoiceDate: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+
+        developerName: project?.builder_name || project?.project_name || projectMap.get(booking.project_id) || '',
+        developerAddress: developerAddressParts.join(', '),
+        developerGstin: projMeta.gst || '',
+        projectRera: projMeta.rera || '',
+
+        cpPan: cp.pan_number || '',
+        cpGstin: cp.gst_number || '',
+
+        customerName: booking.customer_name || '',
+        projectName: project?.project_name || projectMap.get(booking.project_id) || '',
+        wing,
+        flatNo: unit?.unit_number || '',
+        unitCost: booking.consideration_amount ?? booking.booking_amount ?? 0,
+
+        brokeragePercentage: commission.commission_percentage,
+        brokerageAmount: approvedAmount,
+        gstApplicable,
+        cgstAmount,
+        sgstAmount,
+        total: approvedAmount + cgstAmount + sgstAmount,
+
+        chequeFavouringName: cp.name || cp.company_name || '',
+
+        accountName: cp.account_name || '',
+        bankName: cp.bank_name || '',
+        bankBranch: cp.bank_branch || '',
+        accountNumber: cp.account_number || '',
+        ifscCode: cp.ifsc_code || '',
+
+        bookingNumber: booking.booking_number || '',
+      });
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to generate the tax invoice.' });
+    } finally {
+      setDownloadingBillId(null);
+    }
+  };
+
+  const handleInvoiceNumberSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!invoiceNumberInput.trim() || !invoiceNumberCommission) return;
+    handleDownloadCpBill(invoiceNumberCommission, invoiceNumberInput.trim());
+    setInvoiceNumberCommission(null);
+    setInvoiceNumberInput('');
   };
 
   const handlePayoutCommissionChange = (commId: string) => {
@@ -536,7 +668,13 @@ export const Payments: React.FC = () => {
     setEditingPayment(null);
     setFormError(null);
     setSelectedBookingId('');
-    setPaymentType('Booking');
+    // 'Booking' isn't one of this select's actual option values (OCR, GST,
+    // Stamp Duty Registration, ...) -- when the state didn't match any
+    // <option>, the browser fell back to visually showing the first option
+    // (OCR) while the real state stayed 'Booking', so a payment saved
+    // without touching the dropdown recorded the wrong type. Default to a
+    // real option instead.
+    setPaymentType('OCR');
     setAmountInput('');
     setDueDate('');
     setReceivedDate(new Date().toISOString().split('T')[0]);
@@ -836,6 +974,16 @@ export const Payments: React.FC = () => {
   const endRange = Math.min((page + 1) * pageSize, totalFilteredCount);
   const paginatedPayments = filteredPayments.slice(page * pageSize, (page + 1) * pageSize);
 
+  // Once filters clear and the row re-renders on the right page, ring-
+  // highlight it too (best effort -- depends on pageSize/index math above).
+  useEffect(() => {
+    if (!highlightId) return;
+    const idx = filteredPayments.findIndex(p => p.id === highlightId);
+    if (idx >= 0) setPage(Math.floor(idx / pageSize));
+    tryFocusRow();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paginatedPayments]);
+
   return (
     <div className="space-y-6">
       {/* Alerts notification toast */}
@@ -1129,6 +1277,7 @@ export const Payments: React.FC = () => {
                 <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
                   {role !== 'channel_partner' && <th className="py-2.5 px-4">Channel Partner</th>}
                   <th className="py-2.5 px-4">Booking #</th>
+                  <th className="py-2.5 px-4">Customer</th>
                   <th className="py-2.5 px-4">Project</th>
                   <th className="py-2.5 px-4">Payable Amount</th>
                   <th className="py-2.5 px-4">Status</th>
@@ -1145,6 +1294,14 @@ export const Payments: React.FC = () => {
                     const projName = booking ? projectMap.get(booking.project_id) : 'N/A';
                     const statusLower = c.status?.toLowerCase();
                     const eligible = !!c.first_payment_received_at && !c.settlement_requested_at && statusLower === 'pending';
+                    // Invoice becomes downloadable as soon as the super
+                    // admin approves the referral fee (ChannelPartnerDetails
+                    // "Approve" action, which sets payable_amount to
+                    // whatever amount they typed there -- capped to never
+                    // exceed the full commission) -- not only once a payout
+                    // has actually been disbursed. The invoice bills that
+                    // approved payable_amount, not the full commission.
+                    const billReady = statusLower === 'approved' || statusLower === 'partially_paid' || statusLower === 'paid';
 
                     return (
                       <tr key={c.id} className={`hover:bg-slate-50/50 transition-colors ${c.settlement_requested_at && (statusLower === 'pending') ? 'bg-amber-50/40' : ''}`}>
@@ -1152,6 +1309,7 @@ export const Payments: React.FC = () => {
                           <td className="py-3 px-4 font-semibold text-slate-800 text-xs">{cpName}</td>
                         )}
                         <td className="py-3 px-4 font-mono text-xs font-semibold text-slate-700">{booking?.booking_number || 'N/A'}</td>
+                        <td className="py-3 px-4 text-xs font-semibold text-slate-800 truncate max-w-[140px]">{booking?.customer_name || 'N/A'}</td>
                         <td className="py-3 px-4 text-xs text-slate-600 truncate max-w-[150px]">{projName}</td>
                         <td className="py-3 px-4 font-mono text-xs font-bold text-slate-800">₹{(c.payable_amount || 0).toLocaleString('en-IN')}</td>
                         <td className="py-3 px-4">
@@ -1166,8 +1324,22 @@ export const Payments: React.FC = () => {
                           </span>
                         </td>
                         <td className="py-3 px-4">
+                          {/* Once the super admin has acted (approved,
+                              rejected, or paid), that resolution is the
+                              current state -- "Requested" is only shown
+                              while it's genuinely still awaiting that
+                              action, not forever just because
+                              settlement_requested_at was once set. */}
                           {!c.first_payment_received_at ? (
                             <span className="text-xxs text-slate-400 font-medium">Awaiting first payment</span>
+                          ) : statusLower === 'approved' ? (
+                            <span className="text-xxs text-indigo-600 font-bold uppercase tracking-wider">Approved</span>
+                          ) : statusLower === 'partially_paid' ? (
+                            <span className="text-xxs text-blue-600 font-bold uppercase tracking-wider">Partially Paid</span>
+                          ) : statusLower === 'paid' ? (
+                            <span className="text-xxs text-emerald-600 font-bold uppercase tracking-wider">Paid</span>
+                          ) : statusLower === 'rejected' ? (
+                            <span className="text-xxs text-rose-600 font-bold uppercase tracking-wider">Rejected</span>
                           ) : c.settlement_requested_at ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xxs font-extrabold uppercase tracking-wider bg-amber-100 text-amber-800">
                               Requested {new Date(c.settlement_requested_at).toLocaleDateString('en-IN')}
@@ -1177,7 +1349,7 @@ export const Payments: React.FC = () => {
                           )}
                         </td>
                         {role === 'channel_partner' && (
-                          <td className="py-3 px-4 text-right">
+                          <td className="py-3 px-4 text-right space-x-1.5">
                             {eligible && (
                               <button
                                 onClick={() => handleRequestSettlement(c.id)}
@@ -1187,6 +1359,29 @@ export const Payments: React.FC = () => {
                                 {settlementRequestingId === c.id ? 'Requesting...' : 'Request Settlement'}
                               </button>
                             )}
+                            {billReady && (
+                              <button
+                                onClick={() => {
+                                  // Once an invoice number has been set, the
+                                  // CP only ever "views" that same invoice
+                                  // from then on -- no more entering a
+                                  // number, just re-opens it with the
+                                  // number already fixed the first time.
+                                  if (c.invoice_number) {
+                                    handleDownloadCpBill(c, c.invoice_number);
+                                  } else {
+                                    setInvoiceNumberCommission(c);
+                                    setInvoiceNumberInput('');
+                                  }
+                                }}
+                                disabled={downloadingBillId === c.id}
+                                title={c.invoice_number ? `View Invoice (${c.invoice_number})` : 'Download Invoice (PDF)'}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xxs font-bold shadow-sm transition-all focus:outline-none disabled:opacity-50"
+                              >
+                                {c.invoice_number ? <Eye className="h-3 w-3" /> : <Download className="h-3 w-3" />}
+                                {downloadingBillId === c.id ? 'Preparing...' : (c.invoice_number ? 'View Invoice' : 'Download Invoice')}
+                              </button>
+                            )}
                           </td>
                         )}
                       </tr>
@@ -1194,7 +1389,7 @@ export const Payments: React.FC = () => {
                   })
                 ) : (
                   <tr>
-                    <td colSpan={role === 'channel_partner' ? 6 : 6} className="py-10 text-center text-xs text-slate-400">
+                    <td colSpan={role === 'channel_partner' ? 7 : 7} className="py-10 text-center text-xs text-slate-400">
                       No referral fee obligations found.
                     </td>
                   </tr>
@@ -1242,7 +1437,7 @@ export const Payments: React.FC = () => {
                       const isSynthetic = p.id.startsWith('pending-');
 
                       return (
-                        <tr key={p.id} className={`hover:bg-slate-50/50 transition-colors text-sm ${isSynthetic ? 'bg-amber-50/30' : ''}`}>
+                        <tr key={p.id} ref={registerRow(p.id)} className={`hover:bg-slate-50/50 transition-colors text-sm ${isSynthetic ? 'bg-amber-50/30' : ''} ${rowClass(p.id)}`}>
                           <td className="py-3.5 px-6 font-mono text-slate-600 text-xs font-semibold">
                             {isSynthetic ? <span className="italic text-slate-400 font-sans">Not yet recorded</span> : (p.payment_number || '—')}
                           </td>
@@ -2094,6 +2289,58 @@ export const Payments: React.FC = () => {
                 Yes, Cancel Payment
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* INVOICE NUMBER PROMPT -- Channel Partner supplies their own
+          invoice number just before download; it's stamped onto the PDF
+          and used as the downloaded file's name. */}
+      {invoiceNumberCommission && (
+        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setInvoiceNumberCommission(null)} />
+          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-sm w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-left">
+            <div className="bg-emerald-600 text-white px-6 py-4 flex items-center justify-between">
+              <span className="font-bold tracking-tight">Enter Invoice Number</span>
+              <button onClick={() => setInvoiceNumberCommission(null)} className="p-1 rounded-lg text-emerald-200 hover:text-white focus:outline-none">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <form onSubmit={handleInvoiceNumberSubmit}>
+              <div className="p-6 space-y-3">
+                <p className="text-xs text-slate-500">
+                  This number is printed on the invoice and used as the downloaded file's name.
+                </p>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Invoice Number *</label>
+                  <input
+                    type="text"
+                    autoFocus
+                    required
+                    value={invoiceNumberInput}
+                    onChange={(e) => setInvoiceNumberInput(e.target.value)}
+                    placeholder="e.g. INV-001"
+                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
+                  />
+                </div>
+              </div>
+              <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setInvoiceNumberCommission(null)}
+                  className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-100 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!invoiceNumberInput.trim()}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all disabled:opacity-50"
+                >
+                  Generate & Download
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

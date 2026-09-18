@@ -19,12 +19,13 @@ import { ChannelPartnerDetails } from './pages/ChannelPartnerDetails';
 import { CPOutreach } from './pages/CPOutreach';
 import { Employees } from './pages/Employees';
 import { Marketing } from './pages/Marketing';
-import { Tasks } from './pages/Tasks';
+import { Targets } from './pages/Targets';
 import { Attendance } from './pages/Attendance';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import { Expenses } from './pages/Expenses';
 import { BulkUploads } from './pages/BulkUploads';
+import { WhatsAppMessages } from './pages/WhatsAppMessages';
 import { canAccessBulkUploadPage } from './utils/permissions';
 
 function App() {
@@ -111,7 +112,7 @@ function App() {
               }
             />
             <Route path="attendance" element={<ProtectedRoute excludedRoles={['channel_partner']}><Attendance /></ProtectedRoute>} />
-            <Route path="tasks" element={<ProtectedRoute excludedRoles={['channel_partner']}><Tasks /></ProtectedRoute>} />
+            <Route path="targets" element={<ProtectedRoute excludedRoles={['channel_partner']}><Targets /></ProtectedRoute>} />
             {/* Open to every role now — Reports.tsx itself decides what a
                 given user sees (full business view for admins, a
                 bifurcated team view for site_head/TLs, a personal view for
@@ -132,6 +133,12 @@ function App() {
             <Route
               path="bulk-uploads"
               element={<ProtectedRoute isAllowed={canAccessBulkUploadPage}><BulkUploads /></ProtectedRoute>}
+            />
+            {/* Every WhatsApp message sent from the CRM, across every user
+                and module -- client's explicit request, super_admin only. */}
+            <Route
+              path="whatsapp-messages"
+              element={<ProtectedRoute allowedRoles={['super_admin']}><WhatsAppMessages /></ProtectedRoute>}
             />
 
             {/* Catch-all redirected back to dashboard */}

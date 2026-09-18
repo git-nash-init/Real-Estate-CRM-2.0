@@ -1,0 +1,569 @@
+<title>CRM Development Invoice</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root {
+    --paper: #f7f4ec;
+    --paper-raised: #fffdf7;
+    --ink: #1c2420;
+    --ink-soft: #55605a;
+    --ink-faint: #8b9389;
+    --rule: #d9d3c2;
+    --rule-soft: #e8e3d4;
+    --accent: #2f5d55;
+    --accent-soft: #e3ebe6;
+    --accent-strong: #1f4239;
+    --due: #a8461f;
+    --due-soft: #f4e2d8;
+    --paid: #3f6b3a;
+    --paid-soft: #e2ebdf;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #171a17;
+      --paper-raised: #1f231f;
+      --ink: #ece8dc;
+      --ink-soft: #b3ac9c;
+      --ink-faint: #7c7768;
+      --rule: #383a32;
+      --rule-soft: #2a2c26;
+      --accent: #7fb3a3;
+      --accent-soft: #223028;
+      --accent-strong: #a3d4c4;
+      --due: #e08a5f;
+      --due-soft: #3a2418;
+      --paid: #8fbf82;
+      --paid-soft: #22301f;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper: #171a17;
+    --paper-raised: #1f231f;
+    --ink: #ece8dc;
+    --ink-soft: #b3ac9c;
+    --ink-faint: #7c7768;
+    --rule: #383a32;
+    --rule-soft: #2a2c26;
+    --accent: #7fb3a3;
+    --accent-soft: #223028;
+    --accent-strong: #a3d4c4;
+    --due: #e08a5f;
+    --due-soft: #3a2418;
+    --paid: #8fbf82;
+    --paid-soft: #22301f;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    padding-inline: 20px;
+    padding-block: 40px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .sheet {
+    width: 100%;
+    max-width: 760px;
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    box-shadow: 0 1px 2px rgba(20, 20, 10, 0.04), 0 12px 32px -18px rgba(20, 20, 10, 0.25);
+    padding: 48px 56px 40px;
+  }
+
+  @media (max-width: 560px) {
+    .sheet { padding: 32px 22px 28px; }
+  }
+
+  /* ---------- Header ---------- */
+
+  .masthead {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 20px;
+    padding-bottom: 28px;
+    border-bottom: 2px solid var(--ink);
+  }
+
+  .masthead h1 {
+    font-family: 'Fraunces', Georgia, serif;
+    font-size: clamp(2rem, 6vw, 2.6rem);
+    font-weight: 600;
+    font-optical-sizing: auto;
+    letter-spacing: -0.01em;
+    margin: 0 0 4px;
+    text-wrap: balance;
+  }
+
+  .masthead .tagline {
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    letter-spacing: 0.04em;
+  }
+
+  .masthead-meta {
+    text-align: right;
+    font-size: 0.82rem;
+    color: var(--ink-soft);
+    line-height: 1.65;
+    white-space: nowrap;
+  }
+
+  .masthead-meta .num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.95rem;
+    color: var(--ink);
+    font-weight: 500;
+  }
+
+  /* ---------- From / To ---------- */
+
+  .parties {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    padding-block: 28px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  @media (max-width: 560px) {
+    .parties { grid-template-columns: 1fr; }
+  }
+
+  .party-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+
+  .party-name {
+    font-family: 'Fraunces', Georgia, serif;
+    font-size: 1.15rem;
+    font-weight: 500;
+    margin-bottom: 5px;
+  }
+
+  .party-line {
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+    line-height: 1.6;
+  }
+
+  .party-line a { color: var(--ink-soft); text-decoration: none; border-bottom: 1px solid var(--rule); }
+  .party-line a:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* ---------- Project line ---------- */
+
+  .project-note {
+    padding-block: 18px;
+    border-bottom: 1px solid var(--rule);
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+    line-height: 1.65;
+  }
+
+  .project-note strong { color: var(--ink); font-weight: 600; }
+
+  /* ---------- Line items ---------- */
+
+  .section-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 30px 0 12px;
+  }
+
+  table.items {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.86rem;
+  }
+
+  table.items thead th {
+    text-align: left;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  table.items thead th.amt { text-align: right; }
+
+  table.items tbody td {
+    padding-block: 13px;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+  }
+
+  table.items tbody tr:last-child td { border-bottom: 1px solid var(--rule); }
+
+  .item-name {
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 3px;
+  }
+
+  .item-desc {
+    color: var(--ink-soft);
+    font-size: 0.8rem;
+    line-height: 1.55;
+    max-width: 46ch;
+  }
+
+  .amt {
+    text-align: right;
+    font-family: 'IBM Plex Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+
+  /* ---------- Totals ---------- */
+
+  .totals {
+    margin-top: 18px;
+    margin-left: auto;
+    width: 100%;
+    max-width: 320px;
+  }
+
+  .totals-row {
+    display: flex;
+    justify-content: space-between;
+    padding-block: 7px;
+    font-size: 0.86rem;
+  }
+
+  .totals-row.subtotal { border-top: 1px solid var(--rule); padding-top: 12px; }
+
+  .totals-row .label { color: var(--ink-soft); }
+  .totals-row .val { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; font-weight: 500; }
+
+  .totals-row.grand {
+    margin-top: 6px;
+    padding-top: 12px;
+    border-top: 2px solid var(--ink);
+  }
+  .totals-row.grand .label { color: var(--ink); font-weight: 600; }
+  .totals-row.grand .val { font-size: 1.05rem; font-weight: 600; }
+
+  .totals-row.paid .val { color: var(--paid); }
+
+  .balance-strip {
+    margin-top: 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--due-soft);
+    border: 1px solid color-mix(in srgb, var(--due) 35%, var(--due-soft));
+    border-radius: 4px;
+    padding: 13px 16px;
+  }
+
+  .balance-strip .label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--due);
+  }
+
+  .balance-strip .val {
+    font-family: 'IBM Plex Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--due);
+  }
+
+  /* ---------- Payment history ---------- */
+
+  .payhist {
+    margin-top: 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    background: var(--rule-soft);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .payhist-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: var(--paper-raised);
+    padding: 12px 16px;
+    font-size: 0.84rem;
+  }
+
+  .payhist-row .pay-idx {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--ink-faint);
+    width: 22px;
+    flex-shrink: 0;
+  }
+
+  .payhist-row .pay-label { flex: 1; color: var(--ink-soft); }
+
+  .payhist-row .pay-chip {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--paid);
+    background: var(--paid-soft);
+    padding: 2px 8px;
+    border-radius: 100px;
+    flex-shrink: 0;
+  }
+
+  .payhist-row .pay-amt {
+    font-family: 'IBM Plex Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    width: 80px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  /* ---------- Footer ---------- */
+
+  .footer {
+    margin-top: 36px;
+    padding-top: 22px;
+    border-top: 1px solid var(--rule);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+
+  .footer-note {
+    font-size: 0.78rem;
+    color: var(--ink-faint);
+    max-width: 40ch;
+    line-height: 1.6;
+  }
+
+  .signoff {
+    text-align: right;
+    font-family: 'Fraunces', Georgia, serif;
+    font-style: italic;
+    font-size: 1rem;
+    color: var(--ink-soft);
+  }
+
+  @media (max-width: 560px) {
+    .masthead { flex-direction: column; }
+    .masthead-meta { text-align: left; }
+    .footer { flex-direction: column; align-items: flex-start; }
+    .signoff { text-align: left; }
+  }
+</style>
+
+<div class="sheet">
+
+  <div class="masthead">
+    <div>
+      <h1>Invoice</h1>
+      <div class="tagline">Custom Real Estate CRM &mdash; Development Services</div>
+    </div>
+    <div class="masthead-meta">
+      <div>Invoice <span class="num">#AT-2026-014</span></div>
+      <div>Issued <span class="num">15 Sep 2026</span></div>
+    </div>
+  </div>
+
+  <div class="parties">
+    <div>
+      <div class="party-label">From</div>
+      <div class="party-name">Avinash Thakur</div>
+      <div class="party-line">
+        avinashthakur.com<br>
+        <a href="mailto:try.avinasht@gamil.com">try.avinasht@gamil.com</a><br>
+        +91 93959 77954
+      </div>
+    </div>
+    <div>
+      <div class="party-label">Billed To</div>
+      <div class="party-name">Swapnil Talgaonkar</div>
+      <div class="party-line">
+        Opal Properties CRM<br>
+        Custom development engagement
+      </div>
+    </div>
+  </div>
+
+  <div class="project-note">
+    Full build &amp; ongoing development of the <strong>Opal Properties CRM</strong> &mdash; a Supabase-backed
+    real estate CRM covering the entire sales operation, from first lead to final payout. Complete platform
+    scope and line-item costing below.
+  </div>
+
+  <div class="section-label">Platform &mdash; Full Scope</div>
+  <table class="items">
+    <thead>
+      <tr>
+        <th>Module</th>
+        <th class="amt">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>
+          <div class="item-name">Lead Management System</div>
+          <div class="item-desc">Full lead directory with search/filters/pagination, own-leads self-service view, remarks history, referral tracking, WhatsApp compose, bulk Excel upload with auto-assignment, and channel-partner attribution.</div>
+        </td>
+        <td class="amt">&#8377;1,500</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="item-name">Bookings &amp; Payments</div>
+          <div class="item-desc">End-to-end booking lifecycle (draft, confirm, cancel, reopen), milestone-based payment schedules, due-amount tracking, and receipts &mdash; for both customer payments and channel-partner referral payouts.</div>
+        </td>
+        <td class="amt">&#8377;1,200</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="item-name">Channel Partner Network</div>
+          <div class="item-desc">CP directory &amp; profiles, self-service registration requests with admin approval, sourcing-manager allocation, commission tracking, and field-visit outreach logging.</div>
+        </td>
+        <td class="amt">&#8377;1,200</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="item-name">Staff Target &amp; KRA System</div>
+          <div class="item-desc">Role-based monthly/custom-period quotas for Sourcing, Closing &amp; Presales staff, auto-completing from real site visits and bookings, with a live conversion-ratio KRA view for Closing Managers.</div>
+        </td>
+        <td class="amt">&#8377;900</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="item-name">WhatsApp Communication Suite</div>
+          <div class="item-desc">Official Meta Cloud API integration on always-on automation, bulk marketing campaigns, a searchable sent-message log, and a one-click "send from your own WhatsApp" fallback.</div>
+        </td>
+        <td class="amt">&#8377;900</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="item-name">Follow-Up &amp; Site Visit Scheduling</div>
+          <div class="item-desc">Follow-up call scheduling auto-synced from the lead record, plus scheduled and walk-in site visit logging with WhatsApp verification codes.</div>
+        </td>
+        <td class="amt">&#8377;800</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="item-name">Projects &amp; Inventory</div>
+          <div class="item-desc">Project setup with towers/floors/units, live inventory availability, and pricing &mdash; the catalogue every lead, booking and report is built against.</div>
+        </td>
+        <td class="amt">&#8377;700</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="item-name">Employee &amp; Attendance Management</div>
+          <div class="item-desc">Staff onboarding with login provisioning, GPS-verified check-in/out, and a leave request &amp; approval workflow.</div>
+        </td>
+        <td class="amt">&#8377;700</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="item-name">Real-Time Notification System</div>
+          <div class="item-desc">Automatic alerts across lead assignment, bookings, payments, targets, leave approvals and CP requests &mdash; each one deep-links straight to and highlights the exact record it's about.</div>
+        </td>
+        <td class="amt">&#8377;600</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="item-name">Dashboard &amp; Reports</div>
+          <div class="item-desc">Role-aware KPI dashboard and a business-wide reporting view spanning leads, sales, and team performance.</div>
+        </td>
+        <td class="amt">&#8377;500</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="item-name">Authentication &amp; Role-Based Access</div>
+          <div class="item-desc">Secure login across 14 distinct staff/partner roles, each with its own permission boundaries enforced at the database level.</div>
+        </td>
+        <td class="amt">&#8377;500</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="item-name">Admin Settings &amp; Expense Tracking</div>
+          <div class="item-desc">WhatsApp connection management, account settings, and a personal expense ledger for admin use.</div>
+        </td>
+        <td class="amt">&#8377;500</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="totals">
+    <div class="totals-row subtotal">
+      <div class="label">Subtotal</div>
+      <div class="val">&#8377;10,000</div>
+    </div>
+    <div class="totals-row grand">
+      <div class="label">Total Due</div>
+      <div class="val">&#8377;10,000</div>
+    </div>
+    <div class="totals-row paid">
+      <div class="label">Paid to Date</div>
+      <div class="val">&minus; &#8377;7,000</div>
+    </div>
+  </div>
+
+  <div class="balance-strip">
+    <div class="label">Balance Outstanding</div>
+    <div class="val">&#8377;3,000</div>
+  </div>
+
+  <div class="section-label">Payment History</div>
+  <div class="payhist">
+    <div class="payhist-row">
+      <div class="pay-idx">01</div>
+      <div class="pay-label">Advance payment received</div>
+      <div class="pay-chip">Paid</div>
+      <div class="pay-amt">&#8377;3,000</div>
+    </div>
+    <div class="payhist-row">
+      <div class="pay-idx">02</div>
+      <div class="pay-label">Milestone payment received</div>
+      <div class="pay-chip">Paid</div>
+      <div class="pay-amt">&#8377;3,000</div>
+    </div>
+    <div class="payhist-row">
+      <div class="pay-idx">03</div>
+      <div class="pay-label">Milestone payment received</div>
+      <div class="pay-chip">Paid</div>
+      <div class="pay-amt">&#8377;1,000</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="footer-note">
+      Balance of &#8377;3,000 due on completion. Thank you for the continued work on Opal Properties &mdash;
+      it's been a pleasure building this out.
+    </div>
+    <div class="signoff">&mdash; Avinash</div>
+  </div>
+
+</div>

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../hooks/useAuth';
 import { canManageProjects, canCreateProject, canBulkAddUnits, isSuperAdmin } from '../utils/permissions';
+import { parseDescription, serializeDescription } from '../utils/projectDescription';
 import {
   Search,
   RefreshCw,
@@ -70,41 +71,6 @@ interface Booking {
   booking_date: string | null;
   inventory_id: string | null;
 }
-
-// Helpers for serializing/deserializing UI metadata (Developer, RERA, website, maps_url) inside the description column
-interface ProjectDescriptionJSON {
-  developer: string;
-  rera: string;
-  website: string;
-  maps_url: string;
-  text: string;
-}
-
-const parseDescription = (descStr: string | null): ProjectDescriptionJSON => {
-  if (!descStr) {
-    return { developer: '', rera: '', website: '', maps_url: '', text: '' };
-  }
-  try {
-    const trimmed = descStr.trim();
-    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-      const parsed = JSON.parse(trimmed);
-      return {
-        developer: parsed.developer || '',
-        rera: parsed.rera || '',
-        website: parsed.website || '',
-        maps_url: parsed.maps_url || '',
-        text: parsed.text || ''
-      };
-    }
-  } catch (err) {
-    // Plain text fallback
-  }
-  return { developer: '', rera: '', website: '', maps_url: '', text: descStr };
-};
-
-const serializeDescription = (developer: string, rera: string, website: string, maps_url: string, text: string): string => {
-  return JSON.stringify({ developer, rera, website, maps_url, text });
-};
 
 export const Projects: React.FC = () => {
   const { role } = useAuth();
@@ -264,6 +230,8 @@ export const Projects: React.FC = () => {
   const [pPossession, setPPossession] = useState('');
   const [pWebsite, setPWebsite] = useState('');
   const [pMapsUrl, setPMapsUrl] = useState('');
+  const [pPan, setPPan] = useState('');
+  const [pGst, setPGst] = useState('');
   const [pDescText, setPDescText] = useState('');
 
   // Tower Form Fields
@@ -321,6 +289,18 @@ export const Projects: React.FC = () => {
     fetchData();
   }, [fetchData]);
 
+  // Live refresh -- so a project edit (PAN/GST, address, etc.) shows up
+  // here immediately without a manual sync/refresh.
+  useEffect(() => {
+    const channel = supabase
+      .channel('projects-directory-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'projects' }, () => {
+        fetchData();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchData]);
+
   // Sync data manually
   const handleSync = async () => {
     if (syncing) return;
@@ -351,6 +331,8 @@ export const Projects: React.FC = () => {
     setPPossession('');
     setPWebsite('');
     setPMapsUrl('');
+    setPPan('');
+    setPGst('');
     setPDescText('');
     setProjectError(null);
     setIsProjectModalOpen(true);
@@ -371,6 +353,8 @@ export const Projects: React.FC = () => {
     setPPossession(proj.possession_date ? proj.possession_date.split('T')[0] : '');
     setPWebsite(parsed.website);
     setPMapsUrl(parsed.maps_url);
+    setPPan(parsed.pan);
+    setPGst(parsed.gst);
     setPDescText(parsed.text);
     setProjectError(null);
     setIsProjectModalOpen(true);
@@ -401,7 +385,7 @@ export const Projects: React.FC = () => {
     setProjectError(null);
     setProjectSubmitting(true);
 
-    const serializedDesc = serializeDescription(pDev.trim(), pRera.trim(), pWebsite.trim(), pMapsUrl.trim(), pDescText.trim());
+    const serializedDesc = serializeDescription(pDev.trim(), pRera.trim(), pWebsite.trim(), pMapsUrl.trim(), pPan.trim().toUpperCase(), pGst.trim().toUpperCase(), pDescText.trim());
     const payload = {
       project_name: pName.trim(),
       project_code: pCode.trim(),
@@ -1201,6 +1185,14 @@ export const Projects: React.FC = () => {
                         </span>
                       </div>
                       <div className="space-y-1">
+                        <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Developer PAN</span>
+                        <span className="text-sm font-semibold text-slate-800">{parsed.pan || 'Not Provided'}</span>
+                      </div>
+                      <div className="space-y-1">
+                        <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Developer GSTIN</span>
+                        <span className="text-sm font-semibold text-slate-800">{parsed.gst || 'Not Provided'}</span>
+                      </div>
+                      <div className="space-y-1">
                         <span className="block text-xxs font-bold text-slate-400 uppercase tracking-wider">Full Address</span>
                         <span className="text-sm font-semibold text-slate-800 leading-relaxed">
                           {currentProject.address || 'N/A'}<br />
@@ -1765,6 +1757,29 @@ export const Projects: React.FC = () => {
                       value={pPossession}
                       onChange={(e) => setPPossession(e.target.value)}
                       className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Developer PAN</label>
+                    <input
+                      type="text"
+                      placeholder="AAAAA0000A"
+                      value={pPan}
+                      onChange={(e) => setPPan(e.target.value.toUpperCase())}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all uppercase"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Developer GSTIN</label>
+                    <input
+                      type="text"
+                      placeholder="27AAAAA0000A1Z5"
+                      value={pGst}
+                      onChange={(e) => setPGst(e.target.value.toUpperCase())}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all uppercase"
                     />
                   </div>
                 </div>

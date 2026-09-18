@@ -33,7 +33,7 @@ export function useNotifications() {
       .select('*')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
-      .limit(30);
+      .limit(50);
     if (error) reportQueryError('Notifications: fetch', error);
     else setNotifications(data || []);
   }, [user]);

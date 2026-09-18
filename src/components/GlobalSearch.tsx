@@ -15,7 +15,7 @@ import {
   Megaphone,
   Briefcase,
   ClipboardCheck,
-  CheckSquare,
+  Target,
   BarChart3,
   Settings,
   Handshake,
@@ -23,6 +23,7 @@ import {
   MapPin,
   LayoutDashboard,
   Loader2,
+  MessageSquare,
 } from 'lucide-react';
 
 // Feature/page suggestions — kept in sync with AppLayout's navigationItems
@@ -42,8 +43,9 @@ const FEATURES = [
   { name: 'Marketing', path: '/marketing', icon: Megaphone, keywords: 'whatsapp campaign broadcast marketing' },
   { name: 'Employees', path: '/employees', icon: Briefcase, keywords: 'employee staff onboarding hr', allowedRoles: ['super_admin', 'project_admin'] },
   { name: 'Attendance', path: '/attendance', icon: ClipboardCheck, keywords: 'attendance leave checkin checkout' },
-  { name: 'Tasks', path: '/tasks', icon: CheckSquare, keywords: 'task todo assignment' },
+  { name: 'Targets', path: '/targets', icon: Target, keywords: 'target goal assignment sourcing closing presales' },
   { name: 'Reports', path: '/reports', icon: BarChart3, keywords: 'report analytics dashboard', allowedRoles: ['super_admin', 'project_admin'] },
+  { name: 'WhatsApp Messages', path: '/whatsapp-messages', icon: MessageSquare, keywords: 'whatsapp messages sent log outbox', allowedRoles: ['super_admin'] },
   { name: 'Settings', path: '/settings', icon: Settings, keywords: 'settings whatsapp session config', allowedRoles: ['super_admin', 'project_admin'] },
 ];
 
@@ -113,7 +115,7 @@ export const GlobalSearch: React.FC = () => {
         'leads'
       );
       const bookingsQ = applyScope(
-        supabase.from('bookings').select('id, booking_number, status').ilike('booking_number', term).limit(5),
+        supabase.from('bookings').select('id, booking_number, customer_name, status').or(`customer_name.ilike.${term},booking_number.ilike.${term}`).limit(5),
         'bookings'
       );
       const cpQ = applyScope(
@@ -146,8 +148,8 @@ export const GlobalSearch: React.FC = () => {
         })),
         bookings: (bookingsRes.data || []).map((b: any) => ({
           id: b.id,
-          label: b.booking_number || 'Booking',
-          sublabel: b.status || '',
+          label: b.customer_name || b.booking_number || 'Booking',
+          sublabel: [b.booking_number, b.status].filter(Boolean).join(' · '),
           path: '/bookings',
         })),
         channelPartners: (cpRes.data || []).map((c: any) => ({

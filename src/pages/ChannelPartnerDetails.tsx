@@ -515,6 +515,10 @@ export const ChannelPartnerDetails: React.FC = () => {
           approved_by: userId,
           approved_at: new Date().toISOString(),
           remarks: remarksText.trim() || null,
+          // Clears the "Requested {date}" marker on the Payments page --
+          // that badge should only show while a request is genuinely still
+          // awaiting this decision, not forever after it's been resolved.
+          settlement_requested_at: null,
           updated_at: new Date().toISOString()
         })
         .eq('id', selectedApproveComm.id);
@@ -531,7 +535,8 @@ export const ChannelPartnerDetails: React.FC = () => {
                 pending_amount: pendingAmt,
                 approved_by: userId,
                 approved_at: new Date().toISOString(),
-                remarks: remarksText.trim() || null
+                remarks: remarksText.trim() || null,
+                settlement_requested_at: null
               }
             : c
         )
@@ -565,12 +570,13 @@ export const ChannelPartnerDetails: React.FC = () => {
       const { error } = await supabase
         .from('cp_commissions')
         .update({
-          status: 'cancelled',
+          status: 'rejected',
           payable_amount: 0,
           pending_amount: 0,
           remarks: reason.trim(),
           approved_by: userId,
           approved_at: new Date().toISOString(),
+          settlement_requested_at: null,
           updated_at: new Date().toISOString()
         })
         .eq('id', selectedApproveComm.id);
@@ -582,12 +588,13 @@ export const ChannelPartnerDetails: React.FC = () => {
           c.id === selectedApproveComm.id
             ? {
                 ...c,
-                status: 'REJECTED',
+                status: 'rejected',
                 payable_amount: 0,
                 pending_amount: 0,
                 remarks: reason.trim(),
                 approved_by: userId,
-                approved_at: new Date().toISOString()
+                approved_at: new Date().toISOString(),
+                settlement_requested_at: null
               }
             : c
         )
@@ -1479,6 +1486,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                 <thead>
                   <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
                     <th className="py-2.5 px-4">Booking #</th>
+                    <th className="py-2.5 px-4">Customer</th>
                     <th className="py-2.5 px-4">Project</th>
                     <th className="py-2.5 px-4">Tower</th>
                     <th className="py-2.5 px-4">Unit</th>
@@ -1498,6 +1506,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                     commissionsList.map(c => {
                       const booking = bookingsList.find(b => b.id === c.booking_id);
                       const bookingNum = booking?.booking_number || 'N/A';
+                      const customerName = booking?.customer_name || 'N/A';
                       const projName = booking ? projectsMap.get(booking.project_id || '') : 'N/A';
                       const towerName = booking ? towersMap.get(booking.tower_id || '') : 'N/A';
                       const unitNumber = booking ? unitsMap.get(booking.inventory_id || '') : 'N/A';
@@ -1508,6 +1517,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                       return (
                         <tr key={c.id} className="hover:bg-slate-50/50">
                           <td className="py-3 px-4 font-mono font-bold text-slate-800 text-xs">{bookingNum}</td>
+                          <td className="py-3 px-4 text-slate-800 font-semibold truncate max-w-[140px]">{customerName}</td>
                           <td className="py-3 px-4 text-slate-650 truncate max-w-[120px]">{projName}</td>
                           <td className="py-3 px-4 text-slate-650 truncate max-w-[100px]">{towerName}</td>
                           <td className="py-3 px-4 text-slate-700 font-medium">{unitNumber}</td>
@@ -1596,7 +1606,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={13} className="py-10 text-center text-slate-400 italic">No referral fee obligations recorded.</td>
+                      <td colSpan={14} className="py-10 text-center text-slate-400 italic">No referral fee obligations recorded.</td>
                     </tr>
                   )}
                 </tbody>
@@ -1626,6 +1636,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                 <thead>
                   <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
                     <th className="py-2.5 px-4">Booking</th>
+                    <th className="py-2.5 px-4">Customer</th>
                     <th className="py-2.5 px-4">Project</th>
                     <th className="py-2.5 px-4">Disbursed Amount</th>
                     <th className="py-2.5 px-4">Payment Date</th>
@@ -1644,6 +1655,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                       return (
                         <tr key={p.id} className="hover:bg-slate-50/50">
                           <td className="py-3 px-4 font-mono text-slate-600 text-xs">{booking?.booking_number || 'N/A'}</td>
+                          <td className="py-3 px-4 text-slate-800 font-semibold truncate max-w-[140px]">{booking?.customer_name || 'N/A'}</td>
                           <td className="py-3 px-4 text-slate-650">{projName}</td>
                           <td className="py-3 px-4 font-extrabold text-emerald-600">₹{(p.amount || 0).toLocaleString('en-IN')}</td>
                           <td className="py-3 px-4 text-slate-600 text-xs">{new Date(p.payment_date).toLocaleDateString('en-IN')}</td>
@@ -1655,7 +1667,7 @@ export const ChannelPartnerDetails: React.FC = () => {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={7} className="py-10 text-center text-slate-400 italic">No referral fee payouts logged.</td>
+                      <td colSpan={8} className="py-10 text-center text-slate-400 italic">No referral fee payouts logged.</td>
                     </tr>
                   )}
                 </tbody>

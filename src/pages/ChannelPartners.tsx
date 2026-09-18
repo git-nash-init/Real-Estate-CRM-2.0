@@ -4,6 +4,7 @@ import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
 import { exportRowsToExcel } from '../utils/exportExcel';
+import { useHighlightParam } from '../hooks/useHighlightParam';
 import {
   Search,
   RefreshCw,
@@ -51,6 +52,11 @@ interface ChannelPartner {
   rera_valid_to: string | null;
   pan_number: string | null;
   gst_number: string | null;
+  account_name: string | null;
+  bank_name: string | null;
+  bank_branch: string | null;
+  account_number: string | null;
+  ifsc_code: string | null;
   status: string | null;
   notes: string | null;
   sourcing_manager: string | null;
@@ -164,6 +170,15 @@ export const ChannelPartners: React.FC = () => {
   const [page, setPage] = useState(0);
   const [pageSize] = useState(10);
 
+  // A `channel_partner`/`cp_request_approved`/`cp_request_rejected`
+  // notification opens the edit modal for that partner; a `cp_request`
+  // (new submission) or `cp_outreach`... no, `channel_partner_requests`
+  // notification just ring-highlights the pending request card (no modal
+  // exists there -- rejected/decided requests leave that panel entirely,
+  // so there's nothing to highlight for those, the message text carries
+  // the outcome instead).
+  const { highlightId, highlightKind, registerRow, rowClass, tryFocusRow, clearHighlightParam } = useHighlightParam();
+
   // Data states
   const [partners, setPartners] = useState<ChannelPartner[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -222,6 +237,15 @@ export const ChannelPartners: React.FC = () => {
   const [reraValidTo, setReraValidTo] = useState('');
   const [panNumber, setPanNumber] = useState('');
   const [gstNumber, setGstNumber] = useState('');
+  // Bank details -- also editable by the Channel Partner themselves via
+  // Settings -> My Business Details. Both sides write the same columns,
+  // so whichever last saved wins; flows straight into the GST tax invoice
+  // generated from Payments.tsx.
+  const [accountName, setAccountName] = useState('');
+  const [bankName, setBankName] = useState('');
+  const [bankBranch, setBankBranch] = useState('');
+  const [accountNumber, setAccountNumber] = useState('');
+  const [ifscCode, setIfscCode] = useState('');
   const [status, setStatus] = useState('active');
   const [notes, setNotes] = useState('');
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
@@ -512,33 +536,15 @@ export const ChannelPartners: React.FC = () => {
     }
   };
 
-  // Helper: notify all super_admin + site_head users about a new CP request
-  const notifyAdminsOfRequest = async (reqName: string) => {
-    try {
-      // Find all super_admin and site_head user IDs
-      const { data: adminRoles } = await supabase
-        .from('user_roles')
-        .select('user_id, roles!inner(name)')
-        .in('roles.name', ['super_admin', 'site_head']);
-
-      if (!adminRoles || adminRoles.length === 0) return;
-
-      const notifRows = adminRoles.map((r: any) => ({
-        user_id: r.user_id,
-        notification_type: 'cp_request',
-        title: '🤝 New CP Request Submitted',
-        message: `A request to register "${reqName}" as a Channel Partner is awaiting your approval.`,
-        related_entity: 'channel_partner_requests',
-        is_read: false,
-        created_at: new Date().toISOString(),
-      }));
-
-      const { error: notifErr } = await supabase.from('notifications').insert(notifRows);
-      if (notifErr) reportQueryError('CP Request: notify admins', notifErr);
-    } catch (err) {
-      console.warn('Failed to notify admins of CP request:', err);
-    }
-  };
+  // Notifying admins of a new CP request is now handled by the
+  // notify_cp_request_submitted DB trigger on channel_partner_requests --
+  // it fires for every insert regardless of code path, and (unlike this
+  // frontend version) actually succeeds when the submitter isn't a
+  // super_admin: the notifications_insert RLS policy only allows a user to
+  // insert a notification for themselves, so this insert was silently
+  // rejected for every non-admin submitter. Confirmed live: 0 rows ever
+  // existed for `cp_settlement_eligible`, the equivalent frontend insert
+  // in Bookings.tsx, for the same reason.
 
   // Helper: normalise phone to WhatsApp-safe format (no +91 duplication)
   const toWaPhone = (raw: string): string => {
@@ -635,6 +641,24 @@ export const ChannelPartners: React.FC = () => {
         .update({ status: 'approved', reviewed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
         .eq('id', req.id);
 
+      // Let the submitter know their request was approved. This stays a
+      // frontend insert (not a DB trigger) because only this handler knows
+      // the newly-created CP's id -- and it's allowed to insert for someone
+      // else because the actor here is always a super_admin/site_head
+      // (notifications_insert RLS: `is_super_admin() OR user_id = auth.uid()`).
+      // Do not "simplify" this into a trigger on channel_partner_requests
+      // UPDATE OF status -- that trigger has no way to know newCP.id.
+      if (req.submitted_by && newCP) {
+        await supabase.from('notifications').insert([{
+          user_id: req.submitted_by,
+          notification_type: 'cp_request_approved',
+          title: 'CP request approved',
+          message: `"${req.partner_name}" is now an active Channel Partner.`,
+          related_entity: 'channel_partner',
+          related_id: newCP.id,
+        }]);
+      }
+
       // 6. Auto-queue WhatsApp welcome message
       const waTarget = req.whatsapp_number || req.phone;
       if (waTarget) {
@@ -679,6 +703,20 @@ export const ChannelPartners: React.FC = () => {
           updated_at: new Date().toISOString()
         })
         .eq('id', rejectingRequest.id);
+
+      // Same reasoning as approveRequest above -- kept in the frontend,
+      // actor is always super_admin/site_head so it passes RLS.
+      if (rejectingRequest.submitted_by) {
+        await supabase.from('notifications').insert([{
+          user_id: rejectingRequest.submitted_by,
+          notification_type: 'cp_request_rejected',
+          title: 'CP request rejected',
+          message: `"${rejectingRequest.partner_name}" was rejected. Reason: ${rejectionReason || 'not specified'}.`,
+          related_entity: 'channel_partner_requests',
+          related_id: rejectingRequest.id,
+        }]);
+      }
+
       setRejectingRequest(null);
       setRejectionReason('');
       await fetchRequests();
@@ -752,7 +790,13 @@ export const ChannelPartners: React.FC = () => {
           address: address.trim() || null,
           city: formattedCity,
           rera_number: reraNumber.trim() || null,
+          pan_number: panNumber.trim() || null,
           gst_number: gstNumber.trim() || null,
+          account_name: accountName.trim() || null,
+          bank_name: bankName.trim() || null,
+          bank_branch: bankBranch.trim() || null,
+          account_number: accountNumber.trim() || null,
+          ifsc_code: ifscCode.trim() || null,
           status: status,
           notes: formattedNotes || null,
           updated_at: new Date().toISOString()
@@ -819,9 +863,7 @@ export const ChannelPartners: React.FC = () => {
 
       const { error: reqErr } = await supabase.from('channel_partner_requests').insert([requestPayload]);
       if (reqErr) throw reqErr;
-
-      // Notify all super_admin + site_head users
-      await notifyAdminsOfRequest(partnerName.trim());
+      // Admins are notified by the notify_cp_request_submitted DB trigger.
 
       setNotification({ type: 'success', message: `Request for "${partnerName.trim()}" submitted! Awaiting admin approval.` });
       setIsCreateOpen(false);
@@ -855,6 +897,11 @@ export const ChannelPartners: React.FC = () => {
     setReraValidTo('');
     setPanNumber('');
     setGstNumber('');
+    setAccountName('');
+    setBankName('');
+    setBankBranch('');
+    setAccountNumber('');
+    setIfscCode('');
     setStatus('active');
     setNotes('');
     setSelectedProjects([]);
@@ -883,6 +930,11 @@ export const ChannelPartners: React.FC = () => {
     setReraValidTo(parseNotesField(cp.notes, 'ValidTo') || cp.rera_valid_to || cp.valid_to || '');
     setPanNumber(cp.pan_number || '');
     setGstNumber(cp.gst_number || '');
+    setAccountName(cp.account_name || '');
+    setBankName(cp.bank_name || '');
+    setBankBranch(cp.bank_branch || '');
+    setAccountNumber(cp.account_number || '');
+    setIfscCode(cp.ifsc_code || '');
     setStatus(cp.status || 'active');
     const notesMatch = cp.notes?.match(/Notes:\s*([\s\S]*)/);
     setNotes(notesMatch ? notesMatch[1].trim() : cp.notes || '');
@@ -898,6 +950,24 @@ export const ChannelPartners: React.FC = () => {
 
     setIsCreateOpen(true);
   };
+
+  // A `channel_partner` notification (approved request, or any future CP
+  // link) opens that partner's edit modal directly once the full client-
+  // side `partners` list has loaded.
+  useEffect(() => {
+    if (!highlightId || highlightKind !== 'channel_partner' || partners.length === 0) return;
+    const match = partners.find(p => p.id === highlightId);
+    if (match) {
+      openEditModal(match);
+      clearHighlightParam();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId, highlightKind, partners]);
+
+  // `channel_partner_requests` -- ring-highlight the pending request card
+  // only (no detail modal exists there); no-op once the request has been
+  // decided and left the pending panel.
+  useEffect(() => { tryFocusRow(); }, [cpRequests, tryFocusRow]);
 
   // Filter CP records in memory
   const getFilteredPartners = () => {
@@ -1091,7 +1161,7 @@ export const ChannelPartners: React.FC = () => {
           ) : (
             <div className="divide-y divide-slate-100">
               {cpRequests.map(req => (
-                <div key={req.id} className="px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3">
+                <div key={req.id} ref={registerRow(req.id)} className={`px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3 ${rowClass(req.id)}`}>
                   <div className="flex-1 min-w-0">
                     <p className="font-bold text-sm text-slate-900">{req.partner_name}</p>
                     <p className="text-xs text-slate-500">
@@ -1204,7 +1274,7 @@ export const ChannelPartners: React.FC = () => {
                       const commLabel = 'Project Specific';
 
                       return (
-                        <tr key={cp.id} className="hover:bg-slate-50/50 transition-colors text-sm">
+                        <tr key={cp.id} ref={registerRow(cp.id)} className={`hover:bg-slate-50/50 transition-colors text-sm ${rowClass(cp.id)}`}>
                           <td className="py-4 px-6 font-bold text-slate-900">{code}</td>
                           <td className="py-4 px-6 font-semibold text-slate-800">{name}</td>
                           <td className="py-4 px-6 text-slate-600">{companyVal}</td>
@@ -1584,6 +1654,64 @@ export const ChannelPartners: React.FC = () => {
                   </div>
                 </div>
 
+                {/* BANK / PAYMENT DETAILS -- also editable by the Channel
+                    Partner themselves via Settings -> My Business Details.
+                    Feeds straight into the GST tax invoice on Payments.tsx.
+                    Only shown once the partner actually exists -- a brand
+                    new request goes to channel_partner_requests, which has
+                    no bank columns, so these would silently not save. */}
+                {editingPartner && (
+                <div>
+                  <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-3">Bank / Payment Details</h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Account Name</label>
+                      <input
+                        type="text"
+                        value={accountName}
+                        onChange={(e) => setAccountName(e.target.value)}
+                        className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Bank Name</label>
+                      <input
+                        type="text"
+                        value={bankName}
+                        onChange={(e) => setBankName(e.target.value)}
+                        className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Bank Branch</label>
+                      <input
+                        type="text"
+                        value={bankBranch}
+                        onChange={(e) => setBankBranch(e.target.value)}
+                        className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Account Number</label>
+                      <input
+                        type="text"
+                        value={accountNumber}
+                        onChange={(e) => setAccountNumber(e.target.value)}
+                        className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">IFSC Code</label>
+                      <input
+                        type="text"
+                        value={ifscCode}
+                        onChange={(e) => setIfscCode(e.target.value.toUpperCase())}
+                        className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all uppercase"
+                      />
+                    </div>
+                  </div>
+                </div>
+                )}
 
                 {/* PROJECTS ASSIGNMENT */}
                 <div>

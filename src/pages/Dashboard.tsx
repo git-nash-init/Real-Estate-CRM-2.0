@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { reportQueryError } from '../services/queryLogger';
 import { supabase } from '../services/supabaseClient';
+import { canManageTargets } from '../utils/permissions';
 import {
   Users,
   PhoneCall,
@@ -14,7 +15,7 @@ import {
   TrendingUp,
   FileText,
   AlertCircle,
-  CheckSquare
+  Target as TargetIcon
 } from 'lucide-react';
 
 interface Lead {
@@ -44,81 +45,154 @@ interface DashboardStats {
   totalBookingsCount: number;
 }
 
-interface MyTask {
+interface MyTargetProgress {
   id: string;
-  title: string;
-  priority: string | null;
-  status: string | null;
-  due_date: string | null;
+  role: string;
+  target_count: number;
+  completed_count: number;
+  remaining_count: number;
+  period_start: string;
+  period_end: string;
 }
 
-const taskStatusOptions = ['pending', 'in_progress', 'completed', 'cancelled', 'overdue'];
+const todayISO = () => new Date().toISOString().slice(0, 10);
 
-const MyTasksPanel: React.FC<{ userId: string | undefined }> = ({ userId }) => {
-  const [tasks, setTasks] = useState<MyTask[]>([]);
+// Shows only targets whose period covers today -- a staff member's active
+// monthly (or custom-period) quota for Sourcing Manager / Closing Manager /
+// Presales, auto-completed by DB triggers when they log a Site Visit or
+// create a Booking (see Targets.tsx for the full picture, including past
+// periods and admin management).
+const MyTargetsPanel: React.FC<{ userId: string | undefined }> = ({ userId }) => {
+  const [targets, setTargets] = useState<MyTargetProgress[]>([]);
+  const [kraMap, setKraMap] = useState<Map<string, { visits_attended: number; bookings_closed: number }>>(new Map());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!userId) { setLoading(false); return; }
+    const today = todayISO();
     supabase
-      .from('tasks')
-      .select('id, title, priority, status, due_date')
+      .from('staff_target_progress')
+      .select('id, role, target_count, completed_count, remaining_count, period_start, period_end')
       .eq('assigned_to', userId)
-      .not('status', 'in', '(completed,cancelled)')
-      .order('due_date', { ascending: true, nullsFirst: false })
-      .limit(6)
-      .then(({ data, error }) => {
-        if (error) reportQueryError('Dashboard: my tasks', error);
-        else setTasks(data || []);
+      .lte('period_start', today)
+      .gte('period_end', today)
+      .then(async ({ data, error }) => {
+        if (error) { reportQueryError('Dashboard: my targets', error); setLoading(false); return; }
+        const rows = (data || []) as MyTargetProgress[];
+        setTargets(rows);
+        const closingManagerIds = rows.filter(t => t.role === 'closing_manager').map(t => t.id);
+        if (closingManagerIds.length > 0) {
+          const { data: kraData, error: kraErr } = await supabase
+            .from('closing_manager_kra')
+            .select('staff_target_id, visits_attended, bookings_closed')
+            .in('staff_target_id', closingManagerIds);
+          if (kraErr) reportQueryError('Dashboard: my KRA', kraErr);
+          else setKraMap(new Map((kraData || []).map((k: any) => [k.staff_target_id, { visits_attended: k.visits_attended, bookings_closed: k.bookings_closed }])));
+        }
         setLoading(false);
       });
   }, [userId]);
 
-  const handleStatusChange = async (taskId: string, newStatus: string) => {
-    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: newStatus } : t));
-    const { error } = await supabase
-      .from('tasks')
-      .update({ status: newStatus, completed_at: newStatus === 'completed' ? new Date().toISOString() : null })
-      .eq('id', taskId);
-    if (error) {
-      reportQueryError('Dashboard: my tasks status update', error);
-    } else if (newStatus === 'completed' || newStatus === 'cancelled') {
-      setTasks(prev => prev.filter(t => t.id !== taskId));
-    }
-  };
+  if (loading || targets.length === 0) {
+    return loading ? null : null;
+  }
 
   return (
     <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-          <CheckSquare className="h-4 w-4 text-indigo-600" /> My Tasks
-        </h3>
-      </div>
-      {loading ? (
-        <p className="text-xs text-slate-400">Loading...</p>
-      ) : tasks.length === 0 ? (
-        <p className="text-xs text-slate-400 italic">No open tasks assigned to you.</p>
-      ) : (
-        <div className="space-y-2.5">
-          {tasks.map(t => (
-            <div key={t.id} className="flex items-center justify-between gap-3 border-b border-slate-50 last:border-0 pb-2.5 last:pb-0">
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-slate-800 truncate">{t.title}</p>
-                <p className="text-xxs text-slate-400 mt-0.5">
-                  {t.due_date ? `Due ${new Date(t.due_date).toLocaleDateString('en-IN')}` : 'No due date'} · <span className="capitalize">{t.priority}</span>
-                </p>
+      <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4">
+        <TargetIcon className="h-4 w-4 text-indigo-600" /> My Targets
+      </h3>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {targets.map(t => {
+          const pct = t.target_count > 0 ? Math.min(100, Math.round((t.completed_count / t.target_count) * 100)) : 0;
+          const kra = kraMap.get(t.id);
+          return (
+            <div key={t.id} className="border border-slate-100 rounded-xl p-3">
+              <p className="text-xs font-semibold text-slate-700 capitalize">{t.role.replace(/_/g, ' ')}</p>
+              <div className="flex items-center justify-between text-sm mt-1">
+                <span className="font-bold text-slate-900">{t.completed_count} / {t.target_count}</span>
+                <span className={`text-xxs font-semibold ${t.remaining_count <= 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                  {t.remaining_count <= 0 ? 'Achieved' : `${t.remaining_count} left`}
+                </span>
               </div>
-              <select
-                value={t.status || 'pending'}
-                onChange={(e) => handleStatusChange(t.id, e.target.value)}
-                className="text-xxs font-semibold rounded-full px-2 py-1 border border-slate-200 capitalize flex-shrink-0"
-              >
-                {taskStatusOptions.map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
-              </select>
+              <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden mt-1.5">
+                <div className={`h-full rounded-full ${pct >= 100 ? 'bg-emerald-500' : 'bg-indigo-500'}`} style={{ width: `${pct}%` }} />
+              </div>
+              {t.role === 'closing_manager' && kra && (
+                <p className="text-[10px] text-slate-400 mt-1.5">
+                  KRA: {kra.bookings_closed} closed / {kra.visits_attended} visits attended
+                  {kra.visits_attended > 0 && ` (${Math.round((kra.bookings_closed / kra.visits_attended) * 100)}%)`}
+                </p>
+              )}
             </div>
-          ))}
-        </div>
-      )}
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+interface AllTargetProgress extends MyTargetProgress {
+  assigned_to: string;
+}
+
+// Super admin / site head don't usually have a quota assigned to
+// themselves, so MyTargetsPanel (scoped to the viewer's own assigned_to)
+// shows them nothing -- this gives them a dashboard-level view of every
+// currently-active staff target instead, so targets are visible to
+// "admin, super admin, and whoever it's assigned to" per the client's
+// explicit request.
+const AllTargetsOverviewPanel: React.FC = () => {
+  const [targets, setTargets] = useState<AllTargetProgress[]>([]);
+  const [usersMap, setUsersMap] = useState<Map<string, string>>(new Map());
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const today = todayISO();
+    Promise.all([
+      supabase
+        .from('staff_target_progress')
+        .select('id, role, target_count, completed_count, remaining_count, period_start, period_end, assigned_to')
+        .lte('period_start', today)
+        .gte('period_end', today)
+        .order('role', { ascending: true }),
+      supabase.from('user_profiles').select('id, full_name'),
+    ]).then(([{ data, error }, { data: usersData, error: usersErr }]) => {
+      if (error) reportQueryError('Dashboard: all targets', error);
+      else setTargets((data || []) as any);
+      if (usersErr) reportQueryError('Dashboard: all targets users', usersErr);
+      else setUsersMap(new Map((usersData || []).map(u => [u.id, u.full_name || 'Unnamed'])));
+      setLoading(false);
+    });
+  }, []);
+
+  if (loading || targets.length === 0) return null;
+
+  return (
+    <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+      <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4">
+        <TargetIcon className="h-4 w-4 text-indigo-600" /> All Staff Targets — This Period
+      </h3>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {targets.map(t => {
+          const pct = t.target_count > 0 ? Math.min(100, Math.round((t.completed_count / t.target_count) * 100)) : 0;
+          return (
+            <div key={t.id} className="border border-slate-100 rounded-xl p-3">
+              <p className="text-xs font-semibold text-slate-800 truncate">{usersMap.get(t.assigned_to) || 'Unassigned'}</p>
+              <p className="text-xxs text-slate-400 capitalize">{t.role.replace(/_/g, ' ')}</p>
+              <div className="flex items-center justify-between text-sm mt-1.5">
+                <span className="font-bold text-slate-900">{t.completed_count} / {t.target_count}</span>
+                <span className={`text-xxs font-semibold ${t.remaining_count <= 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                  {t.remaining_count <= 0 ? 'Achieved' : `${t.remaining_count} left`}
+                </span>
+              </div>
+              <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden mt-1.5">
+                <div className={`h-full rounded-full ${pct >= 100 ? 'bg-emerald-500' : 'bg-indigo-500'}`} style={{ width: `${pct}%` }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 };
@@ -351,7 +425,8 @@ export const Dashboard: React.FC = () => {
         </div>
       )}
 
-      <MyTasksPanel userId={user?.id} />
+      <MyTargetsPanel userId={user?.id} />
+      {canManageTargets(role) && <AllTargetsOverviewPanel />}
 
       {/* KPI Stats Cards (Live States) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -591,9 +666,9 @@ export const Dashboard: React.FC = () => {
               <TrendingUp className="h-5 w-5 text-indigo-600" />
             </div>
             <div className="space-y-2">
-              <div className="flex justify-between text-sm">
+              <div className="flex justify-between items-center text-sm">
                 <span className="text-slate-500">Sales Conversion</span>
-                <span className="font-semibold text-slate-900">
+                <span className="font-extrabold text-slate-900 text-2xl">
                   {stats.totalLeads > 0 ? Math.round((stats.totalBookingsCount / stats.totalLeads) * 100) : 0}%
                 </span>
               </div>

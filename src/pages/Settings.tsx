@@ -12,7 +12,15 @@ import {
   AlertTriangle,
   KeyRound,
   CheckCircle,
+  Building2,
 } from 'lucide-react';
+
+// Hybrid WhatsApp sending: Swapnil's messages go through the official Meta
+// Cloud API (a single shared business number, no pairing needed — see
+// supabase/functions/send-whatsapp). Everyone else sends from their own
+// personal WhatsApp, paired here by scanning a QR code, via the Baileys
+// gateway run locally with `npm start` in whatsapp-gateway/.
+const SWAPNIL_USER_ID = 'ccfd55b7-36a2-4ab0-964e-a7e8403a9504';
 
 interface WhatsAppSession {
   id: string;
@@ -34,7 +42,22 @@ const statusMeta: Record<string, { label: string; color: string; dot: string }> 
   disconnected: { label: 'Gateway Offline', color: 'text-slate-500 bg-slate-50 border-slate-200', dot: 'bg-slate-300' },
 };
 
-const WhatsAppPanel: React.FC = () => {
+const CloudApiPanel: React.FC = () => (
+  <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
+    <h3 className="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
+      <MessageSquare className="h-4 w-4 text-indigo-600" /> WhatsApp Connection
+    </h3>
+    <p className="text-xs text-slate-500 mb-4">
+      Your messages send through Meta's official WhatsApp Business Cloud API — the shared verified business number, not a QR-paired personal WhatsApp.
+    </p>
+    <div className="flex items-center gap-2 px-3 py-2 rounded-xl border text-sm font-semibold w-fit text-emerald-700 bg-emerald-50 border-emerald-200">
+      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+      Connected via Official Cloud API
+    </div>
+  </div>
+);
+
+const QrPairingPanel: React.FC = () => {
   const { user } = useAuth();
   const [session, setSession] = useState<WhatsAppSession | null>(null);
   const [loading, setLoading] = useState(true);
@@ -44,26 +67,26 @@ const WhatsAppPanel: React.FC = () => {
   const fetchSession = useCallback(async () => {
     if (!user?.id) return;
     let { data, error } = await supabase.from('whatsapp_session').select('*').eq('id', user.id).maybeSingle();
-    
+
     if (error) {
       reportQueryError('Settings: WhatsApp session fetch', error);
     } else if (!data) {
       // Auto-initialize row for new users so the gateway picks it up.
-      // Set last_heartbeat_at to now so it says "Connecting..." instead of "Offline" 
+      // Set last_heartbeat_at to now so it says "Connecting..." instead of "Offline"
       // for the first 20 seconds while waiting for the gateway to pick it up.
       const { data: newData, error: insertError } = await supabase
         .from('whatsapp_session')
         .insert([{ id: user.id, status: 'connecting', last_heartbeat_at: new Date().toISOString() }])
         .select()
         .single();
-      
+
       if (insertError) {
         reportQueryError('Settings: WhatsApp session init', insertError);
       } else {
         data = newData;
       }
     }
-    
+
     setSession(data);
     setLoading(false);
   }, [user?.id]);
@@ -128,7 +151,7 @@ const WhatsAppPanel: React.FC = () => {
         <MessageSquare className="h-4 w-4 text-indigo-600" /> WhatsApp Connection
       </h3>
       <p className="text-xs text-slate-500 mb-4">
-        Used for bulk marketing messages and Channel Partner lead verification codes.
+        Pair your own WhatsApp here — messages you send from the CRM (bulk marketing, CP lead verification codes) go out from your own number once connected.
       </p>
 
       <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-sm font-semibold mb-4 w-fit ${meta.color}`}>
@@ -189,6 +212,12 @@ const WhatsAppPanel: React.FC = () => {
       )}
     </div>
   );
+};
+
+const WhatsAppPanel: React.FC = () => {
+  const { user } = useAuth();
+  if (user?.id === SWAPNIL_USER_ID) return <CloudApiPanel />;
+  return <QrPairingPanel />;
 };
 
 // Lets an already-logged-in user set a new password without going through
@@ -292,6 +321,265 @@ const ChangePasswordPanel: React.FC = () => {
   );
 };
 
+// Lets a Channel Partner maintain their own business/compliance details --
+// once added to the CRM (channel_partners.user_id links their login to
+// their record), RLS already allows them to update their own row
+// (channel_partners_update: user_id = auth.uid()), so this is purely a
+// missing frontend gap, not a permissions one. These fields flow straight
+// into the GST tax invoice generated from Payments.tsx: a PAN/GSTIN filled
+// in here shows up there, and gst_number being present/absent is exactly
+// what decides whether that invoice adds GST at all.
+interface MyCpProfile {
+  id: string;
+  name: string | null;
+  company_name: string | null;
+  mobile: string | null;
+  alternate_mobile: string | null;
+  whatsapp_number: string | null;
+  email: string | null;
+  city: string | null;
+  address: string | null;
+  pan_number: string | null;
+  gst_number: string | null;
+  rera_number: string | null;
+  account_name: string | null;
+  bank_name: string | null;
+  bank_branch: string | null;
+  account_number: string | null;
+  ifsc_code: string | null;
+  cp_code: string | null;
+  status: string | null;
+}
+
+const MyCpProfilePanel: React.FC = () => {
+  const { user } = useAuth();
+  const [profile, setProfile] = useState<MyCpProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  const [form, setForm] = useState({
+    name: '', company_name: '', mobile: '', alternate_mobile: '', whatsapp_number: '',
+    email: '', city: '', address: '', pan_number: '', gst_number: '', rera_number: '',
+    account_name: '', bank_name: '', bank_branch: '', account_number: '', ifsc_code: '',
+  });
+
+  const applyProfile = (p: MyCpProfile) => {
+    setProfile(p);
+    setForm({
+      name: p.name || '', company_name: p.company_name || '', mobile: p.mobile || '',
+      alternate_mobile: p.alternate_mobile || '', whatsapp_number: p.whatsapp_number || '',
+      email: p.email || '', city: p.city || '', address: p.address || '',
+      pan_number: p.pan_number || '', gst_number: p.gst_number || '', rera_number: p.rera_number || '',
+      account_name: p.account_name || '', bank_name: p.bank_name || '', bank_branch: p.bank_branch || '',
+      account_number: p.account_number || '', ifsc_code: p.ifsc_code || '',
+    });
+  };
+
+  const fetchProfile = useCallback(async () => {
+    if (!user?.id) return;
+    const { data, error: fetchErr } = await supabase
+      .from('channel_partners')
+      .select('id, name, company_name, mobile, alternate_mobile, whatsapp_number, email, city, address, pan_number, gst_number, rera_number, account_name, bank_name, bank_branch, account_number, ifsc_code, cp_code, status')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (fetchErr) {
+      reportQueryError('Settings: CP profile fetch', fetchErr);
+    } else if (data) {
+      applyProfile(data as MyCpProfile);
+    }
+    setLoading(false);
+  }, [user?.id]);
+
+  useEffect(() => { fetchProfile(); }, [fetchProfile]);
+
+  // Live updates -- if an admin edits this same record (or it's open in
+  // another tab), the form reflects it without a manual refresh. A local
+  // edit-in-progress isn't stomped: the realtime payload only overwrites
+  // the read model, and the next save always applies the current form.
+  useEffect(() => {
+    if (!profile?.id) return;
+    const channel = supabase
+      .channel(`cp-own-profile-${profile.id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'channel_partners', filter: `id=eq.${profile.id}` }, (payload) => {
+        applyProfile(payload.new as MyCpProfile);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [profile?.id]);
+
+  const handleChange = (field: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setForm((prev) => ({ ...prev, [field]: e.target.value }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profile?.id) return;
+    setSaving(true);
+    setError(null);
+    setSuccess(false);
+    const { error: updateErr } = await supabase
+      .from('channel_partners')
+      .update({
+        name: form.name.trim() || null,
+        company_name: form.company_name.trim() || null,
+        mobile: form.mobile.trim() || null,
+        alternate_mobile: form.alternate_mobile.trim() || null,
+        whatsapp_number: form.whatsapp_number.trim() || null,
+        email: form.email.trim() || null,
+        city: form.city.trim() || null,
+        address: form.address.trim() || null,
+        pan_number: form.pan_number.trim().toUpperCase() || null,
+        gst_number: form.gst_number.trim().toUpperCase() || null,
+        rera_number: form.rera_number.trim() || null,
+        account_name: form.account_name.trim() || null,
+        bank_name: form.bank_name.trim() || null,
+        bank_branch: form.bank_branch.trim() || null,
+        account_number: form.account_number.trim() || null,
+        ifsc_code: form.ifsc_code.trim().toUpperCase() || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', profile.id);
+    if (updateErr) {
+      setError(updateErr.message || 'Failed to save your details.');
+    } else {
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    }
+    setSaving(false);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <RefreshCw className="h-5 w-5 text-indigo-600 animate-spin" />
+      </div>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
+        <h3 className="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
+          <Building2 className="h-4 w-4 text-indigo-600" /> My Business Details
+        </h3>
+        <p className="text-xs text-slate-500">No Channel Partner record is linked to your login yet -- ask the admin to link it.</p>
+      </div>
+    );
+  }
+
+  const inputCls = "block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all";
+  const labelCls = "block text-xxs font-bold text-slate-400 uppercase tracking-wider mb-1";
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
+      <h3 className="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
+        <Building2 className="h-4 w-4 text-indigo-600" /> My Business Details
+      </h3>
+      <p className="text-xs text-slate-500 mb-4">
+        Kept up to date here, and used to auto-fill your commission tax invoice -- adding your GSTIN adds GST to future invoices; leaving it blank skips GST entirely.
+        {profile.cp_code && <span className="ml-1 text-slate-400">Partner Code: <span className="font-mono font-semibold text-slate-600">{profile.cp_code}</span></span>}
+      </p>
+
+      {success && (
+        <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-3 text-xs mb-4">
+          <CheckCircle className="h-4 w-4 flex-shrink-0" /> Details saved.
+        </div>
+      )}
+      {error && (
+        <div className="flex items-center gap-2 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-3 text-xs mb-4">
+          <AlertTriangle className="h-4 w-4 flex-shrink-0" /> {error}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-4 max-w-2xl">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className={labelCls}>Full Name (as per RERA certificate)</label>
+            <input type="text" value={form.name} onChange={handleChange('name')} className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Company Name</label>
+            <input type="text" value={form.company_name} onChange={handleChange('company_name')} className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Mobile</label>
+            <input type="text" value={form.mobile} onChange={handleChange('mobile')} className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Alternate Mobile</label>
+            <input type="text" value={form.alternate_mobile} onChange={handleChange('alternate_mobile')} className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>WhatsApp Number</label>
+            <input type="text" value={form.whatsapp_number} onChange={handleChange('whatsapp_number')} className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Email</label>
+            <input type="email" value={form.email} onChange={handleChange('email')} className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>City</label>
+            <input type="text" value={form.city} onChange={handleChange('city')} className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>RERA Number</label>
+            <input type="text" value={form.rera_number} onChange={handleChange('rera_number')} className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>PAN Number</label>
+            <input type="text" value={form.pan_number} onChange={handleChange('pan_number')} className={`${inputCls} uppercase`} />
+          </div>
+          <div>
+            <label className={labelCls}>GSTIN</label>
+            <input type="text" value={form.gst_number} onChange={handleChange('gst_number')} placeholder="Leave blank if not GST registered" className={`${inputCls} uppercase`} />
+          </div>
+        </div>
+        <div>
+          <label className={labelCls}>Address</label>
+          <textarea rows={2} value={form.address} onChange={handleChange('address')} className={inputCls} />
+        </div>
+
+        <div className="pt-2 border-t border-slate-100">
+          <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 mt-3">Bank / Payment Details</h4>
+          <p className="text-xxs text-slate-400 mb-3 -mt-2">Used to auto-fill the "Payable By" section on your tax invoice.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className={labelCls}>Account Name</label>
+              <input type="text" value={form.account_name} onChange={handleChange('account_name')} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Bank Name</label>
+              <input type="text" value={form.bank_name} onChange={handleChange('bank_name')} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Bank Branch</label>
+              <input type="text" value={form.bank_branch} onChange={handleChange('bank_branch')} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Account Number</label>
+              <input type="text" value={form.account_number} onChange={handleChange('account_number')} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>IFSC Code</label>
+              <input type="text" value={form.ifsc_code} onChange={handleChange('ifsc_code')} className={`${inputCls} uppercase`} />
+            </div>
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          disabled={saving}
+          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold disabled:opacity-50"
+        >
+          {saving ? 'Saving...' : 'Save Details'}
+        </button>
+      </form>
+    </div>
+  );
+};
+
 export const Settings: React.FC = () => {
   const { role } = useAuth();
   const canUseWhatsApp = role === 'super_admin' || role === 'closing_manager' || role === 'closing_manager_tl' || role === 'presales' || role === 'presales_tl';
@@ -307,6 +595,7 @@ export const Settings: React.FC = () => {
 
       <ChangePasswordPanel />
       {canUseWhatsApp && <WhatsAppPanel />}
+      {role === 'channel_partner' && <MyCpProfilePanel />}
     </div>
   );
 };

@@ -3,7 +3,7 @@ import express from 'express';
 import QRCode from 'qrcode';
 import pino from 'pino';
 import { Boom } from '@hapi/boom';
-import makeWASocket, { DisconnectReason, Browsers } from '@whiskeysockets/baileys';
+import makeWASocket, { DisconnectReason, Browsers, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 import { createClient } from '@supabase/supabase-js';
 import { useSupabaseAuthState } from './supabaseAuthState.js';
 
@@ -19,6 +19,11 @@ const MAX_GAP_MS = Number(process.env.WA_MAX_GAP_MS || 15000);
 const DAILY_CAP = Number(process.env.WA_DAILY_CAP || 200);
 const POLL_INTERVAL_MS = Number(process.env.WA_POLL_INTERVAL_MS || 5000);
 const HEARTBEAT_INTERVAL_MS = Number(process.env.WA_HEARTBEAT_INTERVAL_MS || 3000);
+
+// Swapnil sends via the official Meta Cloud API (Supabase Cron + Edge
+// Function), not this Baileys gateway -- his outbox rows are left alone
+// here so the two senders never race for the same queued message.
+const SWAPNIL_USER_ID = 'ccfd55b7-36a2-4ab0-964e-a7e8403a9504';
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   logger.error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required. See .env.example.');
@@ -107,6 +112,23 @@ async function heartbeatLoop() {
   }
 }
 
+// Baileys ships a bundled default WA Web protocol version that goes stale
+// as WhatsApp updates their client -- connecting with a stale version makes
+// WhatsApp's servers reject/restart the handshake almost immediately, which
+// looks like the QR code refreshing every second or two instead of the
+// normal ~20s (never enough time to actually scan it). Fetching the current
+// version once at boot and reusing it for every session fixes that. Falls
+// back to the bundled default (the old behaviour) if the fetch itself fails
+// -- e.g. no internet reachability to the version endpoint at startup.
+let waVersion;
+try {
+  const { version } = await fetchLatestBaileysVersion();
+  waVersion = version;
+  logger.info({ waVersion }, 'Using latest WhatsApp Web protocol version');
+} catch (err) {
+  logger.warn({ err: err.message }, 'Could not fetch latest WhatsApp Web version -- using Baileys bundled default');
+}
+
 async function connectToWhatsApp(userId) {
   // Initialize session state
   const session = {
@@ -122,6 +144,7 @@ async function connectToWhatsApp(userId) {
   const { state, saveCreds } = await useSupabaseAuthState(supabase, userId);
 
   session.sock = makeWASocket({
+    ...(waVersion ? { version: waVersion } : {}),
     auth: state,
     browser: Browsers.ubuntu('CRM WhatsApp Gateway'),
     logger: pino({ level: 'silent' }), // Reduce noise per session
@@ -242,19 +265,10 @@ async function processOutboxOnce() {
     return;
   }
 
-  // Fail fast: any row with no sender can never be sent by anyone. Checked
-  // as its own small, capped query so it can't be starved by the backlog
-  // filter below.
-  const { data: orphaned } = await supabase
-    .from('whatsapp_outbox')
-    .select('id')
-    .eq('status', 'queued')
-    .is('created_by', null)
-    .limit(20);
-  for (const r of orphaned || []) {
-    logger.error({ id: r.id }, 'Message has no created_by user_id, marking as failed');
-    await supabase.from('whatsapp_outbox').update({ status: 'failed', error: 'No sender (created_by) assigned' }).eq('id', r.id);
-  }
+  // Rows with no created_by (system-generated) are handled by the Cloud
+  // API side (Supabase Cron + send-whatsapp Edge Function), alongside
+  // Swapnil's own rows -- this gateway leaves them alone rather than
+  // failing them.
 
   // Query directly for a currently-connected sender's oldest queued
   // message, rather than fetching the oldest N queued rows overall and
@@ -280,6 +294,7 @@ async function processOutboxOnce() {
     .select('*')
     .eq('status', 'queued')
     .in('created_by', openSenderIds)
+    .neq('created_by', SWAPNIL_USER_ID)
     .order('created_at', { ascending: true })
     .limit(1);
   if (ownSenderErr) {
@@ -299,6 +314,7 @@ async function processOutboxOnce() {
       .from('whatsapp_outbox')
       .select('*')
       .eq('status', 'queued')
+      .neq('created_by', SWAPNIL_USER_ID)
       .order('created_at', { ascending: true })
       .limit(1);
     if (anyErr) {

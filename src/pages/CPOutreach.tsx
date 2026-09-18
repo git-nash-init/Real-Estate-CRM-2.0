@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
+import { isSuperAdmin } from '../utils/permissions';
+import { useHighlightParam } from '../hooks/useHighlightParam';
 import {
   Handshake,
   Plus,
@@ -11,6 +13,7 @@ import {
   RefreshCw,
   CheckCircle,
   XCircle,
+  Eye,
 } from 'lucide-react';
 
 interface OutreachEntry {
@@ -54,9 +57,9 @@ const meetingDoneOptions = ['Fresh', 'Re-visit'];
 const activeInOptions = ['Digital', 'Tele-calling', 'SMS', 'Reference', 'Cross Pitch'];
 
 const emptyForm = {
-  meetDate: '',
   sourcingManagerId: '',
   sourcingManagerOther: '',
+  cpFirmId: '',
   cpFirmName: '',
   cpName: '',
   cpContactNumber: '',
@@ -68,15 +71,34 @@ const emptyForm = {
   liveLocation: '',
 };
 
+// Parses a "lat,lng" string stored in live_location into a Google Maps link.
+const LiveLocationLink: React.FC<{ value: string | null }> = ({ value }) => {
+  if (!value) return <span className="text-slate-400 text-xs">—</span>;
+  const parts = value.split(',');
+  const lat = parseFloat(parts[0]);
+  const lng = parseFloat(parts[1]);
+  if (isNaN(lat) || isNaN(lng)) return <span className="text-slate-400 text-xs text-[11px]">{value}</span>;
+  return (
+    <a
+      href={`https://www.google.com/maps?q=${lat},${lng}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:underline"
+    >
+      <MapPin className="h-3.5 w-3.5" /> View on Map
+    </a>
+  );
+};
+
 export const CPOutreach: React.FC = () => {
-  const { user, role } = useAuth();
-  // "Accepted" (approved/rejected) only by Super Admin or Site Head — the
-  // real boundary is the enforce_cp_outreach_status_change_trigger DB
-  // trigger, which independently rejects the update regardless of what
-  // this check does. This just decides whether to show the buttons.
-  const canReview = role === 'super_admin' || role === 'site_head';
-  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const { user, role, assignedProjects } = useAuth();
   const [entries, setEntries] = useState<OutreachEntry[]>([]);
+
+  // A `cp_outreach_approved`/`cp_outreach_rejected` notification lands here
+  // with ?highlight=<entry id>. No detail modal exists on this page --
+  // ring-highlight the row only.
+  const { registerRow, rowClass, tryFocusRow } = useHighlightParam();
+  useEffect(() => { tryFocusRow(); }, [entries, tryFocusRow]);
   const [sourcingManagers, setSourcingManagers] = useState<SourcingManagerOption[]>([]);
   const [channelPartners, setChannelPartners] = useState<ChannelPartnerOption[]>([]);
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | null>(null);
@@ -91,13 +113,14 @@ export const CPOutreach: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [isGettingLocation, setIsGettingLocation] = useState(false);
+  const [selectedEntry, setSelectedEntry] = useState<OutreachEntry | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from('cp_outreach')
         .select('*')
-        .order('meet_date', { ascending: false });
+        .order('created_at', { ascending: false });
       if (error) reportQueryError('CP Outreach: entries', error);
       else setEntries(data || []);
     } catch (err) {
@@ -105,22 +128,40 @@ export const CPOutreach: React.FC = () => {
     }
 
     try {
-      const { data: role, error: roleErr } = await supabase
-        .from('roles')
-        .select('id')
-        .eq('name', 'sourcing_manager')
-        .maybeSingle();
-      if (roleErr) {
-        reportQueryError('CP Outreach: sourcing manager role lookup', roleErr);
-      } else if (role) {
+      const [roleRes, assignRes, cpProjRes] = await Promise.all([
+        supabase.from('roles').select('id').in('name', ['sourcing_manager', 'sourcing_manager_tl']),
+        supabase.from('user_project_assignments').select('user_id, project_id').eq('is_active', true),
+        supabase.from('channel_partner_projects').select('channel_partner_id, project_id'),
+      ]);
+
+      const userProjectMap = new Map<string, Set<string>>();
+      (assignRes.data || []).forEach(row => {
+        if (!userProjectMap.has(row.user_id)) userProjectMap.set(row.user_id, new Set());
+        userProjectMap.get(row.user_id)!.add(row.project_id);
+      });
+
+      const cpProjectMap = new Map<string, Set<string>>();
+      (cpProjRes.data || []).forEach(row => {
+        if (!cpProjectMap.has(row.channel_partner_id)) cpProjectMap.set(row.channel_partner_id, new Set());
+        cpProjectMap.get(row.channel_partner_id)!.add(row.project_id);
+      });
+
+      const roleIds = (roleRes.data || []).map(r => r.id);
+      if (roleIds.length > 0) {
         const { data: userRoles, error: urErr } = await supabase
           .from('user_roles')
           .select('user_id')
-          .eq('role_id', role.id);
+          .in('role_id', roleIds);
         if (urErr) {
           reportQueryError('CP Outreach: sourcing manager user_roles', urErr);
         } else {
-          const userIds = (userRoles || []).map(r => r.user_id);
+          let userIds = (userRoles || []).map(r => r.user_id);
+          if (!isSuperAdmin(role) && assignedProjects && assignedProjects.length > 0) {
+            userIds = userIds.filter(uid => {
+              const pSet = userProjectMap.get(uid);
+              return pSet && assignedProjects.some(pid => pSet.has(pid));
+            });
+          }
           if (userIds.length > 0) {
             const { data: emps, error: empErr } = await supabase
               .from('employees')
@@ -134,21 +175,33 @@ export const CPOutreach: React.FC = () => {
                 name: [e.first_name, e.last_name].filter(Boolean).join(' ') || 'Unnamed',
               })));
             }
+          } else {
+            setSourcingManagers([]);
           }
         }
       }
-    } catch (err) {
-      reportQueryError('CP Outreach: sourcing managers', err);
-    }
 
-    try {
-      const { data, error } = await supabase
+      // Only channel partners who've actually been onboarded (i.e. have a
+      // login -- user_id set) are selectable here. Client's explicit
+      // request: outreach can no longer be logged against a partner who
+      // hasn't been onboarded yet -- onboard them first, then log outreach.
+      const { data: cpData, error: cpErr } = await supabase
         .from('channel_partners')
-        .select('id, name, company_name, mobile');
-      if (error) reportQueryError('CP Outreach: channel partners', error);
-      else setChannelPartners(data || []);
+        .select('id, name, company_name, mobile')
+        .not('user_id', 'is', null);
+      if (cpErr) reportQueryError('CP Outreach: channel partners', cpErr);
+      else {
+        let partners = cpData || [];
+        if (!isSuperAdmin(role) && assignedProjects && assignedProjects.length > 0) {
+          partners = partners.filter(cp => {
+            const pSet = cpProjectMap.get(cp.id);
+            return pSet && assignedProjects.some(pid => pSet.has(pid));
+          });
+        }
+        setChannelPartners(partners);
+      }
     } catch (err) {
-      reportQueryError('CP Outreach: channel partners', err);
+      reportQueryError('CP Outreach: lookups', err);
     }
 
     if (user) {
@@ -167,7 +220,7 @@ export const CPOutreach: React.FC = () => {
 
     setLoading(false);
     setSyncing(false);
-  }, [user]);
+  }, [user, role, assignedProjects]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -188,17 +241,17 @@ export const CPOutreach: React.FC = () => {
     setFormError(null);
   };
 
-  // On an exact firm-name match against a registered partner, auto-fill CP
-  // Name and Contact Number — a CP not yet in the system is still entered
-  // exactly as typed, free-text.
-  const handleFirmNameChange = (value: string) => {
-    const match = channelPartners.find(cp =>
-      (cp.company_name || '').toLowerCase() === value.toLowerCase() ||
-      (cp.name || '').toLowerCase() === value.toLowerCase()
-    );
+  // Selecting an onboarded partner auto-fills CP Name and Contact Number.
+  // A CP not yet onboarded can't be picked at all -- the datalist/free-text
+  // path this used to have (letting a brand-new prospect be typed in
+  // directly) was removed per the client's explicit request: outreach can
+  // only be logged against a partner who's already been onboarded.
+  const handleFirmNameChange = (cpId: string) => {
+    const match = channelPartners.find(cp => cp.id === cpId);
     setForm(prev => ({
       ...prev,
-      cpFirmName: value,
+      cpFirmId: cpId,
+      cpFirmName: match ? (match.company_name || match.name || '') : '',
       cpName: match ? (match.name || prev.cpName) : prev.cpName,
       cpContactNumber: match ? (match.mobile || prev.cpContactNumber) : prev.cpContactNumber,
     }));
@@ -235,28 +288,10 @@ export const CPOutreach: React.FC = () => {
     );
   };
 
-  const handleReview = async (entry: OutreachEntry, nextStatus: 'approved' | 'rejected') => {
-    setReviewingId(entry.id);
-    try {
-      // reviewed_by / reviewed_at are stamped server-side by the trigger,
-      // not sent from here — the trigger overwrites whatever the client
-      // sends for those two columns anyway.
-      const { error } = await supabase.from('cp_outreach').update({ status: nextStatus }).eq('id', entry.id);
-      if (error) throw error;
-      setEntries(prev => prev.map(e => e.id === entry.id ? { ...e, status: nextStatus } : e));
-      setNotification({ type: 'success', message: `Outreach entry ${nextStatus}.` });
-    } catch (err: any) {
-      reportQueryError('CP Outreach: review', err);
-      setNotification({ type: 'error', message: err.message || 'Failed to update status.' });
-    } finally {
-      setReviewingId(null);
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.meetDate || (!form.sourcingManagerId && !form.sourcingManagerOther.trim()) ||
-        !form.cpFirmName.trim() || !form.cpName.trim() || !form.cpContactNumber.trim() ||
+    if (!form.sourcingManagerId && !form.sourcingManagerOther.trim() ||
+        !form.cpFirmId || !form.cpName.trim() || !form.cpContactNumber.trim() ||
         !form.location.trim() || !form.cpType || !form.meetingDone || form.leadsSourceActiveIn.length === 0) {
       setFormError('Please fill all required fields.');
       return;
@@ -270,13 +305,8 @@ export const CPOutreach: React.FC = () => {
     setSubmitting(true);
 
     try {
-      const match = channelPartners.find(cp =>
-        (cp.company_name || '').toLowerCase() === form.cpFirmName.toLowerCase() ||
-        (cp.name || '').toLowerCase() === form.cpFirmName.toLowerCase()
-      );
-
       const { error } = await supabase.from('cp_outreach').insert([{
-        meet_date: form.meetDate,
+        meet_date: new Date().toISOString().slice(0, 10),
         sourcing_manager_id: form.sourcingManagerId || null,
         sourcing_manager_other: form.sourcingManagerId ? null : form.sourcingManagerOther.trim(),
         cp_firm_name: form.cpFirmName.trim(),
@@ -289,7 +319,7 @@ export const CPOutreach: React.FC = () => {
         meeting_remarks: form.meetingRemarks.trim() || null,
         live_location: form.liveLocation,
         logged_by: currentEmployeeId,
-        channel_partner_id: match?.id || null,
+        channel_partner_id: form.cpFirmId,
       }]);
 
       if (error) throw error;
@@ -305,10 +335,20 @@ export const CPOutreach: React.FC = () => {
     }
   };
 
-  const filteredEntries = entries.filter(en =>
-    en.cp_firm_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    en.cp_name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const allowedSmIds = new Set(sourcingManagers.map(sm => sm.id));
+  const allowedCpFirmNames = new Set(channelPartners.map(cp => (cp.company_name || cp.name || '').toLowerCase()));
+  const filteredEntries = entries.filter(en => {
+    if (!isSuperAdmin(role) && assignedProjects && assignedProjects.length > 0) {
+      const smMatch = en.sourcing_manager_id && allowedSmIds.has(en.sourcing_manager_id);
+      const cpMatch = en.cp_firm_name && allowedCpFirmNames.has(en.cp_firm_name.toLowerCase());
+      const ownMatch = currentEmployeeId && en.sourcing_manager_id === currentEmployeeId;
+      if (!smMatch && !cpMatch && !ownMatch) return false;
+    }
+    return (
+      en.cp_firm_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      en.cp_name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  });
 
   if (loading) {
     return (
@@ -370,22 +410,29 @@ export const CPOutreach: React.FC = () => {
           <table className="w-full text-left border-collapse text-sm">
             <thead>
               <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                <th className="py-3 px-6">Meet Date</th>
+                <th className="py-3 px-6">Created At</th>
+                <th className="py-3 px-6">Sourcing Manager</th>
                 <th className="py-3 px-6">CP Firm</th>
                 <th className="py-3 px-6">CP Name</th>
                 <th className="py-3 px-6">Contact</th>
                 <th className="py-3 px-6">Type</th>
                 <th className="py-3 px-6">Visit</th>
                 <th className="py-3 px-6">Active In</th>
-                <th className="py-3 px-6">Status</th>
-                {canReview && <th className="py-3 px-6 text-right">Review</th>}
+                <th className="py-3 px-6">Map</th>
+                <th className="py-3 px-6">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredEntries.length > 0 ? (
                 filteredEntries.map(en => (
-                  <tr key={en.id} className="hover:bg-slate-50/50">
-                    <td className="py-3 px-6 text-slate-800 font-semibold">{new Date(en.meet_date).toLocaleDateString('en-IN')}</td>
+                  <tr key={en.id} ref={registerRow(en.id)} className={`hover:bg-slate-50/50 ${rowClass(en.id)}`}>
+                      <td className="py-3 px-6 text-slate-800 font-semibold">
+                        <span className="block">{new Date(en.created_at).toLocaleDateString('en-IN')}</span>
+                        <span className="block text-xs text-slate-400">{new Date(en.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</span>
+                      </td>
+                    <td className="py-3 px-6 text-slate-600">
+                      {sourcingManagers.find(sm => sm.id === en.sourcing_manager_id)?.name || en.sourcing_manager_other || '—'}
+                    </td>
                     <td className="py-3 px-6 text-slate-900 font-semibold">{en.cp_firm_name}</td>
                     <td className="py-3 px-6 text-slate-600">{en.cp_name}</td>
                     <td className="py-3 px-6 text-slate-600">{en.cp_contact_number}</td>
@@ -398,44 +445,21 @@ export const CPOutreach: React.FC = () => {
                       </span>
                     </td>
                     <td className="py-3 px-6 text-slate-500 text-xs">{en.leads_source_active_in.join(', ')}</td>
+                    <td className="py-3 px-6"><LiveLocationLink value={en.live_location} /></td>
                     <td className="py-3 px-6">
-                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xxs font-semibold capitalize ${
-                        en.status === 'approved' ? 'bg-emerald-50 text-emerald-700'
-                        : en.status === 'rejected' ? 'bg-rose-50 text-rose-700'
-                        : 'bg-amber-50 text-amber-700'
-                      }`}>
-                        {en.status || 'pending'}
-                      </span>
+                      <button
+                        onClick={() => setSelectedEntry(en)}
+                        title="View full details"
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold border border-slate-200 rounded-lg text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 transition-colors"
+                      >
+                        <Eye className="h-3.5 w-3.5" /> View
+                      </button>
                     </td>
-                    {canReview && (
-                      <td className="py-3 px-6 text-right">
-                        {en.status === 'pending' ? (
-                          <div className="inline-flex items-center gap-1.5">
-                            <button
-                              onClick={() => handleReview(en, 'approved')}
-                              disabled={reviewingId === en.id}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xxs font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
-                            >
-                              <CheckCircle className="h-3 w-3" /> Approve
-                            </button>
-                            <button
-                              onClick={() => handleReview(en, 'rejected')}
-                              disabled={reviewingId === en.id}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xxs font-semibold bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-50"
-                            >
-                              <XCircle className="h-3 w-3" /> Reject
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="text-xxs text-slate-400 italic">Reviewed</span>
-                        )}
-                      </td>
-                    )}
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={canReview ? 9 : 8} className="py-10 text-center text-slate-400 italic">No outreach visits logged yet.</td>
+                  <td colSpan={10} className="py-10 text-center text-slate-400 italic">No outreach visits logged yet.</td>
                 </tr>
               )}
             </tbody>
@@ -460,15 +484,6 @@ export const CPOutreach: React.FC = () => {
                 )}
 
                 <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">CP Meet Date *</label>
-                    <input
-                      type="date"
-                      value={form.meetDate}
-                      onChange={(e) => setForm(prev => ({ ...prev, meetDate: e.target.value }))}
-                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
-                    />
-                  </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">SM Name *</label>
                     <select
@@ -497,17 +512,17 @@ export const CPOutreach: React.FC = () => {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">CP Firm Name *</label>
-                    <input
-                      list="cp-firm-suggestions"
-                      value={form.cpFirmName}
+                    <select
+                      value={form.cpFirmId}
                       onChange={(e) => handleFirmNameChange(e.target.value)}
                       className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
-                    />
-                    <datalist id="cp-firm-suggestions">
+                    >
+                      <option value="">Select onboarded Channel Partner...</option>
                       {channelPartners.map(cp => (
-                        <option key={cp.id} value={cp.company_name || cp.name || ''} />
+                        <option key={cp.id} value={cp.id}>{cp.company_name || cp.name || 'Unnamed'}</option>
                       ))}
-                    </datalist>
+                    </select>
+                    <p className="text-xxs text-slate-400 mt-1">Only Channel Partners who've been onboarded (have a login) appear here.</p>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">CP Name *</label>
@@ -631,6 +646,109 @@ export const CPOutreach: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Detail view modal ───────────────────────────────────────────── */}
+      {selectedEntry && (
+        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setSelectedEntry(null)} />
+          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-2xl w-full overflow-hidden">
+            <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
+              <span className="font-bold tracking-tight">CP Outreach — Visit Details</span>
+              <button onClick={() => setSelectedEntry(null)} className="p-1 rounded-lg text-indigo-200 hover:text-white">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
+              {/* Row 1: Date + Sourcing Manager */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Logged At</p>
+                  <p className="text-sm font-semibold text-slate-800">{new Date(selectedEntry.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">{new Date(selectedEntry.created_at).toLocaleTimeString('en-IN')}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Sourcing Manager</p>
+                  <p className="text-sm font-semibold text-slate-800">
+                    {sourcingManagers.find(sm => sm.id === selectedEntry.sourcing_manager_id)?.name || selectedEntry.sourcing_manager_other || '—'}
+                  </p>
+                </div>
+              </div>
+              {/* Row 2: CP Firm + CP Name */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">CP Firm Name</p>
+                  <p className="text-sm font-semibold text-slate-800">{selectedEntry.cp_firm_name}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">CP Name</p>
+                  <p className="text-sm font-semibold text-slate-800">{selectedEntry.cp_name}</p>
+                </div>
+              </div>
+              {/* Row 3: Contact + Location */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">CP Contact Number</p>
+                  <p className="text-sm font-semibold text-slate-800">{selectedEntry.cp_contact_number}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Location</p>
+                  <p className="text-sm font-semibold text-slate-800">{selectedEntry.location}</p>
+                </div>
+              </div>
+              {/* Row 4: CP Type + Meeting Done */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">CP Type</p>
+                  <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700">{selectedEntry.cp_type}</span>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Meeting Done</p>
+                  <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                    selectedEntry.meeting_done === 'Fresh' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
+                  }`}>{selectedEntry.meeting_done}</span>
+                </div>
+              </div>
+              {/* Leads Source Active In */}
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Leads Source Active In</p>
+                <div className="flex flex-wrap gap-2">
+                  {selectedEntry.leads_source_active_in.map(opt => (
+                    <span key={opt} className="px-3 py-1 bg-indigo-600 text-white text-xs font-semibold rounded-full">{opt}</span>
+                  ))}
+                </div>
+              </div>
+              {/* Meeting Remarks */}
+              {selectedEntry.meeting_remarks && (
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Meeting Remarks</p>
+                  <p className="text-sm text-slate-700 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 whitespace-pre-wrap">{selectedEntry.meeting_remarks}</p>
+                </div>
+              )}
+              {/* Live GPS Location */}
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">GPS Location (at time of logging)</p>
+                <LiveLocationLink value={selectedEntry.live_location} />
+                {selectedEntry.live_location && (
+                  <p className="text-[11px] text-slate-400 mt-0.5">{selectedEntry.live_location}</p>
+                )}
+              </div>
+              {/* Logged at — footer note only, main date is already at top */}
+              <div className="border-t border-slate-100 pt-4">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Record Created</p>
+                <p className="text-xs text-slate-500">{new Date(selectedEntry.created_at).toLocaleString('en-IN')}</p>
+              </div>
+            </div>
+            <div className="bg-slate-50 px-6 py-4 flex justify-end border-t border-slate-100">
+              <button
+                onClick={() => setSelectedEntry(null)}
+                className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-100 transition-colors"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

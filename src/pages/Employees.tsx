@@ -19,6 +19,12 @@ import {
 import type { UserRole } from '../types/auth';
 import { useAuth } from '../hooks/useAuth';
 
+// Employee onboarding credentials always send through Swapnil's official
+// Cloud API number, regardless of which admin actually creates the
+// account -- client's explicit request, same as Pre-Tagging (when a CP
+// submits it) and Channel Partner onboarding credentials.
+const SWAPNIL_USER_ID = 'ccfd55b7-36a2-4ab0-964e-a7e8403a9504';
+
 interface Employee {
   id: string;
   employee_id: string | null;
@@ -104,7 +110,7 @@ function generateRandomPassword(): string {
 }
 
 export const Employees: React.FC = () => {
-  const { role: currentUserRole, user } = useAuth();
+  const { role: currentUserRole } = useAuth();
   
   // Query & state filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -138,7 +144,7 @@ export const Employees: React.FC = () => {
 
   // Modal open states
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'leads' | 'visits' | 'bookings' | 'attendance_tasks'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'leads' | 'visits' | 'bookings' | 'attendance'>('overview');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [formLoading, setFormLoading] = useState(false);
@@ -822,7 +828,7 @@ export const Employees: React.FC = () => {
             to_phone: waPhone,
             message: welcomeMsg,
             status: 'queued',
-            created_by: user?.id || null
+            created_by: SWAPNIL_USER_ID
           }]);
           if (waErr) {
             reportQueryError('Employees: send WhatsApp credentials', waErr);
@@ -1374,7 +1380,7 @@ export const Employees: React.FC = () => {
 
             {/* Profile Drawer Tabs */}
             <div className="border-b border-slate-250 bg-white flex space-x-4 px-6">
-              {(['overview', 'leads', 'visits', 'bookings', 'attendance_tasks'] as const).map(tab => (
+              {(['overview', 'leads', 'visits', 'bookings', 'attendance'] as const).map(tab => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
@@ -1573,17 +1579,12 @@ export const Employees: React.FC = () => {
                     </div>
                   )}
 
-                  {/* ATTENDANCE & TASKS TAB */}
-                  {activeTab === 'attendance_tasks' && (
+                  {/* ATTENDANCE TAB */}
+                  {activeTab === 'attendance' && (
                     <div className="space-y-6">
                       <div className="space-y-2">
                         <h4 className="font-bold text-xs text-slate-700 uppercase tracking-wider border-b border-slate-100 pb-1">Attendance logs</h4>
                         <p className="text-xs text-slate-500 italic">Attendance logs and biometric logs are handled under the Attendance module and will sync automatically.</p>
-                      </div>
-
-                      <div className="space-y-2">
-                        <h4 className="font-bold text-xs text-slate-700 uppercase tracking-wider border-b border-slate-100 pb-1">Task List</h4>
-                        <p className="text-xs text-slate-500 italic">No tasks currently pending assignment on this employee card.</p>
                       </div>
                     </div>
                   )}
@@ -2124,7 +2125,7 @@ export const Employees: React.FC = () => {
                           const waPhone = digits.length === 10 ? `91${digits}` : digits;
                           const portalUrl = `${window.location.origin}/login`;
                           const msg = `🔑 *Your CRM Login Credentials*\n\n• Email: ${newAccountCredentials.email}\n• Password: ${newAccountCredentials.password}\n🌐 Portal: ${portalUrl}\n\nPlease change your password after first login.`;
-                          await supabase.from('whatsapp_outbox').insert([{ to_phone: waPhone, message: msg, status: 'queued', created_by: user?.id || null }]);
+                          await supabase.from('whatsapp_outbox').insert([{ to_phone: waPhone, message: msg, status: 'queued', created_by: SWAPNIL_USER_ID }]);
                           setWaSent(true);
                         } catch (err) {
                           console.error('Manual WhatsApp re-send failed:', err);

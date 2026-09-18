@@ -3,6 +3,8 @@ import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
 import { canEditLead, canConvertVisitToLead } from '../utils/permissions';
+import { isSuperAdmin } from '../utils/permissions';
+import { useHighlightParam } from '../hooks/useHighlightParam';
 import {
   Search,
   RefreshCw,
@@ -43,12 +45,12 @@ interface Lead {
 }
 
 // Walk-in visit codes for a channel-partner-submitted visit always send
-// from the super admin's own connected WhatsApp number, not the CP's --
-// channel partners don't get their own WhatsApp login for this feature.
+// from Swapnil's official Cloud API number, not the CP's -- channel
+// partners don't get their own WhatsApp login for this feature.
 const SWAPNIL_USER_ID = 'ccfd55b7-36a2-4ab0-964e-a7e8403a9504';
 
 export const SiteVisits: React.FC = () => {
-  const { role, user } = useAuth();
+  const { role, user, assignedProjects } = useAuth();
   const isChannelPartner = role === 'channel_partner';
   // Delete is restricted to super_admin — both DB tables' DELETE RLS
   // policies already enforce this independently (site_visits_delete /
@@ -91,9 +93,15 @@ export const SiteVisits: React.FC = () => {
   const [projectMap, setProjectMap] = useState<Map<string, string>>(new Map());
   const [profileMap, setProfileMap] = useState<Map<string, string>>(new Map());
 
-  const visibleProjectEntries = Array.from(projectMap.entries()).filter(
-    ([id]) => role !== 'channel_partner' || !myCpProjectIds || myCpProjectIds.includes(id)
-  );
+  const visibleProjectEntries = Array.from(projectMap.entries()).filter(([id]) => {
+    if (role === 'channel_partner') {
+      return !myCpProjectIds || myCpProjectIds.includes(id);
+    }
+    if (!isSuperAdmin(role)) {
+      return (assignedProjects || []).includes(id);
+    }
+    return true;
+  });
 
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -101,6 +109,30 @@ export const SiteVisits: React.FC = () => {
 
   // Modal open states
   const [selectedVisit, setSelectedVisit] = useState<SiteVisit | null>(null);
+
+  // A `site_visit_scheduled` (scheduled visits) or `site_visit_logged`
+  // (walk-ins) notification lands here with ?highlight=<id>&hlKind=<entity>.
+  // Both tables are server-filtered/paginated, so fetch the record directly
+  // by id rather than hunting for it on whatever page/filter is active.
+  const { highlightId, highlightKind, registerRow, rowClass, tryFocusRow, clearHighlightParam } = useHighlightParam();
+  useEffect(() => {
+    if (!highlightId) return;
+    if (highlightKind === 'quick_site_visit') {
+      // No detail modal exists for walk-ins -- ring-highlight only.
+      return;
+    }
+    supabase
+      .from('site_visits')
+      .select('*')
+      .eq('id', highlightId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error || !data) return;
+        setSelectedVisit(data as SiteVisit);
+        clearHighlightParam();
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId, highlightKind]);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Channel Partner lookups lists & map
@@ -133,6 +165,7 @@ export const SiteVisits: React.FC = () => {
     converted_to_lead_id?: string | null;
   }
   const [quickVisits, setQuickVisits] = useState<QuickVisit[]>([]);
+  useEffect(() => { tryFocusRow(); }, [quickVisits, visits, tryFocusRow]);
   const [isQuickCreateOpen, setIsQuickCreateOpen] = useState(false);
   const [quickCreateLoading, setQuickCreateLoading] = useState(false);
   const [quickCreateError, setQuickCreateError] = useState<string | null>(null);
@@ -148,7 +181,8 @@ export const SiteVisits: React.FC = () => {
   const [quickVisitAmPm, setQuickVisitAmPm] = useState<'AM' | 'PM'>('PM');
   const [quickChannelPartnerId, setQuickChannelPartnerId] = useState('');
   const [quickProjectId, setQuickProjectId] = useState('');
-  const [quickSourcingManagerName, setQuickSourcingManagerName] = useState('');
+  const [quickSourcingManagerId, setQuickSourcingManagerId] = useState('');
+  const [quickPresalesId, setQuickPresalesId] = useState('');
   const [quickReferencedBy, setQuickReferencedBy] = useState('');
 
   // A channel partner logging their own walk-in visit doesn't pick a
@@ -156,9 +190,12 @@ export const SiteVisits: React.FC = () => {
   // field they fill in themselves (not auto-filled/greyed out) since the
   // person who actually referred a given visit isn't necessarily the CP.
   useEffect(() => {
-    if (!isQuickCreateOpen || !isChannelPartner) return;
-    if (myCpId) setQuickChannelPartnerId(myCpId);
-  }, [isQuickCreateOpen, isChannelPartner, myCpId]);
+    if (!isQuickCreateOpen) return;
+    if (isChannelPartner && myCpId) setQuickChannelPartnerId(myCpId);
+    if (!isSuperAdmin(role) && assignedProjects && assignedProjects.length === 1 && !quickProjectId) {
+      setQuickProjectId(assignedProjects[0]);
+    }
+  }, [isQuickCreateOpen, isChannelPartner, myCpId, role, assignedProjects, quickProjectId]);
 
   // Sourcing Manager picker for the Walk-in Visit form. Not tied to any
   // one role -- the client wants every walk-in visit to be able to credit
@@ -201,6 +238,27 @@ export const SiteVisits: React.FC = () => {
   // selected in the Walk-in Visit form -- empty until a project is picked.
   const formSourcingManagers = quickProjectId
     ? sourcingManagers.filter(sm => projectTeamMap.get(quickProjectId)?.has(sm.id))
+    : [];
+
+  // Presales picker for the Walk-in Visit form -- same shape as the
+  // Sourcing Manager one above. Needed so a walk-in visit's Presales
+  // target (see Targets.tsx / complete_target_on_site_visit trigger) has
+  // someone real to credit, same as Sourcing Manager already does.
+  const [presalesStaff, setPresalesStaff] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    (async () => {
+      const { data: roleRows } = await supabase.from('roles').select('id').in('name', ['presales', 'presales_tl']);
+      const roleIds = (roleRows || []).map(r => r.id);
+      if (roleIds.length === 0) return;
+      const { data: userRoles } = await supabase.from('user_roles').select('user_id').in('role_id', roleIds);
+      const userIds = (userRoles || []).map(ur => ur.user_id);
+      if (userIds.length === 0) return;
+      const { data: profiles } = await supabase.from('user_profiles').select('id, full_name').in('id', userIds);
+      setPresalesStaff((profiles || []).map(p => ({ id: p.id, name: p.full_name || 'Unnamed' })));
+    })();
+  }, []);
+  const formPresalesStaff = quickProjectId
+    ? presalesStaff.filter(p => projectTeamMap.get(quickProjectId)?.has(p.id))
     : [];
 
   const fetchQuickVisits = useCallback(async () => {
@@ -264,7 +322,8 @@ export const SiteVisits: React.FC = () => {
     setQuickVisitAmPm('PM');
     setQuickChannelPartnerId('');
     setQuickProjectId('');
-    setQuickSourcingManagerName('');
+    setQuickSourcingManagerId('');
+    setQuickPresalesId('');
     setQuickReferencedBy('');
     setQuickCreateError(null);
   };
@@ -303,27 +362,6 @@ export const SiteVisits: React.FC = () => {
       return;
     }
 
-    // The gateway now sends a queued message through ANY currently-open
-    // WhatsApp session, not only its own creator's -- so what actually
-    // matters here is whether at least one number is connected at all, not
-    // specifically Swapnil's. Checked once and reused for both branches
-    // below.
-    const { data: openSessions } = await supabase
-      .from('whatsapp_session')
-      .select('id, last_heartbeat_at')
-      .eq('status', 'open');
-    const anySessionOpen = (openSessions || []).some(
-      (s) => s.last_heartbeat_at && Date.now() - new Date(s.last_heartbeat_at).getTime() < 20000
-    );
-
-    // A channel-partner-submitted visit still hard-blocks if nothing is
-    // connected -- CPs have no WhatsApp session of their own to fall back
-    // on, and this keeps the existing "ask the admin" experience for them.
-    if (isChannelPartner && !anySessionOpen) {
-      setQuickCreateError('Kindly ask the super admin (Swapnil) to log in to WhatsApp in order to send the message and add the site visit.');
-      return;
-    }
-
     setQuickCreateError(null);
     setQuickCreateLoading(true);
     try {
@@ -341,6 +379,8 @@ export const SiteVisits: React.FC = () => {
       };
       const customerPhone = normalizePhone(quickCustomerMobile.trim());
 
+      const selectedSourcingManager = formSourcingManagers.find(sm => sm.id === quickSourcingManagerId);
+
       const { data: inserted, error: insertErr } = await supabase
         .from('quick_site_visits')
         .insert([{
@@ -350,7 +390,9 @@ export const SiteVisits: React.FC = () => {
           channel_partner_id: quickChannelPartnerId || null,
           project_id: quickProjectId,
           verification_code: verificationCode,
-          sourcing_manager_name: quickSourcingManagerName.trim() || null,
+          sourcing_manager_id: quickSourcingManagerId || null,
+          sourcing_manager_name: selectedSourcingManager?.name || null,
+          presales_id: quickPresalesId || null,
           referenced_by: quickReferencedBy.trim() || null,
           status: 'active',
           created_by: user?.id || null,
@@ -378,9 +420,13 @@ export const SiteVisits: React.FC = () => {
         const cpPhone = normalizePhone(cp.mobile);
         outboxRows.push({ to_phone: cpPhone, message });
       }
-      // Channel-partner submissions always send from the super admin's
-      // number (already confirmed connected above); everyone else sends
-      // from their own connected session as before.
+      // Channel partners don't get their own WhatsApp login for this
+      // feature (no QR pairing UI is shown to them), so a CP-submitted
+      // walk-in code always routes through Swapnil's number -- the one
+      // sender that's always on (official Cloud API), rather than through
+      // the Baileys gateway where nobody would be connected for them.
+      // Every other role's created_by routes through their own paired
+      // WhatsApp via the Baileys gateway as usual.
       const outboxSenderId = isChannelPartner ? SWAPNIL_USER_ID : (user?.id || null);
       const { error: outboxErr } = await supabase.from('whatsapp_outbox').insert(
         outboxRows.map(r => ({ ...r, status: 'queued', quick_visit_id: inserted.id, created_by: outboxSenderId }))
@@ -390,13 +436,8 @@ export const SiteVisits: React.FC = () => {
         // undo that, but the admin needs to know the code wasn't sent.
         reportQueryError('Site Visits: walk-in visit code WhatsApp send', outboxErr);
         setNotification({ type: 'error', message: 'Visit logged, but the WhatsApp code could not be queued: ' + outboxErr.message });
-      } else if (!anySessionOpen) {
-        // Non-blocking for staff (unlike the Channel Partner path above) --
-        // the visit still saves and the code is queued; it'll go out
-        // automatically once any WhatsApp number reconnects.
-        setNotification({ type: 'error', message: 'Visit logged and the code is queued, but no WhatsApp number is currently connected — it will send once one reconnects.' });
       } else {
-        setNotification({ type: 'success', message: 'Walk-in visit logged. Verification code sent to the customer and Channel Partner.' });
+        setNotification({ type: 'success', message: 'Walk-in visit logged. Verification code queued for the customer and Channel Partner.' });
       }
 
       setIsQuickCreateOpen(false);
@@ -823,7 +864,7 @@ export const SiteVisits: React.FC = () => {
                   const cp = channelPartners.find(c => c.id === v.channel_partner_id);
                   const msgStatus = summarizeMsgStatus(v.id);
                   return (
-                    <tr key={v.id} className="hover:bg-slate-50/50">
+                    <tr key={v.id} ref={registerRow(v.id)} className={`hover:bg-slate-50/50 ${rowClass(v.id)}`}>
                       <td className="py-3 px-6">
                         <div className="font-semibold text-slate-900">{v.customer_name}</div>
                         <div className="text-xs text-slate-500">{v.customer_mobile}</div>
@@ -910,7 +951,7 @@ export const SiteVisits: React.FC = () => {
                     filteredVisits.map((v) => {
                       const lead = leadsMap.get(v.lead_id || '');
                       return (
-                        <tr key={v.id} className="hover:bg-slate-50/50 transition-colors">
+                        <tr key={v.id} ref={registerRow(v.id)} className={`hover:bg-slate-50/50 transition-colors ${rowClass(v.id)}`}>
                           <td className="py-4 px-6 font-semibold text-slate-900">{lead?.customer_name || 'Unnamed Client'}</td>
                           <td className="py-4 px-6 text-sm text-slate-600">{lead?.mobile || 'N/A'}</td>
                           <td className="py-4 px-6 text-sm text-slate-600">
@@ -1306,7 +1347,7 @@ export const SiteVisits: React.FC = () => {
                   <select
                     required
                     value={quickProjectId}
-                    onChange={(e) => { setQuickProjectId(e.target.value); setQuickSourcingManagerName(''); }}
+                    onChange={(e) => { setQuickProjectId(e.target.value); setQuickSourcingManagerId(''); setQuickPresalesId(''); }}
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
                   >
                     <option value="">Select Project...</option>
@@ -1320,21 +1361,40 @@ export const SiteVisits: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager Name</label>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager</label>
                   <select
-                    value={quickSourcingManagerName}
-                    onChange={(e) => setQuickSourcingManagerName(e.target.value)}
+                    value={quickSourcingManagerId}
+                    onChange={(e) => setQuickSourcingManagerId(e.target.value)}
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
                   >
                     <option value="">Select Sourcing Manager... (optional)</option>
                     {formSourcingManagers.map(sm => (
-                      <option key={sm.id} value={sm.name}>{sm.name}</option>
+                      <option key={sm.id} value={sm.id}>{sm.name}</option>
                     ))}
                   </select>
                   {!quickProjectId ? (
                     <p className="text-[10px] text-slate-400 mt-1">Select a Project first to see its Sourcing Managers.</p>
                   ) : formSourcingManagers.length === 0 && (
                     <p className="text-[10px] text-amber-600 mt-1">No Sourcing Manager is assigned to this project yet.</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Presales</label>
+                  <select
+                    value={quickPresalesId}
+                    onChange={(e) => setQuickPresalesId(e.target.value)}
+                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
+                  >
+                    <option value="">Select Presales... (optional)</option>
+                    {formPresalesStaff.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                  {!quickProjectId ? (
+                    <p className="text-[10px] text-slate-400 mt-1">Select a Project first to see its Presales staff.</p>
+                  ) : formPresalesStaff.length === 0 && (
+                    <p className="text-[10px] text-amber-600 mt-1">No Presales staff is assigned to this project yet.</p>
                   )}
                 </div>
 

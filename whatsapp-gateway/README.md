@@ -1,10 +1,20 @@
 # CRM WhatsApp Gateway
 
-A standalone Node service that connects one WhatsApp number to the CRM, used for:
+A standalone Node service that connects **everyone's own personal WhatsApp except Swapnil's** to the CRM, used for:
 - **Bulk marketing** (the Marketing page's audience campaigns)
 - **Channel Partner lead verification codes** (sent to the client when a CP tags a lead)
+- Any other outbound WhatsApp message queued by staff other than Swapnil
 
-Built on [Baileys](https://github.com/WhiskeySockets/Baileys) — a free, unofficial WhatsApp Web client library. No Chromium, no per-message cost, runs comfortably on a free-tier host. See "Risks" below before relying on it for anything business-critical.
+Built on [Baileys](https://github.com/WhiskeySockets/Baileys) — a free, unofficial WhatsApp Web client library. No Chromium, no per-message cost, runs comfortably on a free-tier host or a laptop terminal. See "Risks" below before relying on it for anything business-critical.
+
+## Hybrid sending model
+
+The CRM splits outbound WhatsApp sending two ways, both draining the same `whatsapp_outbox` table:
+
+- **Swapnil** — his queued messages (`created_by = <Swapnil's user id>`), plus any system-generated row with no `created_by`, are sent through Meta's **official WhatsApp Business Cloud API** (a single verified business number). This is handled server-side by the `send-whatsapp` Supabase Edge Function on a Supabase Cron schedule — nothing to run locally, always on.
+- **Everyone else** — their queued messages are sent from **their own personal WhatsApp**, paired by scanning a QR code in the CRM (Settings → WhatsApp Connection). This is what *this* gateway (`whatsapp-gateway/`) does: it must be started with `npm start` from a terminal to be online, and only claims rows whose `created_by` is not Swapnil's user id — Swapnil's rows are deliberately left alone so the two paths never race for the same message.
+
+Since this gateway only runs when someone starts it from a terminal, staff other than Swapnil won't have their messages sent until it's running and their own session is paired.
 
 ## How it works
 

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../../services/supabaseClient';
 import { useAuth } from '../../hooks/useAuth';
+import { isSuperAdmin } from '../../utils/permissions';
 import { X, Upload, Download, Loader2 } from 'lucide-react';
 
 interface BulkUploadModalProps {
@@ -11,7 +12,7 @@ interface BulkUploadModalProps {
 }
 
 export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClose, onUploadComplete }) => {
-  const { user, role } = useAuth();
+  const { user, role, assignedProjects } = useAuth();
   // A channel partner uploading their own batch isn't "assigning to a CP"
   // (they ARE the CP) and has no business picking which internal
   // telecaller follows up -- that's a staff decision. Both sections below
@@ -41,6 +42,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
   const [partners, setPartners] = useState<{ id: string; name: string; company_name: string | null }[]>([]);
   const [telecallers, setTelecallers] = useState<{ id: string; name: string }[]>([]);
+  const [projectTeamMap, setProjectTeamMap] = useState<Map<string, Set<string>>>(new Map());
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +63,10 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
     setSingleMobile('');
     setSingleConfig('');
     setSingleBudget('');
-    setProjectId('');
+    const initialProjectId = (!isSuperAdmin(role) && assignedProjects && assignedProjects.length === 1)
+      ? assignedProjects[0]
+      : '';
+    setProjectId(initialProjectId);
     setChannelPartnerId('');
     setTelecallerIds([]);
     setError(null);
@@ -87,13 +92,32 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
         return; // no telecaller list needed -- that section is hidden for them
       }
 
-      // Fetch Projects
+      // Fetch Projects - scoped to user's assigned projects for non-super-admins
       const { data: projData } = await supabase.from('projects').select('id, project_name');
-      if (projData) setProjects(projData.map(p => ({ id: p.id, name: p.project_name })));
+      if (projData) {
+        const filtered = projData.filter(p => isSuperAdmin(role) || (assignedProjects && assignedProjects.includes(p.id)));
+        setProjects(filtered.map(p => ({ id: p.id, name: p.project_name })));
+        if (!isSuperAdmin(role) && assignedProjects && assignedProjects.length === 1) {
+          setProjectId(assignedProjects[0]);
+        }
+      }
 
       // Fetch Channel Partners
       const { data: cpData } = await supabase.from('channel_partners').select('id, name, company_name').eq('status', 'active');
       if (cpData) setPartners(cpData.map(c => ({ id: c.id, name: c.name, company_name: c.company_name })));
+
+      // Fetch project team assignments (user_project_assignments) to scope telecallers by project
+      const { data: assignData, error: aErr } = await supabase
+        .from('user_project_assignments')
+        .select('user_id, project_id')
+        .eq('is_active', true);
+      if (aErr) console.error('Error fetching user_project_assignments:', aErr);
+      const teamMap = new Map<string, Set<string>>();
+      (assignData || []).forEach(row => {
+        if (!teamMap.has(row.project_id)) teamMap.set(row.project_id, new Set());
+        teamMap.get(row.project_id)!.add(row.user_id);
+      });
+      setProjectTeamMap(teamMap);
 
       // Fetch Telecallers (role = presales or presales_tl -- telecaller was
       // removed as a role entirely, merged into presales)
@@ -106,10 +130,14 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
         if (urErr) console.error('Error fetching user_roles:', urErr);
         if (userRoles && userRoles.length > 0) {
           const userIds = userRoles.map(ur => ur.user_id);
-          const { data: profiles, error: pErr } = await supabase.from('user_profiles').select('id, full_name').in('id', userIds);
+          const { data: profiles, error: pErr } = await supabase.from('user_profiles').select('id, full_name, status').in('id', userIds);
           if (pErr) console.error('Error fetching user_profiles:', pErr);
           if (profiles) {
-            setTelecallers(profiles.map(p => ({ id: p.id, name: p.full_name || 'Unknown' })));
+            setTelecallers(
+              profiles
+                .filter(p => p.status === 'active')
+                .map(p => ({ id: p.id, name: p.full_name || 'Unknown' }))
+            );
           }
         } else {
           console.log('No user_roles found for telecaller role IDs:', tcRoleIds);
@@ -130,6 +158,16 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
     XLSX.utils.book_append_sheet(wb, ws, 'Leads');
     XLSX.writeFile(wb, 'Bulk_Leads_Template.xlsx');
   };
+
+  const handleProjectChange = (newProjectId: string) => {
+    setProjectId(newProjectId);
+    const newTeam = projectTeamMap.get(newProjectId);
+    setTelecallerIds(prev => prev.filter(id => newTeam?.has(id)));
+  };
+
+  const visibleTelecallers = projectId
+    ? telecallers.filter(tc => projectTeamMap.get(projectId)?.has(tc.id))
+    : [];
 
   const toggleTelecaller = (id: string) => {
     setTelecallerIds(prev => 
@@ -249,28 +287,12 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
         if (insertErr) throw new Error(`Error inserting leads: ${insertErr.message}`);
       }
 
-      // 5. Notify telecallers
-      if (telecallerIds.length > 0) {
-        const notifications: any[] = [];
-        for (const tcId of telecallerIds) {
-          const count = newLeads.filter(l => l.telecaller_id === tcId).length;
-          if (count > 0) {
-            notifications.push({
-              user_id: tcId,
-              notification_type: 'bulk_upload_assignment',
-              title: 'New Leads Assigned',
-              message: `You have been assigned ${count} new leads from a bulk upload.`,
-              related_entity: 'bulk_upload',
-              related_id: bulkRecord.id,
-              is_read: false
-            });
-          }
-        }
-
-        if (notifications.length > 0) {
-          await supabase.from('notifications').insert(notifications);
-        }
-      }
+      // Notifying assignees is now handled by the
+      // trg_notify_bulk_upload_assignment DB trigger (statement-level on
+      // leads, aggregated per upload+assignee with its own dedupe guard for
+      // chunked inserts) -- it fires regardless of who performs the upload,
+      // unlike this frontend version which silently failed under RLS
+      // whenever the uploader wasn't a super_admin.
 
       setSuccess(mode === 'single' ? 'Lead added successfully.' : `Successfully uploaded ${newLeads.length} leads.`);
       setTimeout(() => {
@@ -391,7 +413,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
               <label className="block text-sm font-medium text-slate-700 mb-1">Project *</label>
               <select
                 value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
+                onChange={(e) => handleProjectChange(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
               >
                 <option value="">Select a Project</option>
@@ -424,10 +446,12 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Assign Presales (Telecaller) — Round-Robin</label>
                   <div className="border border-slate-300 rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
-                    {telecallers.length === 0 ? (
-                      <p className="text-sm text-slate-500">No Presales (Telecaller) staff found.</p>
+                    {!projectId ? (
+                      <p className="text-sm text-slate-400 italic">Please select a project above to see assigned Presales (Telecallers).</p>
+                    ) : visibleTelecallers.length === 0 ? (
+                      <p className="text-sm text-amber-600 italic">No Presales (Telecaller) staff assigned to this project.</p>
                     ) : (
-                      telecallers.map(tc => (
+                      visibleTelecallers.map(tc => (
                         <label key={tc.id} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                           <input
                             type="checkbox"
