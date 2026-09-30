@@ -15,12 +15,10 @@ import {
   Building2,
 } from 'lucide-react';
 
-// Hybrid WhatsApp sending: Swapnil's messages go through the official Meta
-// Cloud API (a single shared business number, no pairing needed — see
-// supabase/functions/send-whatsapp). Everyone else sends from their own
-// personal WhatsApp, paired here by scanning a QR code, via the Baileys
-// gateway run locally with `npm start` in whatsapp-gateway/.
-const SWAPNIL_USER_ID = 'ccfd55b7-36a2-4ab0-964e-a7e8403a9504';
+// Every user pairs their own WhatsApp here (QR code, via the Baileys gateway
+// run with `npm start` in whatsapp-gateway/) for manual Lead messages and
+// Marketing campaigns. System messages (welcome, site-visit confirmation,
+// onboarding) don't need any pairing -- they go through the official Cloud API.
 
 interface WhatsAppSession {
   id: string;
@@ -41,21 +39,6 @@ const statusMeta: Record<string, { label: string; color: string; dot: string }> 
   logged_out: { label: 'Logged Out', color: 'text-rose-700 bg-rose-50 border-rose-200', dot: 'bg-rose-500' },
   disconnected: { label: 'Gateway Offline', color: 'text-slate-500 bg-slate-50 border-slate-200', dot: 'bg-slate-300' },
 };
-
-const CloudApiPanel: React.FC = () => (
-  <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
-    <h3 className="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
-      <MessageSquare className="h-4 w-4 text-indigo-600" /> WhatsApp Connection
-    </h3>
-    <p className="text-xs text-slate-500 mb-4">
-      Your messages send through Meta's official WhatsApp Business Cloud API — the shared verified business number, not a QR-paired personal WhatsApp.
-    </p>
-    <div className="flex items-center gap-2 px-3 py-2 rounded-xl border text-sm font-semibold w-fit text-emerald-700 bg-emerald-50 border-emerald-200">
-      <span className="w-2 h-2 rounded-full bg-emerald-500" />
-      Connected via Official Cloud API
-    </div>
-  </div>
-);
 
 const QrPairingPanel: React.FC = () => {
   const { user } = useAuth();
@@ -151,7 +134,7 @@ const QrPairingPanel: React.FC = () => {
         <MessageSquare className="h-4 w-4 text-indigo-600" /> WhatsApp Connection
       </h3>
       <p className="text-xs text-slate-500 mb-4">
-        Pair your own WhatsApp here — messages you send from the CRM (bulk marketing, CP lead verification codes) go out from your own number once connected.
+        Pair your own WhatsApp here — manual messages you send to leads and your Marketing campaigns go out from your own number once connected.
       </p>
 
       <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-sm font-semibold mb-4 w-fit ${meta.color}`}>
@@ -212,12 +195,6 @@ const QrPairingPanel: React.FC = () => {
       )}
     </div>
   );
-};
-
-const WhatsAppPanel: React.FC = () => {
-  const { user } = useAuth();
-  if (user?.id === SWAPNIL_USER_ID) return <CloudApiPanel />;
-  return <QrPairingPanel />;
 };
 
 // Lets an already-logged-in user set a new password without going through
@@ -594,7 +571,7 @@ export const Settings: React.FC = () => {
       </div>
 
       <ChangePasswordPanel />
-      {canUseWhatsApp && <WhatsAppPanel />}
+      {canUseWhatsApp && <QrPairingPanel />}
       {role === 'channel_partner' && <MyCpProfilePanel />}
     </div>
   );

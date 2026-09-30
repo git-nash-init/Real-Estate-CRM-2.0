@@ -1,10 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
 import { canEditLead, canConvertVisitToLead } from '../utils/permissions';
 import { isSuperAdmin } from '../utils/permissions';
 import { useHighlightParam } from '../hooks/useHighlightParam';
+import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
+import { PhoneActions } from '../components/ui/PhoneActions';
+import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { BulkSelectHeaderCell, BulkSelectCell, BulkActionBar } from '../components/ui/BulkActionBar';
 import {
   Search,
   RefreshCw,
@@ -44,11 +48,6 @@ interface Lead {
   channel_partner_id: string | null;
 }
 
-// Walk-in visit codes for a channel-partner-submitted visit always send
-// from Swapnil's official Cloud API number, not the CP's -- channel
-// partners don't get their own WhatsApp login for this feature.
-const SWAPNIL_USER_ID = 'ccfd55b7-36a2-4ab0-964e-a7e8403a9504';
-
 export const SiteVisits: React.FC = () => {
   const { role, user, assignedProjects } = useAuth();
   const isChannelPartner = role === 'channel_partner';
@@ -84,6 +83,9 @@ export const SiteVisits: React.FC = () => {
 
   // Pagination states
   const [page, setPage] = useState(0);
+  // Clear any bulk-select checkboxes when the page changes, so a stale
+  // selection from a previous page can't be bulk-deleted by mistake.
+  useEffect(() => { setSelectedVisitIds(new Set()); }, [page]);
   const [pageSize] = useState(10);
   const [totalCount, setTotalCount] = useState(0);
 
@@ -160,6 +162,7 @@ export const SiteVisits: React.FC = () => {
     verification_code: string;
     referenced_by: string;
     sourcing_manager_name?: string | null;
+    sourcing_manager_id?: string | null;
     status: 'active' | 'expired';
     created_at: string;
     converted_to_lead_id?: string | null;
@@ -361,6 +364,15 @@ export const SiteVisits: React.FC = () => {
       setQuickCreateError('Customer Name, WhatsApp Number, Visit Date & Time and Project are required.');
       return;
     }
+    // A CP-sourced visit with no Sourcing Manager selected converts into a
+    // lead with no Sourcing Manager, which then counts toward nobody's
+    // target -- and since a Channel Partner is typically mapped to several
+    // Sourcing Managers, there's no reliable way to auto-attribute it after
+    // the fact, so this has to be caught at entry time instead.
+    if (quickChannelPartnerId && !quickSourcingManagerId) {
+      setQuickCreateError('Sourcing Manager is required when a Channel Partner is selected, so this visit counts toward the right person\'s target.');
+      return;
+    }
 
     setQuickCreateError(null);
     setQuickCreateLoading(true);
@@ -420,16 +432,19 @@ export const SiteVisits: React.FC = () => {
         const cpPhone = normalizePhone(cp.mobile);
         outboxRows.push({ to_phone: cpPhone, message });
       }
-      // Channel partners don't get their own WhatsApp login for this
-      // feature (no QR pairing UI is shown to them), so a CP-submitted
-      // walk-in code always routes through Swapnil's number -- the one
-      // sender that's always on (official Cloud API), rather than through
-      // the Baileys gateway where nobody would be connected for them.
-      // Every other role's created_by routes through their own paired
-      // WhatsApp via the Baileys gateway as usual.
-      const outboxSenderId = isChannelPartner ? SWAPNIL_USER_ID : (user?.id || null);
+      // Sent by the official Cloud API through the approved
+      // site_visit_confirmation template -- a plain text message can't reach
+      // a customer who has never messaged us. `message` above is kept as the
+      // readable log text and as the fallback if the template isn't approved.
       const { error: outboxErr } = await supabase.from('whatsapp_outbox').insert(
-        outboxRows.map(r => ({ ...r, status: 'queued', quick_visit_id: inserted.id, created_by: outboxSenderId }))
+        outboxRows.map(r => ({
+          ...r,
+          status: 'queued',
+          quick_visit_id: inserted.id,
+          created_by: user?.id || null,
+          template_name: 'site_visit_confirmation',
+          template_params: [quickCustomerName.trim(), projectName, visitDateLabel, verificationCode, customerPhone],
+        }))
       );
       if (outboxErr) {
         // Visit itself is already saved — a failed notification shouldn't
@@ -635,6 +650,71 @@ export const SiteVisits: React.FC = () => {
     }
   };
 
+  // Bulk select -- same delete permission as the per-row Trash2 buttons
+  // (canDelete === super_admin only), one set of checkboxes per table.
+  const [selectedVisitIds, setSelectedVisitIds] = useState<Set<string>>(new Set());
+  const toggleVisitSelected = (id: string, checked: boolean) => {
+    setSelectedVisitIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+  const toggleAllVisitsSelected = (ids: string[], checked: boolean) => {
+    setSelectedVisitIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => { if (checked) next.add(id); else next.delete(id); });
+      return next;
+    });
+  };
+  const handleBulkDeleteVisits = async () => {
+    const ids = Array.from(selectedVisitIds);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length} site visit(s)? This cannot be undone.`)) return;
+    try {
+      const { error } = await supabase.from('site_visits').delete().in('id', ids);
+      if (error) throw error;
+      setVisits(prev => prev.filter(v => !selectedVisitIds.has(v.id)));
+      if (selectedVisit && selectedVisitIds.has(selectedVisit.id)) setSelectedVisit(null);
+      setNotification({ type: 'success', message: `${ids.length} site visit(s) deleted.` });
+      setSelectedVisitIds(new Set());
+    } catch (err: any) {
+      reportQueryError('Site Visits: bulk delete', err);
+      setNotification({ type: 'error', message: err.message || 'Failed to delete selected site visits.' });
+    }
+  };
+
+  const [selectedQuickVisitIds, setSelectedQuickVisitIds] = useState<Set<string>>(new Set());
+  const toggleQuickVisitSelected = (id: string, checked: boolean) => {
+    setSelectedQuickVisitIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+  const toggleAllQuickVisitsSelected = (ids: string[], checked: boolean) => {
+    setSelectedQuickVisitIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => { if (checked) next.add(id); else next.delete(id); });
+      return next;
+    });
+  };
+  const handleBulkDeleteQuickVisits = async () => {
+    const ids = Array.from(selectedQuickVisitIds);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length} walk-in visit(s)? This cannot be undone.`)) return;
+    try {
+      const { error } = await supabase.from('quick_site_visits').delete().in('id', ids);
+      if (error) throw error;
+      setQuickVisits(prev => prev.filter(v => !selectedQuickVisitIds.has(v.id)));
+      setNotification({ type: 'success', message: `${ids.length} walk-in visit(s) deleted.` });
+      setSelectedQuickVisitIds(new Set());
+    } catch (err: any) {
+      reportQueryError('Site Visits: bulk delete walk-in visits', err);
+      setNotification({ type: 'error', message: err.message || 'Failed to delete selected walk-in visits.' });
+    }
+  };
+
   // Converts a Pre Tagging walk-in visit's customer into a real lead --
   // per the client, available to every role except telecaller and
   // channel_partner (see canConvertVisitToLead). Carries over the Channel
@@ -675,6 +755,12 @@ export const SiteVisits: React.FC = () => {
           mobile: visit.customer_mobile,
           project_id: visit.project_id,
           channel_partner_id: visit.channel_partner_id || null,
+          // Carry the walk-in's Sourcing Manager and visit date onto the
+          // lead -- a Sourcing Manager's target counts CP-sourced leads by
+          // their Visit Date (client-verified against the Leads export), so
+          // without these a converted walk-in silently counted for nobody.
+          sourcing_manager_id: visit.sourcing_manager_id || null,
+          visit_date: visit.visit_at ? new Date(visit.visit_at).toLocaleDateString('en-CA') : null,
           source: visit.channel_partner_id ? 'channel_partner' : 'walk_in',
           status: 'new',
           lead_number: nextLeadNumber,
@@ -734,6 +820,32 @@ export const SiteVisits: React.FC = () => {
   const filteredVisits = getFilteredVisits();
   const startRange = page * pageSize + 1;
   const endRange = Math.min((page + 1) * pageSize, totalCount);
+
+  // Column sort -- client-side over the current page's fetched rows only.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDirection>('asc');
+  const toggleSort = (key: string) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  };
+  const visitSortValue = (v: typeof filteredVisits[number], key: string): unknown => {
+    const lead = leadsMap.get(v.lead_id || '');
+    switch (key) {
+      case 'customer': return lead?.customer_name;
+      case 'phone': return lead?.mobile;
+      case 'project': return projectMap.get(v.project_id || '');
+      case 'sourcingManager': return profileMap.get(lead?.owner_id || '');
+      case 'scheduledAt': return v.scheduled_at;
+      case 'status': return v.status;
+      default: return null;
+    }
+  };
+  const sortedVisits = useMemo(() => {
+    if (!sortKey) return filteredVisits;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...filteredVisits].sort((a, b) => compareValues(visitSortValue(a, sortKey), visitSortValue(b, sortKey)) * dir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredVisits, sortKey, sortDir, leadsMap, projectMap, profileMap]);
 
   return (
     <div className="space-y-6">
@@ -845,10 +957,26 @@ export const SiteVisits: React.FC = () => {
             <h3 className="text-sm font-bold text-slate-800">Walk-in Visits</h3>
             <p className="text-xxs text-slate-400 mt-0.5">Logged directly — not tied to any Lead. Auto-expires 24 hours after logging.</p>
           </div>
+          {canDelete && (
+            <div className="px-6 pt-3">
+              <BulkActionBar
+                count={selectedQuickVisitIds.size}
+                onCancel={() => setSelectedQuickVisitIds(new Set())}
+                actions={[{ label: 'Delete', onClick: handleBulkDeleteQuickVisits, danger: true }]}
+              />
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-100">
+                  {canDelete && (
+                    <BulkSelectHeaderCell
+                      allIds={quickVisits.map((v) => v.id)}
+                      selectedIds={selectedQuickVisitIds}
+                      onToggleAll={toggleAllQuickVisitsSelected}
+                    />
+                  )}
                   <th className="py-3 px-6">Customer</th>
                   <th className="py-3 px-6">Visit Time</th>
                   <th className="py-3 px-6">Project</th>
@@ -865,6 +993,9 @@ export const SiteVisits: React.FC = () => {
                   const msgStatus = summarizeMsgStatus(v.id);
                   return (
                     <tr key={v.id} ref={registerRow(v.id)} className={`hover:bg-slate-50/50 ${rowClass(v.id)}`}>
+                      {canDelete && (
+                        <BulkSelectCell id={v.id} selectedIds={selectedQuickVisitIds} onToggle={toggleQuickVisitSelected} />
+                      )}
                       <td className="py-3 px-6">
                         <div className="font-semibold text-slate-900">{v.customer_name}</div>
                         <div className="text-xs text-slate-500">{v.customer_mobile}</div>
@@ -933,27 +1064,44 @@ export const SiteVisits: React.FC = () => {
           </div>
         ) : (
           <>
+            {canDelete && (
+              <BulkActionBar
+                count={selectedVisitIds.size}
+                onCancel={() => setSelectedVisitIds(new Set())}
+                actions={[{ label: 'Delete', onClick: handleBulkDeleteVisits, danger: true }]}
+              />
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                    <th className="py-3.5 px-6">Customer / Lead</th>
-                    <th className="py-3.5 px-6">Phone</th>
-                    <th className="py-3.5 px-6">Associated Project</th>
-                    <th className="py-3.5 px-6">Sourcing Manager</th>
-                    <th className="py-3.5 px-6">Site Visit Date & Time</th>
-                    <th className="py-3.5 px-6">Status</th>
+                    {canDelete && (
+                      <BulkSelectHeaderCell
+                        allIds={sortedVisits.map((v) => v.id)}
+                        selectedIds={selectedVisitIds}
+                        onToggleAll={toggleAllVisitsSelected}
+                      />
+                    )}
+                    <SortableTh label="Customer / Lead" active={sortKey === 'customer'} direction={sortDir} onClick={() => toggleSort('customer')} className="py-3.5 px-6" />
+                    <SortableTh label="Phone" active={sortKey === 'phone'} direction={sortDir} onClick={() => toggleSort('phone')} className="py-3.5 px-6" />
+                    <SortableTh label="Associated Project" active={sortKey === 'project'} direction={sortDir} onClick={() => toggleSort('project')} className="py-3.5 px-6" />
+                    <SortableTh label="Sourcing Manager" active={sortKey === 'sourcingManager'} direction={sortDir} onClick={() => toggleSort('sourcingManager')} className="py-3.5 px-6" />
+                    <SortableTh label="Site Visit Date & Time" active={sortKey === 'scheduledAt'} direction={sortDir} onClick={() => toggleSort('scheduledAt')} className="py-3.5 px-6" />
+                    <SortableTh label="Status" active={sortKey === 'status'} direction={sortDir} onClick={() => toggleSort('status')} className="py-3.5 px-6" />
                     <th className="py-3.5 px-6 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredVisits.length > 0 ? (
-                    filteredVisits.map((v) => {
+                  {sortedVisits.length > 0 ? (
+                    sortedVisits.map((v) => {
                       const lead = leadsMap.get(v.lead_id || '');
                       return (
                         <tr key={v.id} ref={registerRow(v.id)} className={`hover:bg-slate-50/50 transition-colors ${rowClass(v.id)}`}>
+                          {canDelete && (
+                            <BulkSelectCell id={v.id} selectedIds={selectedVisitIds} onToggle={toggleVisitSelected} />
+                          )}
                           <td className="py-4 px-6 font-semibold text-slate-900">{lead?.customer_name || 'Unnamed Client'}</td>
-                          <td className="py-4 px-6 text-sm text-slate-600">{lead?.mobile || 'N/A'}</td>
+                          <td className="py-4 px-6 text-sm text-slate-600"><PhoneActions phone={lead?.mobile} /></td>
                           <td className="py-4 px-6 text-sm text-slate-600">
                             {projectMap.get(v.project_id || '') || 'N/A'}
                           </td>
@@ -1016,7 +1164,7 @@ export const SiteVisits: React.FC = () => {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={7} className="py-20 text-center text-slate-400">
+                      <td colSpan={8} className="py-20 text-center text-slate-400">
                         <div className="flex flex-col items-center justify-center space-y-3">
                           <div className="bg-slate-50 p-4 rounded-full text-slate-300">
                             <MapPin className="h-8 w-8" />
@@ -1222,20 +1370,34 @@ export const SiteVisits: React.FC = () => {
       {/* LOG WALK-IN VISIT MODAL — standalone, no lead relation, open to
           every role. Duplicate customer numbers are explicitly allowed
           here (unlike Leads), per the client's requirement. */}
-      {isQuickCreateOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => { setIsQuickCreateOpen(false); resetQuickForm(); }} />
-
-          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-emerald-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">Log Walk-in Visit</span>
-              <button type="button" onClick={() => { setIsQuickCreateOpen(false); resetQuickForm(); }} className="p-1 rounded-lg text-emerald-100 hover:text-white focus:outline-none">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleQuickCreateSubmit}>
-              <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+      <SlideOverPanel
+        open={isQuickCreateOpen}
+        onClose={() => { setIsQuickCreateOpen(false); resetQuickForm(); }}
+        title="Log Walk-in Visit"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => { setIsQuickCreateOpen(false); resetQuickForm(); }}
+              disabled={quickCreateLoading}
+              className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="quick-visit-form"
+              disabled={quickCreateLoading}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-semibold shadow-md shadow-emerald-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
+            >
+              {quickCreateLoading ? 'Logging & Sending Code...' : 'Log Visit & Send Code'}
+            </button>
+          </>
+        }
+      >
+        {isQuickCreateOpen && (
+            <form id="quick-visit-form" onSubmit={handleQuickCreateSubmit}>
+              <div className="space-y-4">
                 {quickCreateError && (
                   <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl flex items-start space-x-2.5">
                     <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
@@ -1361,13 +1523,16 @@ export const SiteVisits: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Sourcing Manager</label>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                    Sourcing Manager{quickChannelPartnerId && ' *'}
+                  </label>
                   <select
                     value={quickSourcingManagerId}
                     onChange={(e) => setQuickSourcingManagerId(e.target.value)}
+                    required={!!quickChannelPartnerId}
                     className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
                   >
-                    <option value="">Select Sourcing Manager... (optional)</option>
+                    <option value="">{quickChannelPartnerId ? 'Select Sourcing Manager...' : 'Select Sourcing Manager... (optional)'}</option>
                     {formSourcingManagers.map(sm => (
                       <option key={sm.id} value={sm.id}>{sm.name}</option>
                     ))}
@@ -1376,6 +1541,9 @@ export const SiteVisits: React.FC = () => {
                     <p className="text-[10px] text-slate-400 mt-1">Select a Project first to see its Sourcing Managers.</p>
                   ) : formSourcingManagers.length === 0 && (
                     <p className="text-[10px] text-amber-600 mt-1">No Sourcing Manager is assigned to this project yet.</p>
+                  )}
+                  {quickChannelPartnerId && (
+                    <p className="text-[10px] text-slate-400 mt-1">Required for Channel Partner visits, so it counts toward the right target.</p>
                   )}
                 </div>
 
@@ -1418,28 +1586,9 @@ export const SiteVisits: React.FC = () => {
                   A unique verification code will be generated and sent via WhatsApp to the customer, and to the Channel Partner if one is selected. This visit stays <span className="font-semibold">active for 24 hours</span>, after which it automatically expires.
                 </div>
               </div>
-
-              <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => { setIsQuickCreateOpen(false); resetQuickForm(); }}
-                  disabled={quickCreateLoading}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={quickCreateLoading}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-semibold shadow-md shadow-emerald-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
-                >
-                  {quickCreateLoading ? 'Logging & Sending Code...' : 'Log Visit & Send Code'}
-                </button>
-              </div>
             </form>
-          </div>
-        </div>
-      )}
+        )}
+      </SlideOverPanel>
 
     </div>
   );

@@ -1,11 +1,15 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
-import { canCreateBooking, canCancelBooking, canReopenBooking, isSuperAdmin } from '../utils/permissions';
+import { canCreateBooking, canCancelBooking, canReopenBooking, canEditPayment, isSuperAdmin } from '../utils/permissions';
 import { computeCurrentlyDueTotal, totalMilestonePercentage } from '../utils/bookingDue';
 import { exportRowsToExcel } from '../utils/exportExcel';
 import { useHighlightParam } from '../hooks/useHighlightParam';
+import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
+import { ExportModal } from '../components/ui/ExportModal';
+import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { BulkSelectHeaderCell, BulkSelectCell, BulkActionBar } from '../components/ui/BulkActionBar';
 import {
   Search,
   RefreshCw,
@@ -115,6 +119,9 @@ export const Bookings: React.FC = () => {
 
   // Pagination states
   const [page, setPage] = useState(0);
+  // Clear any bulk-select checkboxes when the page changes, so a stale
+  // selection from a previous page can't be bulk-deleted by mistake.
+  useEffect(() => { setSelectedBookingIds(new Set()); }, [page]);
   const [pageSize] = useState(10);
   const [totalCount, setTotalCount] = useState(0);
 
@@ -545,20 +552,19 @@ export const Bookings: React.FC = () => {
         .filter((p: any) => p.status?.toLowerCase() === 'received' || p.status?.toLowerCase() === 'paid')
         .reduce((sum: number, p: any) => sum + p.amount, 0);
 
-      // Currently-due total isn't the booking's full grand total -- it's
-      // staged by the project's released payment percentage, plus
-      // first-payment/possession-triggered charges (see bookingDue.ts).
-      // GST/Stamp Duty/Registration/Other Charges become due AT the first
-      // payment (concurrent with it, not requiring a separate prior
-      // payment), so they're always included as collectible here --
-      // hasAnyPayment=true reflects "this transaction is or follows the
-      // first payment", which is always the case once a payment is being
-      // recorded at all.
-      const milestonePercent = towerMilestonePercent.get(dbBooking.tower_id || '') || 0;
-      const currentlyDueTotal = computeCurrentlyDueTotal(dbBooking, milestonePercent, true);
+      // A payment is allowed to run ahead of the currently-staged-due
+      // amount (the project's released payment percentage) -- client's
+      // explicit request: an advance/overpayment against the current stage
+      // is fine, it just shows as a negative "Outstanding (This Stage)"
+      // until the next milestone catches up to it. The only real ceiling
+      // is the booking's total value overall -- a payment still can't
+      // exceed what's actually owed across the whole booking.
+      const totalBookingVal = dbBooking.total_payable_amount !== null && dbBooking.total_payable_amount !== undefined
+        ? dbBooking.total_payable_amount
+        : dbBooking.booking_amount;
 
-      if (activeTotal + amt > currentlyDueTotal) {
-        throw new Error(`Payment amount exceeds the currently due balance (₹${currentlyDueTotal.toLocaleString('en-IN')} due so far, based on the project's released payment percentage).`);
+      if (activeTotal + amt > totalBookingVal) {
+        throw new Error(`Payment amount exceeds the booking's total value (₹${totalBookingVal.toLocaleString('en-IN')} total).`);
       }
 
       const { data: { user } } = await supabase.auth.getUser();
@@ -893,6 +899,58 @@ export const Bookings: React.FC = () => {
       console.error('Error deleting booking:', err);
       setNotification({ type: 'error', message: err.message || 'Failed to delete booking.' });
     }
+  };
+
+  // Bulk select -- same delete permission as the per-row Trash2 button
+  // (isSuperAdmin only). Deletes one at a time so each booking's unit gets
+  // freed back to 'available' exactly like the single-row path does,
+  // rather than duplicating that logic in a batch query.
+  const [selectedBookingIds, setSelectedBookingIds] = useState<Set<string>>(new Set());
+  const toggleBookingSelected = (id: string, checked: boolean) => {
+    setSelectedBookingIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+  const toggleAllBookingsSelected = (ids: string[], checked: boolean) => {
+    setSelectedBookingIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => { if (checked) next.add(id); else next.delete(id); });
+      return next;
+    });
+  };
+  const handleBulkDeleteBookings = async () => {
+    const selected = sortedBookings.filter((b) => selectedBookingIds.has(b.id));
+    if (selected.length === 0) return;
+    if (!window.confirm(`Are you sure you want to delete ${selected.length} booking(s)? Each unit will be freed up and made available again.`)) {
+      return;
+    }
+    let deleted = 0;
+    for (const booking of selected) {
+      try {
+        const { error: deleteErr } = await supabase.from('bookings').delete().eq('id', booking.id);
+        if (deleteErr) throw deleteErr;
+        if (booking.inventory_id) {
+          const { error: invErr } = await supabase
+            .from('project_inventory')
+            .update({ status: 'available' })
+            .eq('id', booking.inventory_id);
+          if (invErr) console.error('Failed to free up unit after booking deletion:', invErr.message);
+        }
+        deleted++;
+      } catch (err: any) {
+        console.error('Error deleting booking:', err);
+      }
+    }
+    setNotification({
+      type: deleted === selected.length ? 'success' : 'error',
+      message: deleted === selected.length
+        ? `${deleted} booking(s) deleted and units freed up.`
+        : `${deleted} of ${selected.length} booking(s) deleted -- some failed, check console.`,
+    });
+    setSelectedBookingIds(new Set());
+    handleSync();
   };
 
   // Auto-dismiss alert notifications
@@ -1580,12 +1638,16 @@ export const Bookings: React.FC = () => {
   // project-scoping branch below is dead in practice but kept for parity
   // with fetchBookings' own filter logic.
   const [exportingBookings, setExportingBookings] = useState(false);
-  const handleExportExcel = async () => {
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  // scope 'filtered' = today's behavior; 'all' skips search/status/project
+  // filters. Site Head project scoping is a data-access boundary, not a
+  // chosen filter, so it always applies regardless of scope.
+  const handleExportExcel = async (scope: 'all' | 'filtered' = 'filtered') => {
     setExportingBookings(true);
     try {
       let query = supabase.from('bookings').select('*');
-      if (statusFilter) query = query.eq('status', statusFilter);
-      if (searchQuery.trim()) {
+      if (scope === 'filtered' && statusFilter) query = query.eq('status', statusFilter);
+      if (scope === 'filtered' && searchQuery.trim()) {
         const term = searchQuery.trim().toLowerCase();
         const matchingLeadIds = leadsList.filter(l => l.customer_name?.toLowerCase().includes(term)).map(l => l.id);
         const matchingUnitIds = inventoryList.filter((u: any) => u.unit_number?.toLowerCase().includes(term)).map(u => u.id);
@@ -1596,13 +1658,13 @@ export const Bookings: React.FC = () => {
       }
       if (role === 'site_head') {
         if (assignedProjects && assignedProjects.length > 0) {
-          query = projectFilter && assignedProjects.includes(projectFilter)
+          query = scope === 'filtered' && projectFilter && assignedProjects.includes(projectFilter)
             ? query.eq('project_id', projectFilter)
             : query.in('project_id', assignedProjects);
         } else {
           query = query.eq('project_id', '00000000-0000-0000-0000-000000000000');
         }
-      } else if (projectFilter) {
+      } else if (scope === 'filtered' && projectFilter) {
         query = query.eq('project_id', projectFilter);
       }
       query = query.order('booking_date', { ascending: false });
@@ -1623,6 +1685,15 @@ export const Bookings: React.FC = () => {
           'Project': projectMap.get(b.project_id || '') || '',
           'Tower': towersMap.get(unit?.tower_id || '') || '',
           'Unit': unit?.unit_number || '',
+          // Same lookups the booking detail view uses: CP and Closing
+          // Manager live on the booking itself, the Sourcing Manager on
+          // the lead the booking was made against.
+          'Channel Partner': b.channel_partner_id ? (channelPartnerMap.get(b.channel_partner_id) || '') : '',
+          'Sourcing Manager': profileMap.get(lead?.sourcing_manager_id || '') || '',
+          // Most bookings have no closing_manager stored on the booking row
+          // itself; the lead's Allocated To (owner) is the closing manager
+          // in that case -- same fallback chain as the detail view.
+          'Closing Manager': profileMap.get(b.closing_manager || '') || profileMap.get(b.sales_owner || '') || profileMap.get(lead?.owner_id || '') || '',
           'Agreement Value': baseAmt,
           'Total Payable': totalPayable,
           'Currently Due': currentlyDue,
@@ -1640,6 +1711,35 @@ export const Bookings: React.FC = () => {
 
   const startRange = page * pageSize + 1;
   const endRange = Math.min((page + 1) * pageSize, totalCount);
+
+  // Column sort -- client-side over the current page's fetched rows only,
+  // same as Leads.tsx; never changes what's fetched/paginated.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDirection>('asc');
+  const toggleSort = (key: string) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  };
+  const bookingSortValue = (b: Booking, key: string): unknown => {
+    const lead = leadsMap.get(b.lead_id || '');
+    const unit = inventoryMap.get(b.inventory_id || '');
+    switch (key) {
+      case 'customer': return lead?.customer_name || b.customer_name;
+      case 'project': return projectMap.get(b.project_id || '');
+      case 'unit': return unit?.unit_number;
+      case 'baseAmount': return b.consideration_amount !== null ? b.consideration_amount : (b.booking_amount || 0);
+      case 'totalPayable': return b.total_payable_amount !== null ? b.total_payable_amount : (b.booking_amount || 0);
+      case 'bookingDate': return b.booking_date;
+      case 'status': return b.status;
+      default: return null;
+    }
+  };
+  const sortedBookings = useMemo(() => {
+    if (!sortKey) return filteredBookings;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...filteredBookings].sort((a, b) => compareValues(bookingSortValue(a, sortKey), bookingSortValue(b, sortKey)) * dir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredBookings, sortKey, sortDir, leadsMap, inventoryMap, projectMap]);
 
   // Scoped project and closing managers for booking creation form
   const currentCreateProjectId = selectedProjectId || (!isSuperAdmin(role) && assignedProjects && assignedProjects.length === 1 ? assignedProjects[0] : '');
@@ -1729,7 +1829,7 @@ export const Bookings: React.FC = () => {
 
           {isSuperAdmin(role) && (
             <button
-              onClick={handleExportExcel}
+              onClick={() => setExportModalOpen(true)}
               disabled={exportingBookings}
               className="flex items-center space-x-2 bg-white border border-slate-200 px-4 py-2 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm focus:outline-none disabled:opacity-50"
             >
@@ -1737,6 +1837,13 @@ export const Bookings: React.FC = () => {
               <span>{exportingBookings ? 'Exporting...' : 'Export to Excel'}</span>
             </button>
           )}
+          <ExportModal
+            open={exportModalOpen}
+            onClose={() => setExportModalOpen(false)}
+            entityLabel="bookings"
+            filteredCount={totalCount}
+            onExport={(scope) => handleExportExcel(scope)}
+          />
           {canCreateBooking(role) && (
             <button
               onClick={() => setIsCreateOpen(true)}
@@ -1810,7 +1917,7 @@ export const Bookings: React.FC = () => {
             className="border border-slate-200 rounded-xl px-3 py-2 bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all w-full"
           >
             <option value="">All Statuses</option>
-            <option value="draft">Draft</option>
+            <option value="draft">Draft (On Hold)</option>
             <option value="confirmed">Confirmed</option>
             <option value="cancelled">Cancelled</option>
           </select>
@@ -1826,24 +1933,38 @@ export const Bookings: React.FC = () => {
           </div>
         ) : (
           <>
+            {isSuperAdmin(role) && (
+              <BulkActionBar
+                count={selectedBookingIds.size}
+                onCancel={() => setSelectedBookingIds(new Set())}
+                actions={[{ label: 'Delete', onClick: handleBulkDeleteBookings, danger: true }]}
+              />
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                    <th className="py-3.5 px-6">Customer / Lead</th>
-                    <th className="py-3.5 px-6">Project Focus</th>
-                    <th className="py-3.5 px-6">Inventory Unit</th>
-                    <th className="py-3.5 px-6">Base Amount</th>
-                    <th className="py-3.5 px-6">Total Payable</th>
+                    {isSuperAdmin(role) && (
+                      <BulkSelectHeaderCell
+                        allIds={sortedBookings.map((b) => b.id)}
+                        selectedIds={selectedBookingIds}
+                        onToggleAll={toggleAllBookingsSelected}
+                      />
+                    )}
+                    <SortableTh label="Customer / Lead" active={sortKey === 'customer'} direction={sortDir} onClick={() => toggleSort('customer')} className="py-3.5 px-6" />
+                    <SortableTh label="Project Focus" active={sortKey === 'project'} direction={sortDir} onClick={() => toggleSort('project')} className="py-3.5 px-6" />
+                    <SortableTh label="Inventory Unit" active={sortKey === 'unit'} direction={sortDir} onClick={() => toggleSort('unit')} className="py-3.5 px-6" />
+                    <SortableTh label="Base Amount" active={sortKey === 'baseAmount'} direction={sortDir} onClick={() => toggleSort('baseAmount')} className="py-3.5 px-6" />
+                    <SortableTh label="Total Payable" active={sortKey === 'totalPayable'} direction={sortDir} onClick={() => toggleSort('totalPayable')} className="py-3.5 px-6" />
                     <th className="py-3.5 px-6">Currently Due</th>
-                    <th className="py-3.5 px-6">Booking Date</th>
-                    <th className="py-3.5 px-6">Status</th>
+                    <SortableTh label="Booking Date" active={sortKey === 'bookingDate'} direction={sortDir} onClick={() => toggleSort('bookingDate')} className="py-3.5 px-6" />
+                    <SortableTh label="Status" active={sortKey === 'status'} direction={sortDir} onClick={() => toggleSort('status')} className="py-3.5 px-6" />
                     <th className="py-3.5 px-6 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredBookings.length > 0 ? (
-                    filteredBookings.map((b) => {
+                  {sortedBookings.length > 0 ? (
+                    sortedBookings.map((b) => {
                       const lead = leadsMap.get(b.lead_id || '');
                       const unit = inventoryMap.get(b.inventory_id || '');
                       const baseAmt = b.consideration_amount !== null ? b.consideration_amount : (b.booking_amount || 0);
@@ -1852,6 +1973,9 @@ export const Bookings: React.FC = () => {
                       const bCurrentlyDue = computeCurrentlyDueTotal(b, bMilestonePercent, !!bookingHasPaymentMap.get(b.id));
                       return (
                         <tr key={b.id} ref={registerRow(b.id)} className={`hover:bg-slate-50/50 transition-colors ${rowClass(b.id)}`}>
+                          {isSuperAdmin(role) && (
+                            <BulkSelectCell id={b.id} selectedIds={selectedBookingIds} onToggle={toggleBookingSelected} />
+                          )}
                           <td className="py-4 px-6 font-semibold text-slate-900">
                             {lead?.customer_name || b.customer_name || 'Unnamed Client'}
                             {b.customer_name && lead?.customer_name && b.customer_name !== lead.customer_name && (
@@ -1959,7 +2083,7 @@ export const Bookings: React.FC = () => {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={8} className="py-20 text-center text-slate-400">
+                      <td colSpan={9} className="py-20 text-center text-slate-400">
                         <div className="flex flex-col items-center justify-center space-y-3">
                           <div className="bg-slate-50 p-4 rounded-full text-slate-300">
                             <IndianRupee className="h-8 w-8" />
@@ -2288,7 +2412,12 @@ export const Bookings: React.FC = () => {
                   // first-payment/possession-triggered charges.
                   const milestonePercent = towerMilestonePercent.get(selectedBooking.tower_id || '') || 0;
                   const currentlyDueTotal = computeCurrentlyDueTotal(selectedBooking, milestonePercent, totalPaid > 0);
-                  const outstanding = Math.max(0, currentlyDueTotal - totalPaid);
+                  // No longer clamped to 0 -- a payment can run ahead of
+                  // the currently-staged-due amount (an advance against a
+                  // future milestone), which shows here as a negative
+                  // outstanding until the next stage releases and catches
+                  // up to it.
+                  const outstanding = currentlyDueTotal - totalPaid;
 
                   return (
                     <div className="space-y-5">
@@ -2308,14 +2437,19 @@ export const Bookings: React.FC = () => {
                         </div>
                         <div>
                           <span className="block font-bold text-slate-400 uppercase tracking-wider text-xxs">Outstanding (This Stage)</span>
-                          <span className="font-bold text-indigo-600 text-sm">₹{outstanding.toLocaleString('en-IN')}</span>
+                          <span className={`font-bold text-sm ${outstanding < 0 ? 'text-emerald-600' : 'text-indigo-600'}`}>
+                            {outstanding < 0 ? '-' : ''}₹{Math.abs(outstanding).toLocaleString('en-IN')}
+                          </span>
+                          {outstanding < 0 && (
+                            <span className="block text-xxs text-emerald-500 font-medium mt-0.5">Advance against next stage</span>
+                          )}
                         </div>
                       </div>
 
                       {/* Header and Record Button */}
                       <div className="flex justify-between items-center pt-2">
                         <span className="block font-bold text-slate-700 uppercase tracking-wide text-xs">Receipt Ledger Ledger</span>
-                        {role !== 'channel_partner' && (
+                        {canEditPayment(role) && (
                           <button
                             type="button"
                             onClick={() => {
@@ -2658,22 +2792,33 @@ export const Bookings: React.FC = () => {
       )}
 
       {/* CREATE MODAL */}
-      {isCreateOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsCreateOpen(false)} />
-          
-          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            {/* Header */}
-            <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">Create New Booking</span>
-              <button type="button" onClick={() => setIsCreateOpen(false)} className="p-1 rounded-lg text-indigo-200 hover:text-white focus:outline-none">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Form */}
-            <form onSubmit={handleCreateSubmit}>
-              <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+      <SlideOverPanel
+        open={isCreateOpen}
+        onClose={() => setIsCreateOpen(false)}
+        title="Create New Booking"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setIsCreateOpen(false)}
+              className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="booking-create-form"
+              disabled={createLoading}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
+            >
+              {createLoading ? 'Inserting...' : 'Create Booking'}
+            </button>
+          </>
+        }
+      >
+        {isCreateOpen && (
+            <form id="booking-create-form" onSubmit={handleCreateSubmit}>
+              <div className="space-y-4">
                 {createError && (
                   <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl flex items-start space-x-2.5">
                     <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
@@ -2957,18 +3102,15 @@ export const Bookings: React.FC = () => {
                   />
                 </div>
 
-                {/* Status select */}
+                {/* A new booking always starts as Draft (the unit is held). It
+                    only becomes a real Booking once someone confirms it --
+                    client's rule, so there's no status to pick here. */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Initial Status *</label>
-                  <select
-                    value={selectedStatus}
-                    onChange={(e) => setSelectedStatus(e.target.value)}
-                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-700 text-sm focus:bg-white focus:outline-none transition-all"
-                  >
-                    <option value="draft">Draft</option>
-                    {canApproveBooking(selectedBooking) && <option value="confirmed">Confirmed</option>}
-                    <option value="cancelled">Cancelled</option>
-                  </select>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Initial Status</label>
+                  <div className="flex items-start gap-2 px-3 py-2.5 border border-amber-200 bg-amber-50 rounded-xl text-xs text-amber-800">
+                    <span className="font-bold">Draft</span>
+                    <span>&mdash; the unit is put on Hold until this booking is confirmed.</span>
+                  </div>
                 </div>
 
                 {/* Notes */}
@@ -2983,44 +3125,38 @@ export const Bookings: React.FC = () => {
                   />
                 </div>
               </div>
-
-              {/* Form Footer */}
-              <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsCreateOpen(false)}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={createLoading}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
-                >
-                  {createLoading ? 'Inserting...' : 'Create Booking'}
-                </button>
-              </div>
             </form>
-          </div>
-        </div>
-      )}
+        )}
+      </SlideOverPanel>
 
       {/* EDIT BOOKING MODAL (super_admin only) */}
-      {editingBooking && (
-        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={closeEditBooking} />
-
-          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">Edit Booking — {editingBooking.booking_number}</span>
-              <button type="button" onClick={closeEditBooking} className="p-1 rounded-lg text-indigo-200 hover:text-white focus:outline-none">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleEditSubmit}>
-              <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+      <SlideOverPanel
+        open={!!editingBooking}
+        onClose={closeEditBooking}
+        title={`Edit Booking${editingBooking ? ` — ${editingBooking.booking_number}` : ''}`}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={closeEditBooking}
+              className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="booking-edit-form"
+              disabled={editLoading}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
+            >
+              {editLoading ? 'Saving...' : 'Save Changes'}
+            </button>
+          </>
+        }
+      >
+        {editingBooking && (
+            <form id="booking-edit-form" onSubmit={handleEditSubmit}>
+              <div className="space-y-4">
                 {editError && (
                   <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl flex items-start space-x-2.5">
                     <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
@@ -3138,27 +3274,9 @@ export const Bookings: React.FC = () => {
                   />
                 </div>
               </div>
-
-              <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={closeEditBooking}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={editLoading}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
-                >
-                  {editLoading ? 'Saving...' : 'Save Changes'}
-                </button>
-              </div>
             </form>
-          </div>
-        </div>
-      )}
+        )}
+      </SlideOverPanel>
 
       {/* RECORD PAYMENT MODAL (CHILD OF VIEW MODAL) */}
       {isAddPaymentOpen && selectedBooking && (

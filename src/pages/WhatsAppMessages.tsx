@@ -1,7 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { exportRowsToExcel } from '../utils/exportExcel';
+import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
+import { PhoneActions } from '../components/ui/PhoneActions';
+import { ExportModal } from '../components/ui/ExportModal';
 import {
   MessageSquare,
   RefreshCw,
@@ -27,6 +30,9 @@ interface OutboxRow {
   cp_lead_id: string | null;
   lead_id: string | null;
   quick_visit_id: string | null;
+  delivery_status: string | null;
+  delivery_error: string | null;
+  template_name: string | null;
 }
 
 const statusColors: Record<string, string> = {
@@ -44,16 +50,13 @@ const sourceLabel = (r: OutboxRow) => {
   return 'General';
 };
 
-// Swapnil's messages (and any system-generated row with no created_by) go
-// out through the official Meta Cloud API business number, via the
-// send-whatsapp Edge Function + Supabase Cron. Every other created_by
-// routes through the Baileys gateway (whatsapp-gateway/), sent from that
-// staff member's own QR-paired personal WhatsApp. Both write to the same
-// whatsapp_outbox table, so this is purely which of the two actually
-// carried the message -- not a separate data source.
-const SWAPNIL_USER_ID = 'ccfd55b7-36a2-4ab0-964e-a7e8403a9504';
+// System messages (lead welcome, site-visit confirmation, onboarding) are
+// sent through the official Meta Cloud API as approved templates; everything
+// else (manual Lead messages, Marketing campaigns) goes from the sender's own
+// QR-paired WhatsApp via the Baileys gateway. Both share whatsapp_outbox --
+// template_name is what routes a row to the Cloud API.
 const sendMethod = (r: OutboxRow): 'cloud_api' | 'qr_gateway' =>
-  (!r.created_by || r.created_by === SWAPNIL_USER_ID) ? 'cloud_api' : 'qr_gateway';
+  r.template_name ? 'cloud_api' : 'qr_gateway';
 const sendMethodLabel: Record<'cloud_api' | 'qr_gateway', string> = {
   cloud_api: 'Official Cloud API',
   qr_gateway: 'Personal WhatsApp (QR)',
@@ -77,7 +80,7 @@ export const WhatsAppMessages: React.FC = () => {
     const [{ data, error }, { data: usersData, error: usersErr }] = await Promise.all([
       supabase
         .from('whatsapp_outbox')
-        .select('id, to_phone, message, status, created_at, sent_at, created_by, attempts, error, media_type, media_filename, campaign_id, cp_lead_id, lead_id, quick_visit_id')
+        .select('id, to_phone, message, status, created_at, sent_at, created_by, attempts, error, media_type, media_filename, campaign_id, cp_lead_id, lead_id, quick_visit_id, delivery_status, delivery_error, template_name')
         .order('created_at', { ascending: false })
         .limit(1000),
       supabase.from('user_profiles').select('id, full_name'),
@@ -117,8 +120,9 @@ export const WhatsAppMessages: React.FC = () => {
   const failedCount = rows.filter(r => r.status === 'failed').length;
   const queuedCount = rows.filter(r => r.status === 'queued' || r.status === 'sending').length;
 
-  const handleExportExcel = () => {
-    const exportRows = filteredRows.map((r) => ({
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const handleExportExcel = (scope: 'all' | 'filtered' = 'filtered') => {
+    const exportRows = (scope === 'all' ? rows : filteredRows).map((r) => ({
       'To': r.to_phone,
       'Message': r.message || (r.media_filename ? `[${r.media_type}] ${r.media_filename}` : ''),
       'Sent By': r.created_by ? (usersMap.get(r.created_by) || '') : '',
@@ -132,6 +136,30 @@ export const WhatsAppMessages: React.FC = () => {
     }));
     exportRowsToExcel('WhatsApp_Messages', 'Messages', exportRows);
   };
+
+  // Column sort -- client-side over the (already filtered) rows.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDirection>('asc');
+  const toggleSort = (key: string) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  };
+  const msgSortValue = (r: OutboxRow, key: string): unknown => {
+    switch (key) {
+      case 'to': return r.to_phone;
+      case 'sentBy': return r.created_by ? usersMap.get(r.created_by) : null;
+      case 'method': return sendMethodLabel[sendMethod(r)];
+      case 'status': return r.status;
+      case 'queuedAt': return r.created_at;
+      default: return null;
+    }
+  };
+  const sortedRows = useMemo(() => {
+    if (!sortKey) return filteredRows;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...filteredRows].sort((a, b) => compareValues(msgSortValue(a, sortKey), msgSortValue(b, sortKey)) * dir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredRows, sortKey, sortDir, usersMap]);
 
   if (loading) {
     return (
@@ -159,11 +187,18 @@ export const WhatsAppMessages: React.FC = () => {
             <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
           </button>
           <button
-            onClick={handleExportExcel}
+            onClick={() => setExportModalOpen(true)}
             className="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
           >
             <Download className="h-3.5 w-3.5" /> Export to Excel
           </button>
+          <ExportModal
+            open={exportModalOpen}
+            onClose={() => setExportModalOpen(false)}
+            entityLabel="messages"
+            filteredCount={filteredRows.length}
+            onExport={(scope) => handleExportExcel(scope)}
+          />
         </div>
       </div>
 
@@ -223,20 +258,20 @@ export const WhatsAppMessages: React.FC = () => {
           <table className="w-full text-left border-collapse text-sm">
             <thead>
               <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                <th className="py-3 px-6">To</th>
+                <SortableTh label="To" active={sortKey === 'to'} direction={sortDir} onClick={() => toggleSort('to')} className="py-3 px-6" />
                 <th className="py-3 px-6">Message</th>
-                <th className="py-3 px-6">Sent By</th>
-                <th className="py-3 px-6">Method</th>
+                <SortableTh label="Sent By" active={sortKey === 'sentBy'} direction={sortDir} onClick={() => toggleSort('sentBy')} className="py-3 px-6" />
+                <SortableTh label="Method" active={sortKey === 'method'} direction={sortDir} onClick={() => toggleSort('method')} className="py-3 px-6" />
                 <th className="py-3 px-6">Source</th>
-                <th className="py-3 px-6">Status</th>
-                <th className="py-3 px-6">Queued / Sent</th>
+                <SortableTh label="Status" active={sortKey === 'status'} direction={sortDir} onClick={() => toggleSort('status')} className="py-3 px-6" />
+                <SortableTh label="Queued / Sent" active={sortKey === 'queuedAt'} direction={sortDir} onClick={() => toggleSort('queuedAt')} className="py-3 px-6" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredRows.length > 0 ? (
-                filteredRows.map(r => (
+              {sortedRows.length > 0 ? (
+                sortedRows.map(r => (
                   <tr key={r.id} className="hover:bg-slate-50/50 align-top">
-                    <td className="py-3 px-6 font-mono text-slate-700 whitespace-nowrap">{r.to_phone}</td>
+                    <td className="py-3 px-6 whitespace-nowrap"><PhoneActions phone={r.to_phone} /></td>
                     <td className="py-3 px-6 max-w-sm">
                       {r.message ? (
                         <p className="text-slate-700 line-clamp-2">{r.message}</p>
@@ -265,6 +300,20 @@ export const WhatsAppMessages: React.FC = () => {
                         {r.status}
                       </span>
                       {r.attempts > 1 && <span className="ml-1.5 text-xxs text-slate-400">×{r.attempts}</span>}
+                      {r.status === 'sent' && r.error && (
+                        <div className="mt-1 text-xxs text-amber-600">{r.error}</div>
+                      )}
+                      {sendMethod(r) === 'cloud_api' && r.status !== 'queued' && r.status !== 'sending' && (
+                        <div className="mt-1 text-xxs">
+                          {r.delivery_status === 'delivered' || r.delivery_status === 'read' ? (
+                            <span className="text-emerald-600 font-semibold">✓✓ {r.delivery_status === 'read' ? 'Read' : 'Delivered'}</span>
+                          ) : r.delivery_status === 'failed' ? (
+                            <span className="text-rose-600 font-semibold">Not delivered</span>
+                          ) : (
+                            <span className="text-amber-600 font-medium">Accepted by Meta — delivery not confirmed</span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="py-3 px-6 text-slate-500 text-xs whitespace-nowrap">
                       {new Date(r.created_at).toLocaleString('en-IN')}

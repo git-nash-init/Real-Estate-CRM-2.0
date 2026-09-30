@@ -36,7 +36,12 @@ export const canCreateProject = (role: Role) => role === 'super_admin';
 
 // A2, A3: Financial & Booking destructive actions
 export const canCancelBooking = (role: Role) => role === 'super_admin';
-export const canEditPayment = (role: Role) => isAdminLevel(role);
+// Everyone can record/edit a payment except Channel Partner and Presales --
+// client's explicit request (previously limited to admin-level roles only,
+// which hid the feature entirely from Closing Manager, Sourcing Manager,
+// Receptionist etc.). Mirrors the payments_insert/payments_update RLS
+// policies, which enforce the same rule server-side.
+export const canEditPayment = (role: Role) => role !== 'channel_partner' && role !== 'presales';
 export const canCancelPayment = (role: Role) => role === 'super_admin';
 
 // Reopening a cancelled booking back to confirmed (re-locking its unit) --
@@ -114,7 +119,15 @@ export const canConvertVisitToLead = (role: Role) =>
 // a TL who owns a lead was left unable to edit their own lead through
 // this button (reported live: the closing manager for a project, whose
 // actual role is closing_manager_tl, couldn't edit leads at all).
-export const canEditLeadRecord = (role: Role) => isSuperAdmin(role) || role === 'receptionist' || role === 'closing_manager' || role === 'closing_manager_tl';
+// site_head added per client's explicit request -- full edit access to
+// leads in their project (RLS: leads_update_site_head). sourcing_manager /
+// sourcing_manager_tl added too -- they need to add remarks and update the
+// Follow-up Date on their own assigned leads, both of which live in this
+// same Edit Lead modal (RLS: leads_update_sourcing_manager, scoped to
+// leads where they're the assigned sourcing manager). Reported live: a
+// sourcing manager (Gaurav Mule) who added/was assigned a normal (non-bulk)
+// lead couldn't edit it at all.
+export const canEditLeadRecord = (role: Role) => isSuperAdmin(role) || role === 'receptionist' || role === 'closing_manager' || role === 'closing_manager_tl' || role === 'site_head' || role === 'sourcing_manager' || role === 'sourcing_manager_tl';
 
 export const canEditLead = (
   role: Role,
@@ -198,6 +211,26 @@ export const canCreateBooking = (role: Role) =>
 // insert into whatsapp_outbox) but only super_admin gets to see the full
 // list of everything sent from the CRM across every user/module.
 export const canViewWhatsAppMessages = (role: Role) => role === 'super_admin';
+
+// A12: Follow-ups delete -- client's explicit request on a call, restricted
+// to super_admin and site_head (for the site_head's own assigned
+// project(s) only) -- staff were leaving stale follow-ups pushed to
+// "tomorrow" indefinitely even after the work was done, and the client
+// wants tight control over cleanup rather than open self-delete. Deletes
+// are real DELETEs (permanent, not a status flag), per the client's
+// explicit confirmation. Mirrors the followups_delete RLS policy exactly
+// (also tightened server-side to drop the old "delete your own"
+// allowance). `leadProjectId` is the project of the lead the follow-up
+// belongs to; pass null/undefined only when that isn't known yet (site_head
+// then can't delete until it resolves, same fail-closed default as the
+// server-side check).
+export const canDeleteFollowup = (role: Role, leadProjectId: Id, assignedProjects?: string[] | null) => {
+  if (isSuperAdmin(role)) return true;
+  if (role === 'site_head') {
+    return !!leadProjectId && !!assignedProjects?.includes(leadProjectId);
+  }
+  return false;
+};
 
 // D: Expenses -- super_admin ONLY, per the client's explicit instruction
 // ("it will be at my personal level, nobody else should have access to it").

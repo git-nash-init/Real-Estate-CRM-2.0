@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useNotifications } from '../hooks/useNotifications';
+import { useSidebarPins } from '../hooks/useSidebarPins';
 import { useWhatsAppSentToast } from '../hooks/useWhatsAppSentToast';
 import { QueryFailureOverlay } from '../components/QueryFailureOverlay';
 import { GlobalSearch } from '../components/GlobalSearch';
@@ -32,7 +33,10 @@ import {
   Bell,
   Wallet,
   FileSpreadsheet,
-  MessageSquare
+  MessageSquare,
+  Pin,
+  PinOff,
+  Trash2
 } from 'lucide-react';
 
 export const AppLayout: React.FC = () => {
@@ -47,7 +51,8 @@ export const AppLayout: React.FC = () => {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
-  const { notifications, unreadCount, markAsRead, markAllAsRead, justArrived, dismissJustArrived } = useNotifications();
+  const { notifications, unreadCount, markAsRead, markAllAsRead, deleteNotification, justArrived, dismissJustArrived } = useNotifications();
+  const { pinnedPaths, togglePin } = useSidebarPins();
   const { toast: waSentToast, dismiss: dismissWaSent } = useWhatsAppSentToast();
 
   // Single click handler for both the bell dropdown and the "just arrived"
@@ -191,37 +196,73 @@ export const AppLayout: React.FC = () => {
 
         {/* Sidebar Navigation */}
         <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
-          {navigationItems
-            .filter((item) => {
+          {(() => {
+            const visibleItems = navigationItems.filter((item) => {
               if ('isVisible' in item && item.isVisible) {
                 return item.isVisible(role);
               }
               return (!item.allowedRoles || (role && item.allowedRoles.includes(role))) &&
                      (!('hiddenForRoles' in item) || !role || !item.hiddenForRoles?.includes(role));
-            })
-            .map((item) => {
-            const Icon = item.icon;
-            const isActive = location.pathname === item.path;
+            });
+            // Pinning only reorders items the role can already see -- it
+            // never grants visibility, so this always filters from
+            // visibleItems, never from the unfiltered navigationItems.
+            const pinnedItems = visibleItems.filter((item) => pinnedPaths.has(item.path));
+            const expanded = sidebarOpen || mobileSidebarOpen;
+
+            const renderItem = (item: typeof visibleItems[number], inPinnedGroup: boolean) => {
+              const Icon = item.icon;
+              const isActive = location.pathname === item.path;
+              const isPinned = pinnedPaths.has(item.path);
+              return (
+                <div key={`${inPinnedGroup ? 'pinned-' : ''}${item.name}`} className="relative group/navitem">
+                  <NavLink
+                    to={item.path}
+                    onClick={() => setMobileSidebarOpen(false)}
+                    className={`flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 group ${
+                      isActive
+                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20'
+                        : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    <Icon
+                      className={`h-5 w-5 flex-shrink-0 transition-colors ${
+                        isActive ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'
+                      }`}
+                    />
+                    {expanded && <span className="truncate flex-1">{item.name}</span>}
+                  </NavLink>
+                  {expanded && (
+                    <button
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); togglePin(item.path); }}
+                      title={isPinned ? 'Unpin' : 'Pin to top'}
+                      className={`absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md text-slate-500 hover:text-amber-400 hover:bg-slate-700/60 transition-opacity ${
+                        isPinned ? 'opacity-100 text-amber-400' : 'opacity-0 group-hover/navitem:opacity-100'
+                      }`}
+                    >
+                      {isPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+                    </button>
+                  )}
+                </div>
+              );
+            };
+
             return (
-              <NavLink
-                key={item.name}
-                to={item.path}
-                onClick={() => setMobileSidebarOpen(false)}
-                className={`flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 group ${
-                  isActive
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20'
-                    : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-                }`}
-              >
-                <Icon
-                  className={`h-5 w-5 flex-shrink-0 transition-colors ${
-                    isActive ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'
-                  }`}
-                />
-                {(sidebarOpen || mobileSidebarOpen) && <span className="truncate">{item.name}</span>}
-              </NavLink>
+              <>
+                {pinnedItems.length > 0 && (
+                  <div className="mb-3 pb-3 border-b border-slate-800 space-y-1">
+                    {expanded && (
+                      <p className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">Pinned</p>
+                    )}
+                    {pinnedItems.map((item) => renderItem(item, true))}
+                  </div>
+                )}
+                <div className="space-y-1">
+                  {visibleItems.map((item) => renderItem(item, false))}
+                </div>
+              </>
             );
-          })}
+          })()}
         </nav>
 
         {/* Sidebar Footer */}
@@ -293,20 +334,31 @@ export const AppLayout: React.FC = () => {
                       <p className="px-4 py-6 text-center text-xs text-slate-400 italic">No notifications yet.</p>
                     ) : (
                       notifications.map((n) => (
-                        <button
+                        <div
                           key={n.id}
-                          onClick={() => handleNotificationClick(n)}
-                          className={`w-full text-left px-4 py-2.5 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors ${n.is_read ? 'opacity-60' : ''}`}
+                          className={`group/notif relative w-full border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors ${n.is_read ? 'opacity-60' : ''}`}
                         >
-                          <div className="flex items-start gap-2">
-                            {!n.is_read && <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 mt-1.5 flex-shrink-0" />}
-                            <div className="min-w-0">
-                              <p className="text-xs font-semibold text-slate-800 truncate">{n.title}</p>
-                              <p className="text-xxs text-slate-500 mt-0.5 line-clamp-2">{n.message}</p>
-                              <p className="text-[10px] text-slate-350 mt-1">{new Date(n.created_at).toLocaleString('en-IN')}</p>
+                          <button
+                            onClick={() => handleNotificationClick(n)}
+                            className="w-full text-left px-4 py-2.5 pr-9"
+                          >
+                            <div className="flex items-start gap-2">
+                              {!n.is_read && <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 mt-1.5 flex-shrink-0" />}
+                              <div className="min-w-0">
+                                <p className="text-xs font-semibold text-slate-800 truncate">{n.title}</p>
+                                <p className="text-xxs text-slate-500 mt-0.5 line-clamp-2">{n.message}</p>
+                                <p className="text-[10px] text-slate-350 mt-1">{new Date(n.created_at).toLocaleString('en-IN')}</p>
+                              </div>
                             </div>
-                          </div>
-                        </button>
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deleteNotification(n.id); }}
+                            title="Delete"
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-md text-slate-300 hover:text-rose-500 hover:bg-rose-50 opacity-0 group-hover/notif:opacity-100 transition-opacity"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       ))
                     )}
                   </div>

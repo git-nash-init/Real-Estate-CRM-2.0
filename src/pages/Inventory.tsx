@@ -1,7 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../hooks/useAuth';
 import { exportRowsToExcel } from '../utils/exportExcel';
+import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
+import { ExportModal } from '../components/ui/ExportModal';
+import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { BulkSelectHeaderCell, BulkSelectCell, BulkActionBar } from '../components/ui/BulkActionBar';
 import {
   Search,
   RefreshCw,
@@ -798,8 +802,9 @@ export const Inventory: React.FC = () => {
   const filteredInventory = getFilteredInventory();
   const stats = getStats(projectFilter ? inventoryList.filter(item => item.project_id === projectFilter) : inventoryList);
 
-  const handleExportExcel = () => {
-    const rows = filteredInventory.map((item: any) => ({
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const handleExportExcel = (scope: 'all' | 'filtered' = 'filtered') => {
+    const rows = (scope === 'all' ? inventoryList : filteredInventory).map((item: any) => ({
       'Unit Number': item.unit_number || '',
       'Project': getProjectName(item.project_id),
       'Tower': getTowerName(item.tower_id),
@@ -816,6 +821,32 @@ export const Inventory: React.FC = () => {
     }));
     exportRowsToExcel('Inventory', 'Inventory', rows);
   };
+
+  // Column sort -- client-side over the (already filtered) rows.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDirection>('asc');
+  const toggleSort = (key: string) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  };
+  const inventorySortValue = (item: any, key: string): unknown => {
+    switch (key) {
+      case 'unit': return item.unit_number;
+      case 'project': return getProjectName(item.project_id);
+      case 'tower': return getTowerName(item.tower_id);
+      case 'floor': return getFloorName(item.floor_id);
+      case 'config': return item.configuration;
+      case 'area': return item.carpet_area;
+      case 'status': return item.status;
+      default: return null;
+    }
+  };
+  const sortedInventory = useMemo(() => {
+    if (!sortKey) return filteredInventory;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...filteredInventory].sort((a, b) => compareValues(inventorySortValue(a, sortKey), inventorySortValue(b, sortKey)) * dir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredInventory, sortKey, sortDir]);
 
   // Towers & Floors lists for filter dropdowns
   const filteredTowersForDropdown = towers.filter(t => t.project_id === projectFilter);
@@ -894,6 +925,53 @@ export const Inventory: React.FC = () => {
     }
   };
 
+  // Bulk select -- same delete permission as the per-row Trash2 button
+  // (isSuperAdmin only) and the same dependent-booking guard as the
+  // single-unit path, just applied to every checked row in one go.
+  const [selectedUnitIds, setSelectedUnitIds] = useState<Set<string>>(new Set());
+  const toggleUnitSelected = (id: string, checked: boolean) => {
+    setSelectedUnitIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+  const toggleAllUnitsSelected = (ids: string[], checked: boolean) => {
+    setSelectedUnitIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => { if (checked) next.add(id); else next.delete(id); });
+      return next;
+    });
+  };
+  const handleBulkDeleteUnits = async () => {
+    const selected = filteredInventory.filter((u: any) => selectedUnitIds.has(u.id));
+    if (selected.length === 0) return;
+    const blocked = selected.filter((u: any) => bookings.some(b => b.inventory_id === u.id));
+    const deletable = selected.filter((u: any) => !bookings.some(b => b.inventory_id === u.id));
+    if (deletable.length === 0) {
+      setNotification({ type: 'error', message: 'None of the selected units can be deleted -- all have dependent booking records.' });
+      return;
+    }
+    const confirmMsg = blocked.length > 0
+      ? `${deletable.length} unit(s) will be deleted. ${blocked.length} will be skipped (dependent booking records exist). Continue?`
+      : `Are you sure you want to delete ${deletable.length} unit(s)?`;
+    if (!window.confirm(confirmMsg)) return;
+    try {
+      const { error } = await supabase.from('project_inventory').delete().in('id', deletable.map((u: any) => u.id));
+      if (error) throw error;
+      setNotification({
+        type: 'success',
+        message: blocked.length > 0
+          ? `${deletable.length} unit(s) deleted; ${blocked.length} skipped.`
+          : `${deletable.length} unit(s) deleted successfully.`,
+      });
+      setSelectedUnitIds(new Set());
+      await fetchData();
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to delete selected units.' });
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Toast Notification Banner */}
@@ -940,13 +1018,20 @@ export const Inventory: React.FC = () => {
 
           {isSuperAdmin && (
             <button
-              onClick={handleExportExcel}
+              onClick={() => setExportModalOpen(true)}
               className="flex items-center space-x-2 bg-white border border-slate-200 px-3 py-2 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm focus:outline-none"
             >
               <Download className="h-4 w-4 text-slate-500" />
               <span>Export to Excel</span>
             </button>
           )}
+          <ExportModal
+            open={exportModalOpen}
+            onClose={() => setExportModalOpen(false)}
+            entityLabel="units"
+            filteredCount={filteredInventory.length}
+            onExport={(scope) => handleExportExcel(scope)}
+          />
           
           {isSuperAdmin && (
             <button
@@ -1199,25 +1284,43 @@ export const Inventory: React.FC = () => {
                 <p className="text-slate-500 font-medium">Loading inventory directory...</p>
               </div>
             ) : (
+              <>
+              {isSuperAdmin && (
+                <BulkActionBar
+                  count={selectedUnitIds.size}
+                  onCancel={() => setSelectedUnitIds(new Set())}
+                  actions={[{ label: 'Delete', onClick: handleBulkDeleteUnits, danger: true }]}
+                />
+              )}
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                      <th className="py-3.5 px-6">Unit / Flat</th>
-                      <th className="py-3.5 px-6">Project</th>
-                      <th className="py-3.5 px-6">Tower</th>
-                      <th className="py-3.5 px-6">Floor</th>
-                      <th className="py-3.5 px-6">Configuration</th>
-                      <th className="py-3.5 px-6">Carpet Area</th>
-                      <th className="py-3.5 px-6">Status</th>
+                      {isSuperAdmin && (
+                        <BulkSelectHeaderCell
+                          allIds={sortedInventory.map((u: any) => u.id)}
+                          selectedIds={selectedUnitIds}
+                          onToggleAll={toggleAllUnitsSelected}
+                        />
+                      )}
+                      <SortableTh label="Unit / Flat" active={sortKey === 'unit'} direction={sortDir} onClick={() => toggleSort('unit')} className="py-3.5 px-6" />
+                      <SortableTh label="Project" active={sortKey === 'project'} direction={sortDir} onClick={() => toggleSort('project')} className="py-3.5 px-6" />
+                      <SortableTh label="Tower" active={sortKey === 'tower'} direction={sortDir} onClick={() => toggleSort('tower')} className="py-3.5 px-6" />
+                      <SortableTh label="Floor" active={sortKey === 'floor'} direction={sortDir} onClick={() => toggleSort('floor')} className="py-3.5 px-6" />
+                      <SortableTh label="Configuration" active={sortKey === 'config'} direction={sortDir} onClick={() => toggleSort('config')} className="py-3.5 px-6" />
+                      <SortableTh label="Carpet Area" active={sortKey === 'area'} direction={sortDir} onClick={() => toggleSort('area')} className="py-3.5 px-6" />
+                      <SortableTh label="Status" active={sortKey === 'status'} direction={sortDir} onClick={() => toggleSort('status')} className="py-3.5 px-6" />
                       <th className="py-3.5 px-6 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredInventory.length > 0 ? (
-                      filteredInventory.map((item) => {
+                    {sortedInventory.length > 0 ? (
+                      sortedInventory.map((item) => {
                         return (
                           <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
+                            {isSuperAdmin && (
+                              <BulkSelectCell id={item.id} selectedIds={selectedUnitIds} onToggle={toggleUnitSelected} />
+                            )}
                             <td className="py-4 px-6 font-bold text-slate-900">{item.unit_number}</td>
                             <td className="py-4 px-6 text-sm text-slate-600 font-semibold">{getProjectName(item.project_id)}</td>
                             <td className="py-4 px-6 text-sm text-slate-600">{getTowerName(item.tower_id)}</td>
@@ -1270,7 +1373,7 @@ export const Inventory: React.FC = () => {
                       })
                     ) : (
                       <tr>
-                        <td colSpan={8} className="py-24 text-center text-slate-400">
+                        <td colSpan={9} className="py-24 text-center text-slate-400">
                           <div className="flex flex-col items-center justify-center space-y-3">
                             <div className="bg-slate-50 p-4 rounded-full text-slate-300">
                               <Home className="h-8 w-8" />
@@ -1286,6 +1389,7 @@ export const Inventory: React.FC = () => {
                   </tbody>
                 </table>
               </div>
+              </>
             )}
           </div>
         </>
@@ -1434,19 +1538,32 @@ export const Inventory: React.FC = () => {
       )}
 
       {/* ADD / EDIT UNIT MODAL */}
-      {isUnitModalOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsUnitModalOpen(false)} />
-          
-          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">{editingUnit ? 'Edit Unit' : 'Add Unit'}</span>
-              <button type="button" onClick={() => setIsUnitModalOpen(false)} className="p-1 rounded-lg text-indigo-200 hover:text-white focus:outline-none">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleUnitSubmit}>
+      <SlideOverPanel
+        open={isUnitModalOpen}
+        onClose={() => setIsUnitModalOpen(false)}
+        title={editingUnit ? 'Edit Unit' : 'Add Unit'}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setIsUnitModalOpen(false)}
+              className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="unit-create-form"
+              disabled={unitSubmitting}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md disabled:opacity-50 transition-all focus:outline-none"
+            >
+              {unitSubmitting ? 'Saving...' : editingUnit ? 'Update Unit' : 'Save Unit'}
+            </button>
+          </>
+        }
+      >
+        {isUnitModalOpen && (
+            <form id="unit-create-form" onSubmit={handleUnitSubmit}>
               {(() => {
                 // Sold units stay locked for everyone -- the sale is final.
                 // A booked-but-not-sold unit can still legitimately need
@@ -1456,7 +1573,7 @@ export const Inventory: React.FC = () => {
                 const isBooked = !!(editingUnit && editingUnit.status.toLowerCase() === 'booked');
                 const hasActiveBooking = (isSold || isBooked) && !(isBooked && isSuperAdmin);
                 return (
-                  <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto text-left">
+                  <div className="space-y-4 text-left">
                     {unitError && (
                       <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl flex items-start space-x-2.5">
                         <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
@@ -1682,28 +1799,9 @@ export const Inventory: React.FC = () => {
                   </div>
                 );
               })()}
-
-              {/* Modal Footer */}
-              <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsUnitModalOpen(false)}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={unitSubmitting}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md disabled:opacity-50 transition-all focus:outline-none"
-                >
-                  {unitSubmitting ? 'Saving...' : editingUnit ? 'Update Unit' : 'Save Unit'}
-                </button>
-              </div>
             </form>
-          </div>
-        </div>
-      )}
+        )}
+      </SlideOverPanel>
 
       {/* ADD TOWER MODAL */}
       {isTowerModalOpen && (

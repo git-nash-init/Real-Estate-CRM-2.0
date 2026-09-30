@@ -279,12 +279,53 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
         };
       });
 
-      // 4. Insert Leads (Batching if too large)
+      // 4. Insert Leads. The DB blocks a second lead with the same mobile in
+      // the same project (prevent_duplicate_lead_phone), and one duplicate
+      // used to abort the whole upload and leave an empty batch behind.
+      // Duplicates are now skipped and reported instead, so the rest of the
+      // file still goes in.
+      const normPhone = (p: string) => {
+        const d = (p || '').replace(/[^0-9]/g, '');
+        return d.length === 12 && d.startsWith('91') ? d.slice(2) : d;
+      };
+      const existing = new Set<string>();
+      for (let from = 0; ; from += 1000) {
+        const { data: existingRows } = await supabase
+          .from('leads').select('mobile').eq('project_id', projectId).range(from, from + 999);
+        (existingRows || []).forEach((r: any) => existing.add(normPhone(r.mobile)));
+        if (!existingRows || existingRows.length < 1000) break;
+      }
+      let skipped = 0;
+      const toInsert = newLeads.filter((l) => {
+        const n = normPhone(l.mobile);
+        if (!n) { skipped++; return false; }       // no usable number
+        if (existing.has(n)) { skipped++; return false; } // already in project / repeated in file
+        existing.add(n);
+        return true;
+      });
+
+      let inserted = 0;
       const chunkSize = 100;
-      for (let i = 0; i < newLeads.length; i += chunkSize) {
-        const chunk = newLeads.slice(i, i + chunkSize);
+      for (let i = 0; i < toInsert.length; i += chunkSize) {
+        const chunk = toInsert.slice(i, i + chunkSize);
         const { error: insertErr } = await supabase.from('leads').insert(chunk);
-        if (insertErr) throw new Error(`Error inserting leads: ${insertErr.message}`);
+        if (!insertErr) { inserted += chunk.length; continue; }
+        if (insertErr.code !== '23505') throw new Error(`Error inserting leads: ${insertErr.message}`);
+        // A duplicate this user can't see (RLS) or a race -- retry row by row.
+        for (const lead of chunk) {
+          const { error: rowErr } = await supabase.from('leads').insert(lead);
+          if (!rowErr) inserted++;
+          else if (rowErr.code === '23505') skipped++;
+          else throw new Error(`Error inserting leads: ${rowErr.message}`);
+        }
+      }
+
+      if (inserted === 0) {
+        // Nothing went in -- don't leave an empty batch in the history.
+        await supabase.from('bulk_lead_uploads').delete().eq('id', bulkRecord.id);
+        throw new Error(
+          `No leads were uploaded: all ${newLeads.length} number(s) already exist in this project (or are blank/repeated in the file).`
+        );
       }
 
       // Notifying assignees is now handled by the
@@ -294,7 +335,11 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
       // unlike this frontend version which silently failed under RLS
       // whenever the uploader wasn't a super_admin.
 
-      setSuccess(mode === 'single' ? 'Lead added successfully.' : `Successfully uploaded ${newLeads.length} leads.`);
+      setSuccess(
+        mode === 'single'
+          ? 'Lead added successfully.'
+          : `Successfully uploaded ${inserted} lead(s).${skipped > 0 ? ` ${skipped} skipped (mobile already exists in this project, blank, or repeated in the file).` : ''}`
+      );
       setTimeout(() => {
         onUploadComplete();
         onClose();

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../hooks/useAuth';
 import { canEditPayment, canCancelPayment, isSuperAdmin } from '../utils/permissions';
@@ -7,6 +7,10 @@ import { totalMilestonePercentage, computeDueByCategory } from '../utils/booking
 import { useHighlightParam } from '../hooks/useHighlightParam';
 import { downloadCpTaxInvoicePdf } from '../utils/cpBillPdf';
 import { parseDescription } from '../utils/projectDescription';
+import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
+import { ExportModal } from '../components/ui/ExportModal';
+import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { BulkSelectHeaderCell, BulkSelectCell, BulkActionBar } from '../components/ui/BulkActionBar';
 import {
   Search,
   RefreshCw,
@@ -111,6 +115,9 @@ export const Payments: React.FC = () => {
 
   // Pagination
   const [page, setPage] = useState(0);
+  // Clear any bulk-select checkboxes when the page changes, so a stale
+  // selection from a previous page can't be bulk-deleted by mistake.
+  useEffect(() => { setSelectedPaymentIds(new Set()); }, [page]);
   const [pageSize] = useState(10);
 
   const { role } = useAuth();
@@ -740,6 +747,40 @@ export const Payments: React.FC = () => {
     }
   };
 
+  // Bulk select -- same delete permission as the per-row Trash2 button
+  // (isSuperAdmin only). Synthetic "pending-" rows (a booking milestone
+  // that hasn't been recorded yet) have no real payments row to delete, so
+  // they're excluded from selection entirely.
+  const [selectedPaymentIds, setSelectedPaymentIds] = useState<Set<string>>(new Set());
+  const togglePaymentSelected = (id: string, checked: boolean) => {
+    setSelectedPaymentIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+  const toggleAllPaymentsSelected = (ids: string[], checked: boolean) => {
+    setSelectedPaymentIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => { if (checked) next.add(id); else next.delete(id); });
+      return next;
+    });
+  };
+  const handleBulkDeletePayments = async () => {
+    const ids = Array.from(selectedPaymentIds);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Are you sure you want to permanently delete ${ids.length} payment(s)?`)) return;
+    try {
+      const { error } = await supabase.from('payments').delete().in('id', ids);
+      if (error) throw error;
+      setNotification({ type: 'success', message: `${ids.length} payment(s) deleted permanently.` });
+      setSelectedPaymentIds(new Set());
+      fetchData();
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to delete selected payments.' });
+    }
+  };
+
 
   const handleCancelPayment = async () => {
     if (!cancellingPayment) return;
@@ -920,10 +961,13 @@ export const Payments: React.FC = () => {
   });
 
   // Exports whichever tab is currently active -- Customer Payments or
-  // Referral Fee Payouts -- using the same filters already applied on screen.
-  const handleExportExcel = () => {
+  // Referral Fee Payouts. scope 'filtered' = the filters currently applied
+  // on screen (today's behavior); 'all' uses the tab's unfiltered source
+  // list instead (allPaymentRows / cpPayouts).
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const handleExportExcel = (scope: 'all' | 'filtered' = 'filtered') => {
     if (activeView === 'customer') {
-      const rows = filteredPayments.map((p) => {
+      const rows = (scope === 'all' ? allPaymentRows : filteredPayments).map((p) => {
         const booking = bookingMap.get(p.booking_id);
         const unit = booking ? inventoryMap.get(booking.inventory_id) : null;
         return {
@@ -943,7 +987,7 @@ export const Payments: React.FC = () => {
       });
       exportRowsToExcel('Customer_Payments', 'Customer Payments', rows);
     } else {
-      const rows = filteredCommissionPayouts.map((p) => {
+      const rows = (scope === 'all' ? cpPayouts : filteredCommissionPayouts).map((p) => {
         const comm = cpCommissions.find(c => c.id === p.commission_id);
         const booking = comm ? bookingMap.get(comm.booking_id) : null;
         const cp = comm ? cpMap.get(comm.cp_id) : null;
@@ -973,6 +1017,60 @@ export const Payments: React.FC = () => {
   const startRange = totalFilteredCount > 0 ? page * pageSize + 1 : 0;
   const endRange = Math.min((page + 1) * pageSize, totalFilteredCount);
   const paginatedPayments = filteredPayments.slice(page * pageSize, (page + 1) * pageSize);
+
+  // Column sort -- client-side over each tab's current page only.
+  const [paySortKey, setPaySortKey] = useState<string | null>(null);
+  const [paySortDir, setPaySortDir] = useState<SortDirection>('asc');
+  const togglePaySort = (key: string) => {
+    if (paySortKey === key) setPaySortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setPaySortKey(key); setPaySortDir('asc'); }
+  };
+  const paySortValue = (p: typeof paginatedPayments[number], key: string): unknown => {
+    const booking = bookingMap.get(p.booking_id);
+    switch (key) {
+      case 'customer': return booking?.customer_name;
+      case 'project': return booking ? projectMap.get(booking.project_id) : null;
+      case 'type': return p.payment_type;
+      case 'amount': return p.amount;
+      case 'dueDate': return p.due_date;
+      case 'receivedDate': return p.received_date;
+      case 'status': return getDisplayStatus(p);
+      default: return null;
+    }
+  };
+  const sortedPayments = useMemo(() => {
+    if (!paySortKey) return paginatedPayments;
+    const dir = paySortDir === 'asc' ? 1 : -1;
+    return [...paginatedPayments].sort((a, b) => compareValues(paySortValue(a, paySortKey), paySortValue(b, paySortKey)) * dir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paginatedPayments, paySortKey, paySortDir, bookingMap, projectMap]);
+
+  const [payoutSortKey, setPayoutSortKey] = useState<string | null>(null);
+  const [payoutSortDir, setPayoutSortDir] = useState<SortDirection>('asc');
+  const togglePayoutSort = (key: string) => {
+    if (payoutSortKey === key) setPayoutSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setPayoutSortKey(key); setPayoutSortDir('asc'); }
+  };
+  const payoutSortValue = (p: typeof paginatedCommissionPayouts[number], key: string): unknown => {
+    const comm = cpCommissions.find(c => c.id === p.commission_id);
+    const booking = comm ? bookingMap.get(comm.booking_id) : null;
+    const cp = comm ? cpMap.get(comm.cp_id) : null;
+    switch (key) {
+      case 'payoutDate': return p.payment_date;
+      case 'cp': return cp ? (cp.name || cp.company_name) : null;
+      case 'project': return booking ? projectMap.get(booking.project_id) : null;
+      case 'approvedAmount': return comm?.payable_amount;
+      case 'payoutAmount': return p.amount;
+      case 'status': return comm?.status;
+      default: return null;
+    }
+  };
+  const sortedCommissionPayouts = useMemo(() => {
+    if (!payoutSortKey) return paginatedCommissionPayouts;
+    const dir = payoutSortDir === 'asc' ? 1 : -1;
+    return [...paginatedCommissionPayouts].sort((a, b) => compareValues(payoutSortValue(a, payoutSortKey), payoutSortValue(b, payoutSortKey)) * dir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paginatedCommissionPayouts, payoutSortKey, payoutSortDir, cpCommissions, bookingMap, projectMap, cpMap]);
 
   // Once filters clear and the row re-renders on the right page, ring-
   // highlight it too (best effort -- depends on pageSize/index math above).
@@ -1020,13 +1118,20 @@ export const Payments: React.FC = () => {
           </button>
           {isSuperAdmin(role) && (
             <button
-              onClick={handleExportExcel}
+              onClick={() => setExportModalOpen(true)}
               className="inline-flex items-center space-x-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
             >
               <Download className="h-3.5 w-3.5" />
               <span>Export to Excel</span>
             </button>
           )}
+          <ExportModal
+            open={exportModalOpen}
+            onClose={() => setExportModalOpen(false)}
+            entityLabel={activeView === 'customer' ? 'payments' : 'referral fee payouts'}
+            filteredCount={activeView === 'customer' ? totalFilteredCount : totalFilteredCommCount}
+            onExport={(scope) => handleExportExcel(scope)}
+          />
           {activeView === 'customer' ? (
             role !== 'channel_partner' && (
               <button
@@ -1409,27 +1514,41 @@ export const Payments: React.FC = () => {
           </div>
         ) : activeView === 'customer' ? (
           <>
+            {isSuperAdmin(role) && (
+              <BulkActionBar
+                count={selectedPaymentIds.size}
+                onCancel={() => setSelectedPaymentIds(new Set())}
+                actions={[{ label: 'Delete', onClick: handleBulkDeletePayments, danger: true }]}
+              />
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
+                    {isSuperAdmin(role) && (
+                      <BulkSelectHeaderCell
+                        allIds={sortedPayments.filter((p) => !p.id.startsWith('pending-')).map((p) => p.id)}
+                        selectedIds={selectedPaymentIds}
+                        onToggleAll={toggleAllPaymentsSelected}
+                      />
+                    )}
                     <th className="py-3.5 px-6">Payment #</th>
-                    <th className="py-3.5 px-6">Customer</th>
-                    <th className="py-3.5 px-6">Project Focus</th>
+                    <SortableTh label="Customer" active={paySortKey === 'customer'} direction={paySortDir} onClick={() => togglePaySort('customer')} className="py-3.5 px-6" />
+                    <SortableTh label="Project Focus" active={paySortKey === 'project'} direction={paySortDir} onClick={() => togglePaySort('project')} className="py-3.5 px-6" />
                     <th className="py-3.5 px-6">Unit</th>
                     <th className="py-3.5 px-6">Booking #</th>
-                    <th className="py-3.5 px-6">Type</th>
-                    <th className="py-3.5 px-6">Amount</th>
-                    <th className="py-3.5 px-6">Due Date</th>
-                    <th className="py-3.5 px-6">Received Date</th>
+                    <SortableTh label="Type" active={paySortKey === 'type'} direction={paySortDir} onClick={() => togglePaySort('type')} className="py-3.5 px-6" />
+                    <SortableTh label="Amount" active={paySortKey === 'amount'} direction={paySortDir} onClick={() => togglePaySort('amount')} className="py-3.5 px-6" />
+                    <SortableTh label="Due Date" active={paySortKey === 'dueDate'} direction={paySortDir} onClick={() => togglePaySort('dueDate')} className="py-3.5 px-6" />
+                    <SortableTh label="Received Date" active={paySortKey === 'receivedDate'} direction={paySortDir} onClick={() => togglePaySort('receivedDate')} className="py-3.5 px-6" />
                     <th className="py-3.5 px-6">Mode</th>
-                    <th className="py-3.5 px-6">Status</th>
+                    <SortableTh label="Status" active={paySortKey === 'status'} direction={paySortDir} onClick={() => togglePaySort('status')} className="py-3.5 px-6" />
                     <th className="py-3.5 px-6 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {paginatedPayments.length > 0 ? (
-                    paginatedPayments.map((p) => {
+                  {sortedPayments.length > 0 ? (
+                    sortedPayments.map((p) => {
                       const booking = bookingMap.get(p.booking_id);
                       const unit = booking ? inventoryMap.get(booking.inventory_id) : null;
                       const projName = booking ? projectMap.get(booking.project_id) : 'N/A';
@@ -1438,6 +1557,11 @@ export const Payments: React.FC = () => {
 
                       return (
                         <tr key={p.id} ref={registerRow(p.id)} className={`hover:bg-slate-50/50 transition-colors text-sm ${isSynthetic ? 'bg-amber-50/30' : ''} ${rowClass(p.id)}`}>
+                          {isSuperAdmin(role) && (
+                            isSynthetic
+                              ? <td className="w-10 px-3" />
+                              : <BulkSelectCell id={p.id} selectedIds={selectedPaymentIds} onToggle={togglePaymentSelected} />
+                          )}
                           <td className="py-3.5 px-6 font-mono text-slate-600 text-xs font-semibold">
                             {isSynthetic ? <span className="italic text-slate-400 font-sans">Not yet recorded</span> : (p.payment_number || '—')}
                           </td>
@@ -1523,7 +1647,7 @@ export const Payments: React.FC = () => {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={12} className="py-16 text-center">
+                      <td colSpan={13} className="py-16 text-center">
                         <div className="flex flex-col items-center justify-center space-y-2">
                           <div className="bg-slate-50 p-3 rounded-full border border-slate-100">
                             <Search className="h-6 w-6 text-slate-400" />
@@ -1576,21 +1700,21 @@ export const Payments: React.FC = () => {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                    <th className="py-3.5 px-6">Payout Date</th>
-                    <th className="py-3.5 px-6">Channel Partner</th>
+                    <SortableTh label="Payout Date" active={payoutSortKey === 'payoutDate'} direction={payoutSortDir} onClick={() => togglePayoutSort('payoutDate')} className="py-3.5 px-6" />
+                    <SortableTh label="Channel Partner" active={payoutSortKey === 'cp'} direction={payoutSortDir} onClick={() => togglePayoutSort('cp')} className="py-3.5 px-6" />
                     <th className="py-3.5 px-6">Booking #</th>
-                    <th className="py-3.5 px-6">Project Focus</th>
+                    <SortableTh label="Project Focus" active={payoutSortKey === 'project'} direction={payoutSortDir} onClick={() => togglePayoutSort('project')} className="py-3.5 px-6" />
                     <th className="py-3.5 px-6">Unit</th>
-                    <th className="py-3.5 px-6">Approved Amount</th>
-                    <th className="py-3.5 px-6">Payout Amount</th>
+                    <SortableTh label="Approved Amount" active={payoutSortKey === 'approvedAmount'} direction={payoutSortDir} onClick={() => togglePayoutSort('approvedAmount')} className="py-3.5 px-6" />
+                    <SortableTh label="Payout Amount" active={payoutSortKey === 'payoutAmount'} direction={payoutSortDir} onClick={() => togglePayoutSort('payoutAmount')} className="py-3.5 px-6" />
                     <th className="py-3.5 px-6">Mode</th>
                     <th className="py-3.5 px-6">Reference Number</th>
-                    <th className="py-3.5 px-6">Status</th>
+                    <SortableTh label="Status" active={payoutSortKey === 'status'} direction={payoutSortDir} onClick={() => togglePayoutSort('status')} className="py-3.5 px-6" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {paginatedCommissionPayouts.length > 0 ? (
-                    paginatedCommissionPayouts.map((p) => {
+                  {sortedCommissionPayouts.length > 0 ? (
+                    sortedCommissionPayouts.map((p) => {
                       const comm = cpCommissions.find(c => c.id === p.commission_id);
                       const booking = comm ? bookingMap.get(comm.booking_id) : null;
                       const cp = comm ? cpMap.get(comm.cp_id) : null;
@@ -1683,22 +1807,33 @@ export const Payments: React.FC = () => {
       </div>
 
       {/* CREATE & EDIT PAYMENT MODAL */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsModalOpen(false)} />
-          
-          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            {/* Header */}
-            <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">{editingPayment ? 'Edit Payment Record' : 'Create New Payment'}</span>
-              <button type="button" onClick={() => setIsModalOpen(false)} className="p-1 rounded-lg text-indigo-200 hover:text-white focus:outline-none">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Form */}
-            <form onSubmit={handleFormSubmit}>
-              <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+      <SlideOverPanel
+        open={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        title={editingPayment ? 'Edit Payment Record' : 'Create New Payment'}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setIsModalOpen(false)}
+              className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="payment-create-form"
+              disabled={formLoading}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
+            >
+              {formLoading ? 'Saving...' : 'Save Payment'}
+            </button>
+          </>
+        }
+      >
+        {isModalOpen && (
+            <form id="payment-create-form" onSubmit={handleFormSubmit}>
+              <div className="space-y-4">
                 {formError && (
                   <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl flex items-start space-x-2.5">
                     <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
@@ -1946,28 +2081,9 @@ export const Payments: React.FC = () => {
                   />
                 </div>
               </div>
-
-              {/* Footer */}
-              <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={formLoading}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
-                >
-                  {formLoading ? 'Saving...' : 'Save Payment'}
-                </button>
-              </div>
             </form>
-          </div>
-        </div>
-      )}
+        )}
+      </SlideOverPanel>
 
       {/* VIEW PAYMENT DETAILS MODAL */}
       {selectedPayment && (

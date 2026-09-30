@@ -1,7 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { exportRowsToExcel } from '../utils/exportExcel';
+import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
+import { ExportModal } from '../components/ui/ExportModal';
+import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { BulkSelectHeaderCell, BulkSelectCell, BulkActionBar } from '../components/ui/BulkActionBar';
 import {
   Search,
   RefreshCw,
@@ -18,12 +22,6 @@ import {
 } from 'lucide-react';
 import type { UserRole } from '../types/auth';
 import { useAuth } from '../hooks/useAuth';
-
-// Employee onboarding credentials always send through Swapnil's official
-// Cloud API number, regardless of which admin actually creates the
-// account -- client's explicit request, same as Pre-Tagging (when a CP
-// submits it) and Channel Partner onboarding credentials.
-const SWAPNIL_USER_ID = 'ccfd55b7-36a2-4ab0-964e-a7e8403a9504';
 
 interface Employee {
   id: string;
@@ -110,7 +108,7 @@ function generateRandomPassword(): string {
 }
 
 export const Employees: React.FC = () => {
-  const { role: currentUserRole } = useAuth();
+  const { role: currentUserRole, user } = useAuth();
   
   // Query & state filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -121,6 +119,9 @@ export const Employees: React.FC = () => {
 
   // Pagination states
   const [page, setPage] = useState(0);
+  // Clear any bulk-select checkboxes when the page changes, so a stale
+  // selection from a previous page can't be bulk-offboarded by mistake.
+  useEffect(() => { setSelectedEmployeeIds(new Set()); }, [page]);
   const [pageSize] = useState(10);
   const [totalCount, setTotalCount] = useState(0);
 
@@ -377,6 +378,76 @@ export const Employees: React.FC = () => {
       setSelectedEmployee(null);
     } catch (err: any) {
       setNotification({ type: 'error', message: err.message || 'Failed to offboard employee' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Bulk select -- same offboard permission as the per-row Trash2 button
+  // (super_admin, and only employees who aren't already terminated).
+  // Employees with no linked login account are skipped, same as the
+  // single-row path's own guard, since there's nothing to offboard.
+  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<Set<string>>(new Set());
+  const toggleEmployeeSelected = (id: string, checked: boolean) => {
+    setSelectedEmployeeIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+  const toggleAllEmployeesSelected = (ids: string[], checked: boolean) => {
+    setSelectedEmployeeIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => { if (checked) next.add(id); else next.delete(id); });
+      return next;
+    });
+  };
+  const handleBulkOffboardEmployees = async () => {
+    const selected = filteredEmployees.filter((e) => selectedEmployeeIds.has(e.id));
+    if (selected.length === 0) return;
+    const skipped = selected.filter((e) => !e.user_id);
+    const eligible = selected.filter((e) => !!e.user_id);
+    if (eligible.length === 0) {
+      setNotification({ type: 'error', message: 'None of the selected employees have a linked login account to offboard.' });
+      return;
+    }
+    if (!window.confirm(
+      `Offboard ${eligible.length} employee(s)? They will be immediately blocked from logging in and removed from every assignment dropdown. Their name will still appear correctly on their past leads, bookings, and payments -- nothing historical is deleted.` +
+      (skipped.length > 0 ? ` ${skipped.length} selected employee(s) will be skipped (no linked login account).` : '')
+    )) return;
+
+    setLoading(true);
+    let succeeded = 0;
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) throw new Error('Your login session has expired. Please sign out and sign back in, then try again.');
+
+      for (const emp of eligible) {
+        try {
+          const { data: fnData, error: fnError } = await supabase.functions.invoke('manage-employee-account', {
+            body: { action: 'offboard', employee_id: emp.id, user_id: emp.user_id },
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          if (fnError) throw fnError;
+          if (fnData?.error) throw new Error(fnData.error);
+          succeeded++;
+        } catch (err) {
+          console.error(`Failed to offboard employee ${emp.id}:`, err);
+        }
+      }
+      setNotification({
+        type: succeeded === eligible.length ? 'success' : 'error',
+        message: succeeded === eligible.length
+          ? `${succeeded} employee(s) offboarded -- login blocked, access revoked.`
+          : `${succeeded} of ${eligible.length} offboarded -- some failed, check console.`,
+      });
+      setSelectedEmployeeIds(new Set());
+      fetchEmployees();
+      fetchAllEmployeesLite();
+      fetchLookups();
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to offboard selected employees.' });
     } finally {
       setLoading(false);
     }
@@ -824,12 +895,22 @@ export const Employees: React.FC = () => {
           
           const welcomeMsg = `🏢 *Welcome to Opal Properties!*\n\nDear ${firstName} ${lastName || ''},\nWelcome to the team! Your employee CRM account has been created successfully.\n\n🆔 *Employee ID:* ${employeeIdVal}\n💼 *Role / Designation:* ${designation} (${roleLabel})\n\n🔑 *Login Credentials:*\n• Username / Email: ${createdCredentials.email}\n• Temporary Password: ${createdCredentials.password}\n🌐 *CRM Portal:* ${portalUrl}\n\nPlease log in and update your password on your first sign-in. If you need any assistance, reach out to your administrator.`;
 
-          const { error: waErr } = await supabase.from('whatsapp_outbox').insert([{
-            to_phone: waPhone,
-            message: welcomeMsg,
-            status: 'queued',
-            created_by: SWAPNIL_USER_ID
-          }]);
+          // Welcome goes out through the official Cloud API as an approved
+          // Meta template (partner_welcome). The login credentials can't be a
+          // template -- Meta rejects any template containing a password --
+          // so they're sent as a normal message from the creating admin's
+          // own WhatsApp.
+          const { error: waErr } = await supabase.from('whatsapp_outbox').insert([
+            {
+              to_phone: waPhone,
+              message: `Dear ${firstName} ${lastName || ''}, welcome to Opal Properties! Your reference ID is ${employeeIdVal}.`,
+              status: 'queued',
+              created_by: user?.id || null,
+              template_name: 'partner_welcome',
+              template_params: [`${firstName} ${lastName || ''}`.trim(), 'Opal Properties', String(employeeIdVal)],
+            },
+            { to_phone: waPhone, message: welcomeMsg, status: 'queued', created_by: user?.id || null },
+          ]);
           if (waErr) {
             reportQueryError('Employees: send WhatsApp credentials', waErr);
           }
@@ -949,14 +1030,43 @@ export const Employees: React.FC = () => {
   // are already the filtered set.
   const filteredEmployees = employees;
 
+  // Column sort -- client-side over the current page's fetched rows only.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDirection>('asc');
+  const toggleSort = (key: string) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  };
+  const employeeSortValue = (emp: Employee, key: string): unknown => {
+    switch (key) {
+      case 'name': return `${emp.first_name || ''} ${emp.last_name || ''}`.trim();
+      case 'department': return emp.department;
+      case 'manager': return managersLookup.find(m => m.id === emp.reporting_manager)?.name;
+      case 'joinDate': return emp.joining_date;
+      case 'status': return emp.employment_status;
+      case 'role': return emp.user_id ? userRolesMap.get(emp.user_id) : null;
+      default: return null;
+    }
+  };
+  const sortedEmployees = useMemo(() => {
+    if (!sortKey) return filteredEmployees;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...filteredEmployees].sort((a, b) => compareValues(employeeSortValue(a, sortKey), employeeSortValue(b, sortKey)) * dir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredEmployees, sortKey, sortDir, managersLookup, userRolesMap]);
+
   // Server-side paginated like fetchEmployees, so this re-runs the same
   // filtered query without .range() to pull every matching employee.
   const [exportingEmployees, setExportingEmployees] = useState(false);
-  const handleExportExcel = async () => {
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  // scope 'filtered' = today's behavior; 'all' skips every filter below
+  // except the terminated-employee exclusion, which mirrors the directory's
+  // own default view rather than a filter the user chose.
+  const handleExportExcel = async (scope: 'all' | 'filtered' = 'filtered') => {
     setExportingEmployees(true);
     try {
       let query = supabase.from('employees').select('*');
-      if (searchQuery.trim()) {
+      if (scope === 'filtered' && searchQuery.trim()) {
         searchQuery.trim().split(/\s+/).forEach(word => {
           const w = word.replace(/[%,]/g, '');
           if (!w) return;
@@ -967,11 +1077,11 @@ export const Employees: React.FC = () => {
           query = query.or(`first_name.ilike.%${w}%,last_name.ilike.%${w}%,employee_id.ilike.%${w}%,official_email.ilike.%${w}%,personal_email.ilike.%${w}%${profileIdClause}`);
         });
       }
-      if (deptFilter) query = query.eq('department', deptFilter);
-      if (desigFilter) query = query.eq('designation', desigFilter);
-      if (statusFilter) query = query.eq('employment_status', statusFilter);
-      else query = query.neq('employment_status', 'terminated');
-      if (roleFilter) {
+      if (scope === 'filtered' && deptFilter) query = query.eq('department', deptFilter);
+      if (scope === 'filtered' && desigFilter) query = query.eq('designation', desigFilter);
+      if (scope === 'filtered' && statusFilter) query = query.eq('employment_status', statusFilter);
+      else if (scope === 'filtered') query = query.neq('employment_status', 'terminated');
+      if (scope === 'filtered' && roleFilter) {
         const matchingUserIds = Array.from(userRolesMap.entries())
           .filter(([, rName]) => rName === roleFilter)
           .map(([uid]) => uid);
@@ -1049,7 +1159,7 @@ export const Employees: React.FC = () => {
           </button>
           {currentUserRole === 'super_admin' && (
             <button
-              onClick={handleExportExcel}
+              onClick={() => setExportModalOpen(true)}
               disabled={exportingEmployees}
               className="flex items-center space-x-2 bg-white border border-slate-200 px-4 py-2 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm focus:outline-none disabled:opacity-50"
             >
@@ -1057,6 +1167,13 @@ export const Employees: React.FC = () => {
               <span>{exportingEmployees ? 'Exporting...' : 'Export to Excel'}</span>
             </button>
           )}
+          <ExportModal
+            open={exportModalOpen}
+            onClose={() => setExportModalOpen(false)}
+            entityLabel="employees"
+            filteredCount={totalCount}
+            onExport={(scope) => handleExportExcel(scope)}
+          />
           <button
             onClick={openCreateModal}
             className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-650/10 hover:shadow-lg transition-all focus:outline-none"
@@ -1198,29 +1315,48 @@ export const Employees: React.FC = () => {
           </div>
         ) : (
           <>
+            {currentUserRole === 'super_admin' && (
+              <BulkActionBar
+                count={selectedEmployeeIds.size}
+                onCancel={() => setSelectedEmployeeIds(new Set())}
+                actions={[{ label: 'Offboard', onClick: handleBulkOffboardEmployees, danger: true }]}
+              />
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-slate-800">
                 <thead>
                   <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
+                    {currentUserRole === 'super_admin' && (
+                      <BulkSelectHeaderCell
+                        allIds={sortedEmployees.filter((e) => !!e.user_id && e.employment_status?.toLowerCase() !== 'terminated').map((e) => e.id)}
+                        selectedIds={selectedEmployeeIds}
+                        onToggleAll={toggleAllEmployeesSelected}
+                      />
+                    )}
                     <th className="py-3.5 px-6">Employee ID & Photo</th>
-                    <th className="py-3.5 px-6">Name & Email</th>
-                    <th className="py-3.5 px-6">Department & Designation</th>
-                    <th className="py-3.5 px-6">Reporting Manager</th>
-                    <th className="py-3.5 px-6">Join Date</th>
-                    <th className="py-3.5 px-6">Status</th>
-                    <th className="py-3.5 px-6 text-indigo-700">Access Role</th>
+                    <SortableTh label="Name & Email" active={sortKey === 'name'} direction={sortDir} onClick={() => toggleSort('name')} className="py-3.5 px-6" />
+                    <SortableTh label="Department & Designation" active={sortKey === 'department'} direction={sortDir} onClick={() => toggleSort('department')} className="py-3.5 px-6" />
+                    <SortableTh label="Reporting Manager" active={sortKey === 'manager'} direction={sortDir} onClick={() => toggleSort('manager')} className="py-3.5 px-6" />
+                    <SortableTh label="Join Date" active={sortKey === 'joinDate'} direction={sortDir} onClick={() => toggleSort('joinDate')} className="py-3.5 px-6" />
+                    <SortableTh label="Status" active={sortKey === 'status'} direction={sortDir} onClick={() => toggleSort('status')} className="py-3.5 px-6" />
+                    <SortableTh label="Access Role" active={sortKey === 'role'} direction={sortDir} onClick={() => toggleSort('role')} className="py-3.5 px-6 text-indigo-700" />
                     <th className="py-3.5 px-6 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredEmployees.length > 0 ? (
-                    filteredEmployees.map((emp) => {
+                  {sortedEmployees.length > 0 ? (
+                    sortedEmployees.map((emp) => {
                       const userRoleVal = emp.user_id ? userRolesMap.get(emp.user_id) : '—';
                       const managerObj = managersLookup.find(m => m.id === emp.reporting_manager);
                       const managerName = managerObj ? managerObj.name : '—';
 
                       return (
                         <tr key={emp.id} className="hover:bg-slate-50/50 transition-colors">
+                          {currentUserRole === 'super_admin' && (
+                            (!emp.user_id || emp.employment_status?.toLowerCase() === 'terminated')
+                              ? <td className="w-10 px-3" />
+                              : <BulkSelectCell id={emp.id} selectedIds={selectedEmployeeIds} onToggle={toggleEmployeeSelected} />
+                          )}
                           <td className="py-4 px-6">
                             <div className="flex items-center space-x-3">
                               {emp.profile_photo ? (
@@ -1300,7 +1436,7 @@ export const Employees: React.FC = () => {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={8} className="py-20 text-center text-slate-400">
+                      <td colSpan={9} className="py-20 text-center text-slate-400">
                         <div className="flex flex-col items-center justify-center space-y-3">
                           <Users className="h-8 w-8 text-slate-300" />
                           <p className="text-slate-505 font-semibold text-sm">No Employees Found</p>
@@ -1606,20 +1742,34 @@ export const Employees: React.FC = () => {
       )}
 
       {/* ADD / EDIT EMPLOYEE FORM MODAL */}
-      {isFormOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsFormOpen(false)} />
-          
-          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-2xl w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-left">
-            <div className="bg-indigo-650 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">{isEditMode ? 'Edit Employee Details' : 'Register New Employee'}</span>
-              <button type="button" onClick={() => setIsFormOpen(false)} className="p-1 rounded-lg text-indigo-200 hover:text-white focus:outline-none">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleFormSubmit}>
-              <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+      <SlideOverPanel
+        open={isFormOpen}
+        onClose={() => setIsFormOpen(false)}
+        title={isEditMode ? 'Edit Employee Details' : 'Register New Employee'}
+        width="max-w-2xl"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setIsFormOpen(false)}
+              className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="employee-create-form"
+              disabled={formLoading}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
+            >
+              {formLoading ? 'Saving...' : 'Save Employee'}
+            </button>
+          </>
+        }
+      >
+        {isFormOpen && (
+            <form id="employee-create-form" onSubmit={handleFormSubmit}>
+              <div className="space-y-6">
                 {formError && (
                   <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl flex items-start space-x-2.5">
                     <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
@@ -2030,28 +2180,9 @@ export const Employees: React.FC = () => {
                   </div>
                 </div>
               </div>
-
-              {/* Form Footer */}
-              <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsFormOpen(false)}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={formLoading}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
-                >
-                  {formLoading ? 'Saving...' : 'Save Employee'}
-                </button>
-              </div>
             </form>
-          </div>
-        </div>
-      )}
+        )}
+      </SlideOverPanel>
 
       {newAccountCredentials && (
         <div className="fixed inset-0 z-[60] overflow-y-auto flex items-center justify-center p-4">
@@ -2125,7 +2256,7 @@ export const Employees: React.FC = () => {
                           const waPhone = digits.length === 10 ? `91${digits}` : digits;
                           const portalUrl = `${window.location.origin}/login`;
                           const msg = `🔑 *Your CRM Login Credentials*\n\n• Email: ${newAccountCredentials.email}\n• Password: ${newAccountCredentials.password}\n🌐 Portal: ${portalUrl}\n\nPlease change your password after first login.`;
-                          await supabase.from('whatsapp_outbox').insert([{ to_phone: waPhone, message: msg, status: 'queued', created_by: SWAPNIL_USER_ID }]);
+                          await supabase.from('whatsapp_outbox').insert([{ to_phone: waPhone, message: msg, status: 'queued', created_by: user?.id || null }]);
                           setWaSent(true);
                         } catch (err) {
                           console.error('Manual WhatsApp re-send failed:', err);

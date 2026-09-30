@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
@@ -14,7 +14,13 @@ import {
   CheckCircle,
   XCircle,
   Eye,
+  Download,
 } from 'lucide-react';
+import { exportRowsToExcel } from '../utils/exportExcel';
+import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
+import { PhoneActions } from '../components/ui/PhoneActions';
+import { ExportModal } from '../components/ui/ExportModal';
+import { SlideOverPanel } from '../components/ui/SlideOverPanel';
 
 interface OutreachEntry {
   id: string;
@@ -128,22 +134,15 @@ export const CPOutreach: React.FC = () => {
     }
 
     try {
-      const [roleRes, assignRes, cpProjRes] = await Promise.all([
+      const [roleRes, assignRes] = await Promise.all([
         supabase.from('roles').select('id').in('name', ['sourcing_manager', 'sourcing_manager_tl']),
         supabase.from('user_project_assignments').select('user_id, project_id').eq('is_active', true),
-        supabase.from('channel_partner_projects').select('channel_partner_id, project_id'),
       ]);
 
       const userProjectMap = new Map<string, Set<string>>();
       (assignRes.data || []).forEach(row => {
         if (!userProjectMap.has(row.user_id)) userProjectMap.set(row.user_id, new Set());
         userProjectMap.get(row.user_id)!.add(row.project_id);
-      });
-
-      const cpProjectMap = new Map<string, Set<string>>();
-      (cpProjRes.data || []).forEach(row => {
-        if (!cpProjectMap.has(row.channel_partner_id)) cpProjectMap.set(row.channel_partner_id, new Set());
-        cpProjectMap.get(row.channel_partner_id)!.add(row.project_id);
       });
 
       const roleIds = (roleRes.data || []).map(r => r.id);
@@ -181,25 +180,14 @@ export const CPOutreach: React.FC = () => {
         }
       }
 
-      // Only channel partners who've actually been onboarded (i.e. have a
-      // login -- user_id set) are selectable here. Client's explicit
-      // request: outreach can no longer be logged against a partner who
-      // hasn't been onboarded yet -- onboard them first, then log outreach.
+      // Every Channel Partner on file is selectable here -- client's
+      // explicit request: the full list, not filtered by onboarding status
+      // or project mapping.
       const { data: cpData, error: cpErr } = await supabase
         .from('channel_partners')
-        .select('id, name, company_name, mobile')
-        .not('user_id', 'is', null);
+        .select('id, name, company_name, mobile');
       if (cpErr) reportQueryError('CP Outreach: channel partners', cpErr);
-      else {
-        let partners = cpData || [];
-        if (!isSuperAdmin(role) && assignedProjects && assignedProjects.length > 0) {
-          partners = partners.filter(cp => {
-            const pSet = cpProjectMap.get(cp.id);
-            return pSet && assignedProjects.some(pid => pSet.has(pid));
-          });
-        }
-        setChannelPartners(partners);
-      }
+      else setChannelPartners(cpData || []);
     } catch (err) {
       reportQueryError('CP Outreach: lookups', err);
     }
@@ -241,11 +229,8 @@ export const CPOutreach: React.FC = () => {
     setFormError(null);
   };
 
-  // Selecting an onboarded partner auto-fills CP Name and Contact Number.
-  // A CP not yet onboarded can't be picked at all -- the datalist/free-text
-  // path this used to have (letting a brand-new prospect be typed in
-  // directly) was removed per the client's explicit request: outreach can
-  // only be logged against a partner who's already been onboarded.
+  // Selecting a partner from the full list auto-fills CP Name and Contact
+  // Number.
   const handleFirmNameChange = (cpId: string) => {
     const match = channelPartners.find(cp => cp.id === cpId);
     setForm(prev => ({
@@ -350,6 +335,54 @@ export const CPOutreach: React.FC = () => {
     );
   });
 
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const handleExport = (scope: 'all' | 'filtered' = 'filtered') => {
+    const smName = new Map(sourcingManagers.map(sm => [sm.id, sm.name]));
+    const rows = scope === 'all' ? entries : filteredEntries;
+    exportRowsToExcel('cp_outreach', 'CP Outreach', rows.map(en => ({
+      'Created At': en.created_at ? new Date(en.created_at).toLocaleString('en-IN') : '',
+      'Meet Date': en.meet_date || '',
+      'Sourcing Manager': (en.sourcing_manager_id && smName.get(en.sourcing_manager_id)) || en.sourcing_manager_other || '',
+      'CP Firm': en.cp_firm_name,
+      'CP Name': en.cp_name,
+      'Contact': en.cp_contact_number,
+      'Location': en.location,
+      'Type': en.cp_type,
+      'Visit': en.meeting_done,
+      'Active In': (en.leads_source_active_in || []).join(', '),
+      'Remarks': en.meeting_remarks || '',
+      'Map': en.live_location || '',
+      'Status': en.status || '',
+    })));
+  };
+
+  // Column sort -- client-side over the (already filtered) rows.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDirection>('asc');
+  const toggleSort = (key: string) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  };
+  const outreachSortValue = (en: OutreachEntry, key: string): unknown => {
+    const smName = new Map(sourcingManagers.map(sm => [sm.id, sm.name]));
+    switch (key) {
+      case 'createdAt': return en.created_at;
+      case 'sourcingManager': return (en.sourcing_manager_id && smName.get(en.sourcing_manager_id)) || en.sourcing_manager_other;
+      case 'cpFirm': return en.cp_firm_name;
+      case 'cpName': return en.cp_name;
+      case 'contact': return en.cp_contact_number;
+      case 'type': return en.cp_type;
+      case 'visit': return en.meeting_done;
+      default: return null;
+    }
+  };
+  const sortedEntries = useMemo(() => {
+    if (!sortKey) return filteredEntries;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...filteredEntries].sort((a, b) => compareValues(outreachSortValue(a, sortKey), outreachSortValue(b, sortKey)) * dir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredEntries, sortKey, sortDir, sourcingManagers]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -385,6 +418,20 @@ export const CPOutreach: React.FC = () => {
             <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
           </button>
           <button
+            onClick={() => setExportModalOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-2.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold shadow-sm"
+          >
+            <Download className="h-4 w-4" />
+            <span>Export to Excel</span>
+          </button>
+          <ExportModal
+            open={exportModalOpen}
+            onClose={() => setExportModalOpen(false)}
+            entityLabel="outreach visits"
+            filteredCount={filteredEntries.length}
+            onExport={(scope) => handleExport(scope)}
+          />
+          <button
             onClick={() => { resetForm(); setIsDialogOpen(true); }}
             className="flex items-center space-x-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold shadow-sm"
           >
@@ -410,21 +457,21 @@ export const CPOutreach: React.FC = () => {
           <table className="w-full text-left border-collapse text-sm">
             <thead>
               <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                <th className="py-3 px-6">Created At</th>
-                <th className="py-3 px-6">Sourcing Manager</th>
-                <th className="py-3 px-6">CP Firm</th>
-                <th className="py-3 px-6">CP Name</th>
-                <th className="py-3 px-6">Contact</th>
-                <th className="py-3 px-6">Type</th>
-                <th className="py-3 px-6">Visit</th>
+                <SortableTh label="Created At" active={sortKey === 'createdAt'} direction={sortDir} onClick={() => toggleSort('createdAt')} className="py-3 px-6" />
+                <SortableTh label="Sourcing Manager" active={sortKey === 'sourcingManager'} direction={sortDir} onClick={() => toggleSort('sourcingManager')} className="py-3 px-6" />
+                <SortableTh label="CP Firm" active={sortKey === 'cpFirm'} direction={sortDir} onClick={() => toggleSort('cpFirm')} className="py-3 px-6" />
+                <SortableTh label="CP Name" active={sortKey === 'cpName'} direction={sortDir} onClick={() => toggleSort('cpName')} className="py-3 px-6" />
+                <SortableTh label="Contact" active={sortKey === 'contact'} direction={sortDir} onClick={() => toggleSort('contact')} className="py-3 px-6" />
+                <SortableTh label="Type" active={sortKey === 'type'} direction={sortDir} onClick={() => toggleSort('type')} className="py-3 px-6" />
+                <SortableTh label="Visit" active={sortKey === 'visit'} direction={sortDir} onClick={() => toggleSort('visit')} className="py-3 px-6" />
                 <th className="py-3 px-6">Active In</th>
                 <th className="py-3 px-6">Map</th>
                 <th className="py-3 px-6">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredEntries.length > 0 ? (
-                filteredEntries.map(en => (
+              {sortedEntries.length > 0 ? (
+                sortedEntries.map(en => (
                   <tr key={en.id} ref={registerRow(en.id)} className={`hover:bg-slate-50/50 ${rowClass(en.id)}`}>
                       <td className="py-3 px-6 text-slate-800 font-semibold">
                         <span className="block">{new Date(en.created_at).toLocaleDateString('en-IN')}</span>
@@ -435,7 +482,7 @@ export const CPOutreach: React.FC = () => {
                     </td>
                     <td className="py-3 px-6 text-slate-900 font-semibold">{en.cp_firm_name}</td>
                     <td className="py-3 px-6 text-slate-600">{en.cp_name}</td>
-                    <td className="py-3 px-6 text-slate-600">{en.cp_contact_number}</td>
+                    <td className="py-3 px-6 text-slate-600"><PhoneActions phone={en.cp_contact_number} /></td>
                     <td className="py-3 px-6">
                       <span className="inline-flex px-2 py-0.5 rounded-full text-xxs font-semibold bg-indigo-50 text-indigo-700">{en.cp_type}</span>
                     </td>
@@ -467,18 +514,34 @@ export const CPOutreach: React.FC = () => {
         </div>
       </div>
 
-      {isDialogOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => !submitting && setIsDialogOpen(false)} />
-          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-2xl w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">Log CP Outreach Visit</span>
-              <button onClick={() => !submitting && setIsDialogOpen(false)} className="p-1 rounded-lg text-indigo-200 hover:text-white">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <form onSubmit={handleSubmit}>
-              <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+      <SlideOverPanel
+        open={isDialogOpen}
+        onClose={() => !submitting && setIsDialogOpen(false)}
+        title="Log CP Outreach Visit"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setIsDialogOpen(false)}
+              disabled={submitting}
+              className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-100 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="cp-outreach-form"
+              disabled={submitting}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm disabled:opacity-50"
+            >
+              {submitting ? 'Saving...' : 'Log Outreach'}
+            </button>
+          </>
+        }
+      >
+        {isDialogOpen && (
+            <form id="cp-outreach-form" onSubmit={handleSubmit}>
+              <div className="space-y-4">
                 {formError && (
                   <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl text-sm">{formError}</div>
                 )}
@@ -517,12 +580,11 @@ export const CPOutreach: React.FC = () => {
                       onChange={(e) => handleFirmNameChange(e.target.value)}
                       className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
                     >
-                      <option value="">Select onboarded Channel Partner...</option>
+                      <option value="">Select Channel Partner...</option>
                       {channelPartners.map(cp => (
                         <option key={cp.id} value={cp.id}>{cp.company_name || cp.name || 'Unnamed'}</option>
                       ))}
                     </select>
-                    <p className="text-xxs text-slate-400 mt-1">Only Channel Partners who've been onboarded (have a login) appear here.</p>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">CP Name *</label>
@@ -628,27 +690,9 @@ export const CPOutreach: React.FC = () => {
                   )}
                 </div>
               </div>
-              <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsDialogOpen(false)}
-                  disabled={submitting}
-                  className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-100 disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm disabled:opacity-50"
-                >
-                  {submitting ? 'Saving...' : 'Log Outreach'}
-                </button>
-              </div>
             </form>
-          </div>
-        </div>
-      )}
+        )}
+      </SlideOverPanel>
 
       {/* ── Detail view modal ───────────────────────────────────────────── */}
       {selectedEntry && (

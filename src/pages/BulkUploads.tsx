@@ -45,6 +45,7 @@ const STATUS_LABEL: Record<string, string> = {
   site_visit_planned: 'Visit Planned',
   site_visit_done: 'Visit Done',
   negotiation: 'Negotiation',
+  hold: 'Hold',
   booking_done: 'Booked',
   not_reachable: 'Not Reachable',
   call_back_later: 'Call Back Later',
@@ -58,6 +59,7 @@ const STATUS_LABEL: Record<string, string> = {
 const statusBadgeClass = (status: string | null) => {
   const s = (status || 'new').toLowerCase();
   if (s === 'booking_done') return 'bg-emerald-50 text-emerald-700';
+  if (s === 'hold') return 'bg-orange-50 text-orange-700';
   if (s === 'lost' || s === 'junk' || s === 'already_purchased') return 'bg-rose-50 text-rose-700';
   if (s === 'site_visit_planned' || s === 'site_visit_done' || s === 'ringing' || s === 'switch_off') return 'bg-amber-50 text-amber-700';
   return 'bg-indigo-50 text-indigo-700';

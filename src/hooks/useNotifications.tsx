@@ -85,5 +85,11 @@ export function useNotifications() {
 
   const dismissJustArrived = () => setJustArrived(null);
 
-  return { notifications, unreadCount, markAsRead, markAllAsRead, justArrived, dismissJustArrived, refetch: fetchNotifications };
+  const deleteNotification = async (id: string) => {
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    const { error } = await supabase.from('notifications').delete().eq('id', id);
+    if (error) reportQueryError('Notifications: delete', error);
+  };
+
+  return { notifications, unreadCount, markAsRead, markAllAsRead, deleteNotification, justArrived, dismissJustArrived, refetch: fetchNotifications };
 }

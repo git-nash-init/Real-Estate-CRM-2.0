@@ -932,31 +932,37 @@ export const ChannelPartnerDetails: React.FC = () => {
       // 1. Check for duplicates using booking_id
       const { data: existingComm, error: checkErr } = await supabase
         .from('cp_commissions')
-        .select('id')
+        .select('id, status')
         .eq('booking_id', manualBookingId)
+        .eq('cp_id', id)
         .maybeSingle();
 
       if (checkErr) throw checkErr;
-      if (existingComm) {
+      // A REJECTED obligation is dead (e.g. auto-created at 0 before the
+      // partner's structure existed, then rejected) -- re-creating must be
+      // possible, otherwise the booking is stuck with no referral fee
+      // forever. Reopen that same row (the DB allows only one row per
+      // partner+booking) instead of blocking. Any live one still blocks.
+      if (existingComm && existingComm.status !== 'rejected') {
         throw new Error('This booking already has a referral fee obligation. Duplicate creation is blocked.');
       }
 
-      // 2. Insert into cp_commissions
-      const { error: insertErr } = await supabase
-        .from('cp_commissions')
-        .insert([
-          {
-            cp_id: id,
-            booking_id: manualBookingId,
-            commission_percentage: parseFloat(manualCommissionRate) || 0,
-            commission_amount: commAmt,
-            payable_amount: payAmt,
-            paid_amount: 0,
-            pending_amount: payAmt,
-            status: 'pending',
-            remarks: manualRemarks.trim() || null
-          }
-        ]);
+      const payload = {
+        commission_percentage: parseFloat(manualCommissionRate) || 0,
+        commission_amount: commAmt,
+        payable_amount: payAmt,
+        paid_amount: 0,
+        pending_amount: payAmt,
+        status: 'pending',
+        approved_by: null,
+        approved_at: null,
+        remarks: manualRemarks.trim() || null
+      };
+
+      // 2. Insert (or reopen the rejected one)
+      const { error: insertErr } = existingComm
+        ? await supabase.from('cp_commissions').update(payload).eq('id', existingComm.id)
+        : await supabase.from('cp_commissions').insert([{ cp_id: id, booking_id: manualBookingId, ...payload }]);
 
       if (insertErr) throw insertErr;
 

@@ -20,10 +20,11 @@ const DAILY_CAP = Number(process.env.WA_DAILY_CAP || 200);
 const POLL_INTERVAL_MS = Number(process.env.WA_POLL_INTERVAL_MS || 5000);
 const HEARTBEAT_INTERVAL_MS = Number(process.env.WA_HEARTBEAT_INTERVAL_MS || 3000);
 
-// Swapnil sends via the official Meta Cloud API (Supabase Cron + Edge
-// Function), not this Baileys gateway -- his outbox rows are left alone
-// here so the two senders never race for the same queued message.
-const SWAPNIL_USER_ID = 'ccfd55b7-36a2-4ab0-964e-a7e8403a9504';
+// Rows with template_name set are sent by the official Meta Cloud API
+// (send-whatsapp Edge Function). This gateway only claims rows WITHOUT one --
+// manual Lead messages and Marketing campaigns, for every user (Swapnil
+// included) from their own QR-paired WhatsApp -- so the two senders never
+// race for the same queued message.
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   logger.error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required. See .env.example.');
@@ -294,7 +295,7 @@ async function processOutboxOnce() {
     .select('*')
     .eq('status', 'queued')
     .in('created_by', openSenderIds)
-    .neq('created_by', SWAPNIL_USER_ID)
+    .is('template_name', null)
     .order('created_at', { ascending: true })
     .limit(1);
   if (ownSenderErr) {
@@ -314,7 +315,7 @@ async function processOutboxOnce() {
       .from('whatsapp_outbox')
       .select('*')
       .eq('status', 'queued')
-      .neq('created_by', SWAPNIL_USER_ID)
+      .is('template_name', null)
       .order('created_at', { ascending: true })
       .limit(1);
     if (anyErr) {

@@ -49,10 +49,11 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 // A Sourcing Manager / Presales target completes when a Site Visit
-// (quick_site_visits) is logged with them attached; a Closing Manager
-// target completes when a Booking is created with them as closing_manager
-// -- enforced by DB triggers (complete_target_on_site_visit /
-// complete_target_on_booking), not by this page.
+// (quick_site_visits) is logged with them attached -- for Sourcing
+// Manager, CP-sourced visits only (client's standing instruction); a
+// Closing Manager target completes when a Booking is created with them as
+// closing_manager -- enforced by DB triggers (complete_target_on_site_visit
+// / complete_target_on_booking), not by this page.
 const COMPLETION_EVENT_LABEL: Record<string, string> = {
   sourcing_manager: 'on Site Visit logged',
   presales: 'on Site Visit logged',
@@ -218,6 +219,12 @@ export const Targets: React.FC = () => {
   const [syncing, setSyncing] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [roleFilter, setRoleFilter] = useState<'all' | 'sourcing_manager' | 'closing_manager' | 'presales'>('all');
+  // Date-range filter -- shows targets whose period OVERLAPS the selected
+  // range (not just ones starting/ending inside it), so a range spanning
+  // part of a month still surfaces that month's target. Empty = no filter,
+  // falls back to the default Active/Other Periods split below.
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 
   // A `target_assigned`/`target_updated` notification lands here with
   // ?highlight=<staff_target id> -- scroll to and ring-highlight that
@@ -386,7 +393,18 @@ export const Targets: React.FC = () => {
     }
   };
 
-  const filteredTargets = targets.filter(t => roleFilter === 'all' || t.role === roleFilter);
+  const filteredTargets = targets
+    .filter(t => roleFilter === 'all' || t.role === roleFilter)
+    .filter(t => {
+      if (!dateFrom && !dateTo) return true;
+      // Overlap test: the target's period and the [dateFrom, dateTo] range
+      // share at least one day. An open end on either side (only From or
+      // only To set) acts as an unbounded edge.
+      if (dateFrom && t.period_end < dateFrom) return false;
+      if (dateTo && t.period_start > dateTo) return false;
+      return true;
+    });
+  const isDateFiltered = !!(dateFrom || dateTo);
   const activeTargets = filteredTargets.filter(t => todayISO() >= t.period_start && todayISO() <= t.period_end);
   const pastTargets = filteredTargets.filter(t => !(todayISO() >= t.period_start && todayISO() <= t.period_end));
 
@@ -465,11 +483,56 @@ export const Targets: React.FC = () => {
           <option value="closing_manager">Closing Manager</option>
           <option value="presales">Presales</option>
         </select>
+
+        <div className="flex items-center gap-1.5">
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            max={dateTo || undefined}
+            className="rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            title="From date"
+          />
+          <span className="text-xs text-slate-400">to</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            min={dateFrom || undefined}
+            className="rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            title="To date"
+          />
+          {isDateFiltered && (
+            <button
+              onClick={() => { setDateFrom(''); setDateTo(''); }}
+              className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              title="Clear date filter"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
-      {activeTargets.length === 0 && pastTargets.length === 0 ? (
+      {filteredTargets.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm py-14 text-center text-slate-400 italic">
-          No targets found.
+          No targets found{isDateFiltered ? ' for this date range' : ''}.
+        </div>
+      ) : isDateFiltered ? (
+        <div>
+          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
+            {dateFrom && dateTo
+              ? `${new Date(dateFrom).toLocaleDateString('en-IN')} – ${new Date(dateTo).toLocaleDateString('en-IN')}`
+              : dateFrom
+              ? `From ${new Date(dateFrom).toLocaleDateString('en-IN')}`
+              : `Up to ${new Date(dateTo).toLocaleDateString('en-IN')}`}
+            {' '}({filteredTargets.length})
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredTargets.map(t => (
+              <TargetCard key={t.id} t={t} staffName={scopeTab === 'all' ? usersMap.get(t.assigned_to) : undefined} canManage={canManage} onDelete={handleDelete} kra={kraMap.get(t.id)} cardRef={registerRow(t.id)} cardClassName={rowClass(t.id)} defaultExpanded={t.id === highlightId} />
+            ))}
+          </div>
         </div>
       ) : (
         <>

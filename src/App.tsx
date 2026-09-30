@@ -26,6 +26,7 @@ import { Settings } from './pages/Settings';
 import { Expenses } from './pages/Expenses';
 import { BulkUploads } from './pages/BulkUploads';
 import { WhatsAppMessages } from './pages/WhatsAppMessages';
+import { PrivacyPolicy } from './pages/PrivacyPolicy';
 import { canAccessBulkUploadPage } from './utils/permissions';
 
 function App() {
@@ -37,6 +38,8 @@ function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
+          {/* Public -- linked from the Meta / WhatsApp Business app settings */}
+          <Route path="/privacy-policy" element={<PrivacyPolicy />} />
 
           {/* Forced first-login password change — protected (must be
               logged in) but deliberately outside AppLayout/the must-change

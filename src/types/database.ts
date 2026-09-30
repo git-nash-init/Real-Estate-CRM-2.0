@@ -3558,6 +3558,7 @@ export type Database = {
         | "site_visit_done"
         | "negotiation"
         | "booking_done"
+        | "hold"
         | "not_reachable"
         | "call_back_later"
         | "lost"
@@ -3795,6 +3796,7 @@ export const Constants = {
         "site_visit_done",
         "negotiation",
         "booking_done",
+        "hold",
         "not_reachable",
         "call_back_later",
         "lost",

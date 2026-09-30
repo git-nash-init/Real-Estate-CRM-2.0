@@ -1,10 +1,15 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
 import { exportRowsToExcel } from '../utils/exportExcel';
 import { useHighlightParam } from '../hooks/useHighlightParam';
+import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
+import { PhoneActions } from '../components/ui/PhoneActions';
+import { ExportModal } from '../components/ui/ExportModal';
+import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { BulkSelectHeaderCell, BulkSelectCell, BulkActionBar } from '../components/ui/BulkActionBar';
 import {
   Search,
   RefreshCw,
@@ -15,7 +20,6 @@ import {
   UserX,
   UserCheck,
   Plus,
-  X,
   AlertCircle,
   Users,
   CheckCircle,
@@ -168,6 +172,9 @@ export const ChannelPartners: React.FC = () => {
 
   // Pagination state
   const [page, setPage] = useState(0);
+  // Clear any bulk-select checkboxes when the page changes, so a stale
+  // selection from a previous page can't be bulk-deleted by mistake.
+  useEffect(() => { setSelectedCpIds(new Set()); }, [page]);
   const [pageSize] = useState(10);
 
   // A `channel_partner`/`cp_request_approved`/`cp_request_rejected`
@@ -488,6 +495,55 @@ export const ChannelPartners: React.FC = () => {
     }
   };
 
+  // Bulk select -- same delete permission as the per-row Trash2 button
+  // (isSuperAdmin only). Calls the same manage-cp-account edge function one
+  // partner at a time, rather than duplicating its ban-and-delete logic.
+  const [selectedCpIds, setSelectedCpIds] = useState<Set<string>>(new Set());
+  const toggleCpSelected = (id: string, checked: boolean) => {
+    setSelectedCpIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+  const toggleAllCpsSelected = (ids: string[], checked: boolean) => {
+    setSelectedCpIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => { if (checked) next.add(id); else next.delete(id); });
+      return next;
+    });
+  };
+  const handleBulkDeleteCps = async () => {
+    const selected = sortedPartners.filter((cp) => selectedCpIds.has(cp.id));
+    if (selected.length === 0) return;
+    if (!window.confirm(`Are you sure you want to permanently delete ${selected.length} Channel Partner(s)? This also blocks their login immediately, if they have one.`)) return;
+    let deleted = 0;
+    for (const cp of selected) {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const accessToken = sessionData.session?.access_token;
+        if (!accessToken) throw new Error('Session expired.');
+        const { data: fnData, error: fnError } = await supabase.functions.invoke('manage-cp-account', {
+          body: { action: 'ban_and_delete', cp_id: cp.id, user_id: cp.user_id || undefined },
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (fnError) throw fnError;
+        if (fnData?.error) throw new Error(fnData.error);
+        deleted++;
+      } catch (err: any) {
+        console.error('Error deleting channel partner:', err);
+      }
+    }
+    setNotification({
+      type: deleted === selected.length ? 'success' : 'error',
+      message: deleted === selected.length
+        ? `${deleted} Channel Partner(s) deleted permanently.`
+        : `${deleted} of ${selected.length} deleted -- some failed, check console.`,
+    });
+    setSelectedCpIds(new Set());
+    fetchData();
+  };
+
   const handleToggleStatus = async (cp: ChannelPartner) => {
     const nextStatus = cp.status === 'active' ? 'inactive' : 'active';
 
@@ -666,7 +722,22 @@ export const ChannelPartners: React.FC = () => {
         const portalUrl = `${window.location.origin}/login`;
         let welcomeMsg = `🎉 *Welcome to Opal Properties Channel Partner Network!*\n\nDear ${req.partner_name},\nYour Channel Partner registration request has been approved!\n\n📋 *Partner Code:* ${generatedCode}\n👤 *Role:* Channel Partner`;
         welcomeMsg += `\n\n🔑 *Portal Login Credentials:*\n• Email: ${targetEmail}\n• Temporary Password: ${generatedPassword}\n🌐 *Login Portal:* ${portalUrl}\n\nPlease log in and update your password upon your first access.`;
-        await supabase.from('whatsapp_outbox').insert([{ to_phone: waPhone, message: welcomeMsg, status: 'queued', created_by: user?.id || null }]);
+        // Welcome goes out through the official Cloud API as an approved
+        // Meta template (partner_welcome). The login credentials themselves
+        // can't be a template -- Meta rejects any template containing a
+        // password -- so they're sent as a normal message from the approving
+        // admin's own WhatsApp.
+        await supabase.from('whatsapp_outbox').insert([
+          {
+            to_phone: waPhone,
+            message: `Dear ${req.partner_name}, welcome to Opal Properties! Your reference ID is ${generatedCode}.`,
+            status: 'queued',
+            created_by: user?.id || null,
+            template_name: 'partner_welcome',
+            template_params: [req.partner_name, 'Opal Properties', generatedCode],
+          },
+          { to_phone: waPhone, message: welcomeMsg, status: 'queued', created_by: user?.id || null },
+        ]);
       }
 
       // 7. Show credentials modal
@@ -1003,21 +1074,23 @@ export const ChannelPartners: React.FC = () => {
 
   const filteredPartners = getFilteredPartners();
 
-  const handleExportExcel = () => {
-    const rows = filteredPartners.map((cp) => ({
-      'CP Code': cp.cp_code || cp.partner_code || '',
-      'Name': cp.name || cp.partner_name || '',
-      'Company': cp.company_name || '',
-      'Mobile': cp.mobile || cp.phone || '',
-      'Email': cp.email || '',
-      'City': cp.city || '',
-      'State': cp.state || '',
-      'RERA Number': cp.rera_number || cp.rera_registration_number || '',
-      'GST Number': cp.gst_number || '',
-      'PAN Number': cp.pan_number || '',
-      'Status': cp.status || '',
-      'Created At': cp.created_at ? new Date(cp.created_at).toLocaleString('en-IN') : '',
-    }));
+  const cpExportRow = (cp: ChannelPartner) => ({
+    'CP Code': cp.cp_code || cp.partner_code || '',
+    'Name': cp.name || cp.partner_name || '',
+    'Company': cp.company_name || '',
+    'Mobile': cp.mobile || cp.phone || '',
+    'Email': cp.email || '',
+    'City': cp.city || '',
+    'State': cp.state || '',
+    'RERA Number': cp.rera_number || cp.rera_registration_number || '',
+    'GST Number': cp.gst_number || '',
+    'PAN Number': cp.pan_number || '',
+    'Status': cp.status || '',
+    'Created At': cp.created_at ? new Date(cp.created_at).toLocaleString('en-IN') : '',
+  });
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const handleExportExcel = (scope: 'all' | 'filtered' = 'filtered') => {
+    const rows = (scope === 'all' ? partners : filteredPartners).map(cpExportRow);
     exportRowsToExcel('Channel_Partners', 'Channel Partners', rows);
   };
 
@@ -1025,6 +1098,31 @@ export const ChannelPartners: React.FC = () => {
   const startRange = totalFilteredCount > 0 ? page * pageSize + 1 : 0;
   const endRange = Math.min((page + 1) * pageSize, totalFilteredCount);
   const paginatedPartners = filteredPartners.slice(page * pageSize, (page + 1) * pageSize);
+
+  // Column sort -- client-side over the current page's rows only.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDirection>('asc');
+  const toggleSort = (key: string) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  };
+  const cpSortValue = (cp: ChannelPartner, key: string): unknown => {
+    switch (key) {
+      case 'code': return cp.cp_code || cp.partner_code;
+      case 'name': return cp.name;
+      case 'phone': return cp.phone || cp.mobile;
+      case 'email': return cp.email;
+      case 'rera': return cp.rera_number;
+      case 'status': return cp.status;
+      default: return null;
+    }
+  };
+  const sortedPartners = useMemo(() => {
+    if (!sortKey) return paginatedPartners;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...paginatedPartners].sort((a, b) => compareValues(cpSortValue(a, sortKey), cpSortValue(b, sortKey)) * dir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paginatedPartners, sortKey, sortDir]);
 
   // Compute live stats metrics
   const totalPartners = partners.length;
@@ -1085,13 +1183,20 @@ export const ChannelPartners: React.FC = () => {
 
           {isSuperAdmin && (
             <button
-              onClick={handleExportExcel}
+              onClick={() => setExportModalOpen(true)}
               className="inline-flex items-center space-x-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 rounded-xl text-xs font-semibold shadow-sm transition-all focus:outline-none"
             >
               <Download className="h-3.5 w-3.5" />
               <span>Export to Excel</span>
             </button>
           )}
+          <ExportModal
+            open={exportModalOpen}
+            onClose={() => setExportModalOpen(false)}
+            entityLabel="channel partners"
+            filteredCount={totalFilteredCount}
+            onExport={(scope) => handleExportExcel(scope)}
+          />
           {/* All logged-in users can submit a request */}
           <button
             onClick={() => { resetFormFields(); setEditingPartner(null); setIsCreateOpen(true); }}
@@ -1248,37 +1353,54 @@ export const ChannelPartners: React.FC = () => {
           </div>
         ) : (
           <>
+            {isSuperAdmin && (
+              <BulkActionBar
+                count={selectedCpIds.size}
+                onCancel={() => setSelectedCpIds(new Set())}
+                actions={[{ label: 'Delete', onClick: handleBulkDeleteCps, danger: true }]}
+              />
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                    <th className="py-3.5 px-6">CP Code</th>
-                    <th className="py-3.5 px-6">Partner Name</th>
+                    {isSuperAdmin && (
+                      <BulkSelectHeaderCell
+                        allIds={sortedPartners.map((cp) => cp.id)}
+                        selectedIds={selectedCpIds}
+                        onToggleAll={toggleAllCpsSelected}
+                      />
+                    )}
+                    <SortableTh label="CP Code" active={sortKey === 'code'} direction={sortDir} onClick={() => toggleSort('code')} className="py-3.5 px-6" />
+                    <SortableTh label="Partner Name" active={sortKey === 'name'} direction={sortDir} onClick={() => toggleSort('name')} className="py-3.5 px-6" />
                     <th className="py-3.5 px-6">Company</th>
-                    <th className="py-3.5 px-6">Phone</th>
-                    <th className="py-3.5 px-6">Email</th>
-                    <th className="py-3.5 px-6">RERA Number</th>
+                    <SortableTh label="Phone" active={sortKey === 'phone'} direction={sortDir} onClick={() => toggleSort('phone')} className="py-3.5 px-6" />
+                    <SortableTh label="Email" active={sortKey === 'email'} direction={sortDir} onClick={() => toggleSort('email')} className="py-3.5 px-6" />
+                    <SortableTh label="RERA Number" active={sortKey === 'rera'} direction={sortDir} onClick={() => toggleSort('rera')} className="py-3.5 px-6" />
                     <th className="py-3.5 px-6">Referral Fee Structure</th>
                     <th className="py-3.5 px-6">Sourcing Manager</th>
-                    <th className="py-3.5 px-6">Status</th>
+                    <SortableTh label="Status" active={sortKey === 'status'} direction={sortDir} onClick={() => toggleSort('status')} className="py-3.5 px-6" />
                     <th className="py-3.5 px-6 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {paginatedPartners.length > 0 ? (
-                    paginatedPartners.map((cp) => {
+                  {sortedPartners.length > 0 ? (
+                    sortedPartners.map((cp) => {
                       const code = cp.cp_code || cp.partner_code || '—';
                       const name = cp.name || '—';
-                      const phoneVal = cp.phone || cp.mobile || '—';
+                      const phoneVal = cp.phone || cp.mobile || null;
                       const companyVal = parseNotesField(cp.notes, 'Company') || '—';
                       const commLabel = 'Project Specific';
 
                       return (
                         <tr key={cp.id} ref={registerRow(cp.id)} className={`hover:bg-slate-50/50 transition-colors text-sm ${rowClass(cp.id)}`}>
+                          {isSuperAdmin && (
+                            <BulkSelectCell id={cp.id} selectedIds={selectedCpIds} onToggle={toggleCpSelected} />
+                          )}
                           <td className="py-4 px-6 font-bold text-slate-900">{code}</td>
                           <td className="py-4 px-6 font-semibold text-slate-800">{name}</td>
                           <td className="py-4 px-6 text-slate-600">{companyVal}</td>
-                          <td className="py-4 px-6 text-slate-650">{phoneVal}</td>
+                          <td className="py-4 px-6 text-slate-650"><PhoneActions phone={phoneVal} /></td>
                           <td className="py-4 px-6 text-slate-600 text-xs truncate max-w-[150px]">{cp.email || '—'}</td>
                           <td className="py-4 px-6 text-slate-600 font-mono text-xs">{cp.rera_number || '—'}</td>
                           <td className="py-4 px-6 text-slate-700 font-semibold text-xs">{commLabel}</td>
@@ -1342,7 +1464,7 @@ export const ChannelPartners: React.FC = () => {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={10} className="py-20 text-center text-slate-400">
+                      <td colSpan={11} className="py-20 text-center text-slate-400">
                         <div className="flex flex-col items-center justify-center space-y-3">
                           <div className="bg-slate-50 p-4 rounded-full text-slate-300">
                             <Users className="h-8 w-8" />
@@ -1446,29 +1568,44 @@ export const ChannelPartners: React.FC = () => {
       )}
 
       {/* CREATE & EDIT MODAL */}
-      {isCreateOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsCreateOpen(false)} />
-          
-          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-2xl w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">
-                {editingPartner
-                  ? `Edit Channel Partner: ${editingPartner.cp_code || editingPartner.partner_code}`
-                  : canApprove ? 'Register New Channel Partner' : '🤝 Request to Add Channel Partner'}
-              </span>
-              <button type="button" onClick={() => setIsCreateOpen(false)} className="p-1 rounded-lg text-indigo-200 hover:text-white focus:outline-none">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
+      <SlideOverPanel
+        open={isCreateOpen}
+        onClose={() => setIsCreateOpen(false)}
+        title={
+          editingPartner
+            ? `Edit Channel Partner: ${editingPartner.cp_code || editingPartner.partner_code}`
+            : canApprove ? 'Register New Channel Partner' : 'Request to Add Channel Partner'
+        }
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setIsCreateOpen(false)}
+              className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="cp-create-form"
+              disabled={formLoading}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
+            >
+              {formLoading ? 'Saving...' : editingPartner ? 'Update Partner' : canApprove ? 'Register Partner' : 'Submit Request'}
+            </button>
+          </>
+        }
+      >
+        {isCreateOpen && (
+          <>
             {!editingPartner && !canApprove && (
-              <div className="bg-amber-50 border-b border-amber-200 px-5 py-2.5 text-xs text-amber-800">
-                ℹ️ Your request will be sent to the admin for approval. Once approved, portal credentials will be generated and sent to the partner's WhatsApp.
+              <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 mb-5 text-xs text-amber-800">
+                Your request will be sent to the admin for approval. Once approved, portal credentials will be generated and sent to the partner's WhatsApp.
               </div>
             )}
 
-            <form onSubmit={handleFormSubmit}>
-              <div className="p-6 space-y-5 max-h-[70vh] overflow-y-auto text-left">
+            <form id="cp-create-form" onSubmit={handleFormSubmit}>
+              <div className="space-y-5 text-left">
                 {formError && (
                   <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl flex items-start space-x-2.5">
                     <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
@@ -1810,27 +1947,10 @@ export const ChannelPartners: React.FC = () => {
                   </div>
                 </div>
               </div>
-
-              <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsCreateOpen(false)}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={formLoading}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
-                >
-                  {formLoading ? 'Saving...' : editingPartner ? 'Update Partner' : canApprove ? 'Register Partner' : 'Submit Request'}
-                </button>
-              </div>
             </form>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </SlideOverPanel>
 
       {/* CHANNEL PARTNER CREDENTIALS MODAL */}
       {newCPCredentials && (

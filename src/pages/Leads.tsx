@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { canCreateLead, canEditLeadRecord, canAddOwnLead, canViewOwnLeadsTab, isSuperAdmin } from '../utils/permissions';
@@ -6,6 +6,11 @@ import { reportQueryError } from '../services/queryLogger';
 import { supabase } from '../services/supabaseClient';
 import { exportRowsToExcel } from '../utils/exportExcel';
 import { useHighlightParam } from '../hooks/useHighlightParam';
+import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
+import { PhoneActions } from '../components/ui/PhoneActions';
+import { ExportModal } from '../components/ui/ExportModal';
+import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { BulkSelectHeaderCell, BulkSelectCell, BulkActionBar } from '../components/ui/BulkActionBar';
 import {
   uploadWhatsAppAttachment,
   removeWhatsAppAttachment,
@@ -71,6 +76,9 @@ export const Leads: React.FC = () => {
 
   // Pagination states
   const [page, setPage] = useState(0);
+  // Clear any bulk-select checkboxes when the page changes, so a stale
+  // selection from a previous page can't be bulk-deleted by mistake.
+  useEffect(() => { setSelectedLeadIds(new Set()); }, [page]);
   const [pageSize] = useState(10);
   const [totalCount, setTotalCount] = useState(0);
 
@@ -168,6 +176,10 @@ export const Leads: React.FC = () => {
   const [selectedSource, setSelectedSource] = useState('walk_in');
   const [selectedStatus, setSelectedStatus] = useState('new');
   const [selectedChannelPartnerId, setSelectedChannelPartnerId] = useState('');
+  // Marking a lead LOST permanently deletes it -- confirmed in a warning
+  // popup first (see confirmLostDelete).
+  const [lostConfirmOpen, setLostConfirmOpen] = useState(false);
+  const [lostDeleting, setLostDeleting] = useState(false);
   // Sourcing Manager(s) allocated to whichever Channel Partner staff picked
   // above -- client's explicit request: the Sourcing Manager field must
   // satisfy BOTH conditions at once -- assigned to the selected Project
@@ -509,18 +521,24 @@ export const Leads: React.FC = () => {
   // paginated (10 rows/page), so this re-runs the same filtered query
   // without .range() to pull every matching row, not just the current page.
   const [exporting, setExporting] = useState(false);
-  const handleExportExcel = async () => {
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  // scope 'filtered' = today's behavior (re-runs the currently-applied
+  // filters, just without .range()); 'all' skips every filter below so the
+  // export ignores whatever's currently selected in the toolbar. Site Head
+  // project scoping is a data-access boundary, not a "filter" the user
+  // chose, so it always applies regardless of scope.
+  const handleExportExcel = async (scope: 'all' | 'filtered' = 'filtered') => {
     setExporting(true);
     try {
       let query = supabase.from('leads').select('*').is('bulk_upload_id', null);
-      if (searchQuery.trim()) {
+      if (scope === 'filtered' && searchQuery.trim()) {
         const term = searchQuery.trim();
         query = query.or(`customer_name.ilike.%${term}%,mobile.ilike.%${term}%,email.ilike.%${term}%`);
       }
-      if (statusFilter) query = query.eq('status', statusFilter);
+      if (scope === 'filtered' && statusFilter) query = query.eq('status', statusFilter);
       if (role === 'site_head') {
         if (assignedProjects && assignedProjects.length > 0) {
-          if (projectFilter && assignedProjects.includes(projectFilter)) {
+          if (scope === 'filtered' && projectFilter && assignedProjects.includes(projectFilter)) {
             query = query.eq('project_id', projectFilter);
           } else {
             query = query.in('project_id', assignedProjects);
@@ -528,12 +546,12 @@ export const Leads: React.FC = () => {
         } else {
           query = query.eq('project_id', '00000000-0000-0000-0000-000000000000');
         }
-      } else if (projectFilter) {
+      } else if (scope === 'filtered' && projectFilter) {
         query = query.eq('project_id', projectFilter);
       }
-      if (sourceFilter) query = query.eq('source', sourceFilter);
-      if (sourcingManagerFilter) query = query.eq('sourcing_manager_id', sourcingManagerFilter);
-      if (closingManagerFilter) query = query.eq('owner_id', closingManagerFilter);
+      if (scope === 'filtered' && sourceFilter) query = query.eq('source', sourceFilter);
+      if (scope === 'filtered' && sourcingManagerFilter) query = query.eq('sourcing_manager_id', sourcingManagerFilter);
+      if (scope === 'filtered' && closingManagerFilter) query = query.eq('owner_id', closingManagerFilter);
       query = query.order('created_at', { ascending: false });
 
       const { data, error } = await query;
@@ -544,6 +562,7 @@ export const Leads: React.FC = () => {
         'Mobile': lead.mobile || '',
         'Email': lead.email || '',
         'Status': lead.status || '',
+        'Visit Date': lead.visit_date ? new Date(lead.visit_date).toLocaleDateString('en-IN') : '',
         'Source': lead.source || '',
         'Project': projectMap.get(lead.project_id || '') || '',
         'Owner': profileMap.get(lead.owner_id || '') || '',
@@ -560,13 +579,35 @@ export const Leads: React.FC = () => {
     }
   };
 
+  const confirmLostDelete = async () => {
+    if (!editingLead) return;
+    setLostDeleting(true);
+    try {
+      const { data, error } = await supabase.from('leads').delete().eq('id', editingLead.id).select();
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        throw new Error('Permission denied. You do not have the required roles to delete this lead.');
+      }
+      const name = editingLead.customer_name;
+      setLostConfirmOpen(false);
+      closeCreateModal();
+      setNotification({ type: 'success', message: `Lead "${name}" marked as Lost and permanently deleted.` });
+      fetchLeads();
+    } catch (err: any) {
+      setLostConfirmOpen(false);
+      setCreateError(err.message || 'Failed to delete the lead.');
+    } finally {
+      setLostDeleting(false);
+    }
+  };
+
   const handleDeleteLead = async (lead: Lead) => {
     if (window.confirm(`Are you sure you want to permanently delete lead "${lead.customer_name}"?`)) {
       setLoading(true);
       try {
         const { data, error } = await supabase.from('leads').delete().eq('id', lead.id).select();
         if (error) throw error;
-        
+
         if (!data || data.length === 0) {
           throw new Error('Permission denied. You do not have the required roles to delete this lead.');
         }
@@ -578,6 +619,42 @@ export const Leads: React.FC = () => {
       } finally {
         setLoading(false);
       }
+    }
+  };
+
+  // Bulk select -- same delete permission as the per-row Trash2 button
+  // (isSuperAdmin only), just applied to every checked row in one go via
+  // the same RLS-backed delete the single-row path already uses.
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
+  const toggleLeadSelected = (id: string, checked: boolean) => {
+    setSelectedLeadIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+  const toggleAllLeadsSelected = (ids: string[], checked: boolean) => {
+    setSelectedLeadIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => { if (checked) next.add(id); else next.delete(id); });
+      return next;
+    });
+  };
+  const handleBulkDeleteLeads = async () => {
+    const ids = Array.from(selectedLeadIds);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Are you sure you want to permanently delete ${ids.length} lead(s)?`)) return;
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.from('leads').delete().in('id', ids).select();
+      if (error) throw error;
+      setNotification({ type: 'success', message: `${data?.length || 0} lead(s) deleted.` });
+      setSelectedLeadIds(new Set());
+      fetchLeads();
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to delete selected leads.' });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1050,6 +1127,14 @@ export const Leads: React.FC = () => {
     // Sourcing Manager is no longer mandatory on the New Lead form -- explicit
     // reversal of an earlier client instruction that had made it required.
 
+    // Moving a lead to LOST deletes it for good -- stop and warn first. Only
+    // when the status is actually being changed to lost (an already-lost
+    // legacy lead being edited for something else isn't re-prompted).
+    if (editingLead && selectedStatus === 'lost' && editingLead.status?.toLowerCase() !== 'lost') {
+      setLostConfirmOpen(true);
+      return;
+    }
+
     setCreateError(null);
     setCreateLoading(true);
 
@@ -1173,10 +1258,14 @@ export const Leads: React.FC = () => {
               lead_id: insertedLead.id,
               cp_lead_id: cpClaimId || null,
               status: 'queued',
-              created_by: user?.id || null
+              created_by: user?.id || null,
+              // Sent by the official Cloud API via an approved Meta template
+              // (works for a customer who has never messaged us).
+              template_name: 'lead_welcome',
+              template_params: [customerName.trim(), projectNameStr]
            });
         }
-        
+
         if (cpMobile) {
            outboxRows.push({
               to_phone: cpMobile,
@@ -1184,7 +1273,11 @@ export const Leads: React.FC = () => {
               lead_id: insertedLead.id,
               cp_lead_id: cpClaimId || null,
               status: 'queued',
-              created_by: user?.id || null
+              created_by: user?.id || null,
+              // Sent by the official Cloud API via an approved Meta template
+              // (works for a customer who has never messaged us).
+              template_name: 'lead_welcome',
+              template_params: [customerName.trim(), projectNameStr]
            });
         }
 
@@ -1265,6 +1358,35 @@ export const Leads: React.FC = () => {
   const startRange = page * pageSize + 1;
   const endRange = Math.min((page + 1) * pageSize, totalCount);
 
+  // Column sort -- client-side, applied only to the current page's 10 rows
+  // (the table itself stays server-paginated exactly as before; this never
+  // changes what page/filter is fetched, only the on-screen order).
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDirection>('asc');
+  const toggleSort = (key: string) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  };
+  const leadSortValue = (lead: Lead, key: string): unknown => {
+    switch (key) {
+      case 'name': return lead.customer_name;
+      case 'phone': return lead.mobile;
+      case 'project': return projectMap.get(lead.project_id || '');
+      case 'source': return lead.source;
+      case 'sourcingManager': return profileMap.get(lead.sourcing_manager_id || '');
+      case 'allocatedTo': return profileMap.get(lead.owner_id || '');
+      case 'status': return lead.status;
+      case 'visitDate': return lead.visit_date;
+      default: return null;
+    }
+  };
+  const sortedLeads = useMemo(() => {
+    if (!sortKey) return leads;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...leads].sort((a, b) => compareValues(leadSortValue(a, sortKey), leadSortValue(b, sortKey)) * dir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, sortKey, sortDir, projectMap, profileMap]);
+
   // Project scoping for the lead form -- applies to every role, including
   // super_admin, per the client ("this would happen for all the roles").
   // The Project picker itself only offers projects the current user is
@@ -1332,7 +1454,7 @@ export const Leads: React.FC = () => {
 
           {isSuperAdmin(role) && (
             <button
-              onClick={handleExportExcel}
+              onClick={() => setExportModalOpen(true)}
               disabled={exporting}
               className="flex items-center space-x-2 bg-white border border-slate-200 px-4 py-2 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm focus:outline-none disabled:opacity-50"
             >
@@ -1340,6 +1462,13 @@ export const Leads: React.FC = () => {
               <span>{exporting ? 'Exporting...' : 'Export to Excel'}</span>
             </button>
           )}
+          <ExportModal
+            open={exportModalOpen}
+            onClose={() => setExportModalOpen(false)}
+            entityLabel="leads"
+            filteredCount={totalCount}
+            onExport={(scope) => handleExportExcel(scope)}
+          />
 
           {activeTab === 'directory' && hasCreateAccess && (
             <button
@@ -1513,28 +1642,47 @@ export const Leads: React.FC = () => {
           </div>
         ) : (
           <>
+            {isSuperAdmin(role) && (
+              <BulkActionBar
+                count={selectedLeadIds.size}
+                onCancel={() => setSelectedLeadIds(new Set())}
+                actions={[{ label: 'Delete', onClick: handleBulkDeleteLeads, danger: true }]}
+              />
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                    <th className="py-3.5 px-6">Lead Name</th>
-                    <th className="py-3.5 px-6">Phone</th>
-                    <th className="py-3.5 px-6">Project</th>
-                    <th className="py-3.5 px-6">Lead Source</th>
-                    <th className="py-3.5 px-6">Sourcing Manager</th>
-                    <th className="py-3.5 px-6">Allocated To</th>
-                    <th className="py-3.5 px-6">Status</th>
-                    <th className="py-3.5 px-6">Visit Date</th>
+                    {isSuperAdmin(role) && (
+                      <BulkSelectHeaderCell
+                        allIds={sortedLeads.map((l) => l.id)}
+                        selectedIds={selectedLeadIds}
+                        onToggleAll={toggleAllLeadsSelected}
+                      />
+                    )}
+                    <SortableTh label="Lead Name" active={sortKey === 'name'} direction={sortDir} onClick={() => toggleSort('name')} className="py-3.5 px-6" />
+                    <SortableTh label="Phone" active={sortKey === 'phone'} direction={sortDir} onClick={() => toggleSort('phone')} className="py-3.5 px-6" />
+                    <SortableTh label="Project" active={sortKey === 'project'} direction={sortDir} onClick={() => toggleSort('project')} className="py-3.5 px-6" />
+                    <SortableTh label="Lead Source" active={sortKey === 'source'} direction={sortDir} onClick={() => toggleSort('source')} className="py-3.5 px-6" />
+                    <SortableTh label="Sourcing Manager" active={sortKey === 'sourcingManager'} direction={sortDir} onClick={() => toggleSort('sourcingManager')} className="py-3.5 px-6" />
+                    <SortableTh label="Allocated To" active={sortKey === 'allocatedTo'} direction={sortDir} onClick={() => toggleSort('allocatedTo')} className="py-3.5 px-6" />
+                    <SortableTh label="Status" active={sortKey === 'status'} direction={sortDir} onClick={() => toggleSort('status')} className="py-3.5 px-6" />
+                    <SortableTh label="Visit Date" active={sortKey === 'visitDate'} direction={sortDir} onClick={() => toggleSort('visitDate')} className="py-3.5 px-6" />
                     <th className="py-3.5 px-6 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {leads.length > 0 ? (
-                    leads.map((lead) => (
+                  {sortedLeads.length > 0 ? (
+                    sortedLeads.map((lead) => (
                       <React.Fragment key={lead.id}>
                       <tr className="hover:bg-slate-50/50 transition-colors">
+                        {isSuperAdmin(role) && (
+                          <BulkSelectCell id={lead.id} selectedIds={selectedLeadIds} onToggle={toggleLeadSelected} />
+                        )}
                         <td className="py-4 px-6 font-semibold text-slate-900">{lead.customer_name || 'Unnamed Client'}</td>
-                        <td className="py-4 px-6 text-sm text-slate-600">{lead.mobile || 'N/A'}</td>
+                        <td className="py-4 px-6 text-sm text-slate-600">
+                          <PhoneActions phone={lead.mobile} onWhatsApp={lead.mobile ? () => openWhatsApp(lead) : undefined} />
+                        </td>
                         <td className="py-4 px-6 text-sm text-slate-600">
                           {projectMap.get(lead.project_id || '') || 'N/A'}
                         </td>
@@ -1555,6 +1703,7 @@ export const Leads: React.FC = () => {
                         <td className="py-4 px-6">
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${
                             lead.status?.toLowerCase() === 'booking_done' ? 'bg-emerald-50 text-emerald-700' :
+                            lead.status?.toLowerCase() === 'hold' ? 'bg-orange-50 text-orange-700' :
                             (lead.status?.toLowerCase() === 'lost' || lead.status?.toLowerCase() === 'junk') ? 'bg-rose-50 text-rose-700' :
                             (lead.status?.toLowerCase() === 'site_visit_planned' || lead.status?.toLowerCase() === 'site_visit_done') ? 'bg-amber-50 text-amber-700' :
                             'bg-indigo-50 text-indigo-700'
@@ -1567,21 +1716,9 @@ export const Leads: React.FC = () => {
                         </td>
                         <td className="py-4 px-6 text-right">
                           <div className="inline-flex items-center gap-1.5">
-                            <a
-                              href={lead.mobile ? `tel:${lead.mobile}` : undefined}
-                              title={lead.mobile ? 'Call directly' : 'No mobile number on record'}
-                              className={`inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg transition-colors focus:outline-none ${lead.mobile ? 'text-blue-600 hover:bg-blue-50 hover:border-blue-200' : 'opacity-40 cursor-not-allowed text-slate-400'}`}
-                            >
-                              <Phone className="h-3.5 w-3.5" />
-                            </a>
-                            <button
-                              onClick={() => openWhatsApp(lead)}
-                              disabled={!lead.mobile}
-                              title={lead.mobile ? 'Send WhatsApp message' : 'No mobile number on record'}
-                              className="inline-flex items-center justify-center p-1.5 border border-slate-200 rounded-lg text-emerald-600 hover:bg-emerald-50 hover:border-emerald-200 transition-colors focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                            >
-                              <MessageCircle className="h-3.5 w-3.5" />
-                            </button>
+                            {/* Call/WhatsApp now live inline next to the phone number
+                                itself (PhoneActions, Phone column above) -- kept only
+                                Edit/Delete/View here to match. */}
                             {canEditLeadRecord(role) && (
                               <button
                                 onClick={() => openEditLead(lead)}
@@ -1614,7 +1751,7 @@ export const Leads: React.FC = () => {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={9} className="py-20 text-center text-slate-400">
+                      <td colSpan={10} className="py-20 text-center text-slate-400">
                         <div className="flex flex-col items-center justify-center space-y-3">
                           <div className="bg-slate-50 p-4 rounded-full text-slate-300">
                             <Users className="h-8 w-8" />
@@ -2192,26 +2329,34 @@ export const Leads: React.FC = () => {
         )}
 
       {/* CREATE LEAD MODAL */}
-      {isCreateOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onClick={closeCreateModal} />
-          
-          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-5xl w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            {/* Modal Header */}
-            <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">{editingLead ? 'Edit Lead' : 'Create New Lead'}</span>
-              <button
-                type="button"
-                onClick={closeCreateModal}
-                className="p-1 rounded-lg text-indigo-200 hover:text-white hover:bg-indigo-700 focus:outline-none transition-colors"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Modal Form */}
-            <form onSubmit={handleCreateSubmit}>
-              <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">
+      <SlideOverPanel
+        open={isCreateOpen}
+        onClose={closeCreateModal}
+        title={editingLead ? 'Edit Lead' : 'Create New Lead'}
+        width="max-w-4xl"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={closeCreateModal}
+              className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="lead-create-form"
+              disabled={createLoading}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
+            >
+              {createLoading ? (editingLead ? 'Saving...' : 'Inserting...') : (editingLead ? 'Save Changes' : 'Create Lead')}
+            </button>
+          </>
+        }
+      >
+        {isCreateOpen && (
+            <form id="lead-create-form" onSubmit={handleCreateSubmit}>
+              <div className="space-y-6">
                 {createError && (
                   <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl flex items-start space-x-2.5">
                     <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
@@ -2544,6 +2689,7 @@ export const Leads: React.FC = () => {
                         <option value="site_visit_planned">Visit Scheduled</option>
                         <option value="site_visit_done">Visit Done</option>
                         <option value="negotiation">Negotiation</option>
+                        <option value="hold">Hold (draft booking)</option>
                         <option value="booking_done">Booked</option>
                         <option value="not_reachable">Not Reachable</option>
                         <option value="call_back_later">Call Back Later</option>
@@ -2594,11 +2740,19 @@ export const Leads: React.FC = () => {
                         >
                           <option value="">Select Channel Partner...</option>
                           {channelPartners.map(cp => (
-                            <option key={cp.id} value={cp.id}>
+                            <option key={cp.id} value={cp.id} title={cp.name}>
                               {cp.company_name || cp.name}
                             </option>
                           ))}
                         </select>
+                        {selectedChannelPartnerId && (() => {
+                          const selectedCp = channelPartners.find(cp => cp.id === selectedChannelPartnerId);
+                          return selectedCp ? (
+                            <p className="mt-1.5 text-xs text-slate-500">
+                              Channel Partner Name: <span className="font-semibold text-slate-700">{selectedCp.name}</span>
+                            </p>
+                          ) : null;
+                        })()}
                       </div>
                     )}
                   </div>
@@ -2659,25 +2813,45 @@ export const Leads: React.FC = () => {
                   </div>
                 )}
               </div>
-
-              {/* Form Footer */}
-              <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={closeCreateModal}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={createLoading}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
-                >
-                  {createLoading ? (editingLead ? 'Saving...' : 'Inserting...') : (editingLead ? 'Save Changes' : 'Create Lead')}
-                </button>
-              </div>
             </form>
+        )}
+      </SlideOverPanel>
+
+      {/* LOST -> permanent delete confirmation */}
+      {lostConfirmOpen && editingLead && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm" onClick={() => !lostDeleting && setLostConfirmOpen(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-100 max-w-md w-full overflow-hidden">
+            <div className="bg-rose-600 text-white px-6 py-4 flex items-center gap-2.5">
+              <AlertCircle className="h-5 w-5" />
+              <span className="font-bold tracking-tight">Mark this lead as Lost?</span>
+            </div>
+            <div className="p-6 space-y-3">
+              <p className="text-sm text-slate-700">
+                Are you sure you want to mark <span className="font-bold">{editingLead.customer_name}</span> as <span className="font-bold">Lost</span>?
+              </p>
+              <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-xl p-3 text-xs leading-relaxed">
+                <strong>Warning:</strong> a Lost lead is <strong>permanently deleted</strong> along with its remarks, follow-ups and history. This cannot be undone.
+              </div>
+            </div>
+            <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={lostDeleting}
+                onClick={() => setLostConfirmOpen(false)}
+                className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 disabled:opacity-50"
+              >
+                No, keep the lead
+              </button>
+              <button
+                type="button"
+                disabled={lostDeleting}
+                onClick={confirmLostDelete}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold shadow-sm disabled:opacity-50"
+              >
+                {lostDeleting ? 'Deleting...' : 'Yes, mark Lost & delete'}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -1,10 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../hooks/useAuth';
-import { canEditLead, isSuperAdmin } from '../utils/permissions';
+import { canEditLead, canDeleteFollowup, isSuperAdmin } from '../utils/permissions';
 import { reportQueryError } from '../services/queryLogger';
 import { exportRowsToExcel } from '../utils/exportExcel';
 import { useHighlightParam } from '../hooks/useHighlightParam';
+import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
+import { PhoneActions } from '../components/ui/PhoneActions';
+import { ExportModal } from '../components/ui/ExportModal';
+import { SlideOverPanel } from '../components/ui/SlideOverPanel';
 import {
   Search,
   RefreshCw,
@@ -20,7 +24,8 @@ import {
   Bookmark,
   FileText,
   CheckCircle,
-  Download
+  Download,
+  Trash2
 } from 'lucide-react';
 
 interface Followup {
@@ -44,7 +49,7 @@ interface Lead {
 }
 
 export const Followups: React.FC = () => {
-  const { role, user } = useAuth();
+  const { role, user, assignedProjects } = useAuth();
 
   // Query & state filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -430,6 +435,31 @@ export const Followups: React.FC = () => {
     }
   };
 
+  // Client's explicit request: delete restricted to super_admin (and one
+  // named person once confirmed -- see canDeleteFollowup). Staff were
+  // leaving stale follow-ups pushed to "tomorrow" indefinitely even after
+  // the work was already done.
+  const [deletingFollowupId, setDeletingFollowupId] = useState<string | null>(null);
+  const handleDeleteFollowup = async (f: Followup) => {
+    const label = leadsMap.get(f.lead_id || '')?.customer_name || 'this lead';
+    if (!window.confirm(`Delete this follow-up for ${label}? This cannot be undone.`)) return;
+    setDeletingFollowupId(f.id);
+    try {
+      const { data, error } = await supabase.from('followups').delete().eq('id', f.id).select();
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        throw new Error('Permission denied. You do not have the required role to delete this follow-up.');
+      }
+      setFollowups(prev => prev.filter(item => item.id !== f.id));
+      if (selectedFollowup?.id === f.id) setSelectedFollowup(null);
+      setNotification({ type: 'success', message: 'Follow-up deleted.' });
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err.message || 'Failed to delete follow-up.' });
+    } finally {
+      setDeletingFollowupId(null);
+    }
+  };
+
   // Search and project filter are both applied server-side in
   // fetchFollowups now, so `followups` is already the filtered set.
   const getFilteredFollowups = () => followups;
@@ -475,18 +505,19 @@ export const Followups: React.FC = () => {
   // Server-side paginated, so this re-runs the same filtered query without
   // .range() to pull every matching follow-up, not just the current page.
   const [exportingFollowups, setExportingFollowups] = useState(false);
-  const handleExportExcel = async () => {
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const handleExportExcel = async (scope: 'all' | 'filtered' = 'filtered') => {
     setExportingFollowups(true);
     try {
       let query = supabase.from('followups').select('*');
-      if (statusFilter) query = query.eq('status', statusFilter);
-      if (projectFilter) {
+      if (scope === 'filtered' && statusFilter) query = query.eq('status', statusFilter);
+      if (scope === 'filtered' && projectFilter) {
         const projectLeadIds = Array.from(leadsMap.entries())
           .filter(([, l]) => l.project_id === projectFilter)
           .map(([id]) => id);
         query = query.in('lead_id', projectLeadIds.length ? projectLeadIds : ['00000000-0000-0000-0000-000000000000']);
       }
-      if (searchQuery.trim()) {
+      if (scope === 'filtered' && searchQuery.trim()) {
         const term = searchQuery.trim().toLowerCase();
         const matchingLeadIds = Array.from(leadsMap.entries())
           .filter(([, l]) => l.customer_name?.toLowerCase().includes(term))
@@ -523,6 +554,32 @@ export const Followups: React.FC = () => {
   const startRange = page * pageSize + 1;
   const endRange = Math.min((page + 1) * pageSize, totalCount);
 
+  // Column sort -- client-side over the current page's fetched rows only.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDirection>('asc');
+  const toggleSort = (key: string) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  };
+  const followupSortValue = (f: typeof filteredFollowups[number], key: string): unknown => {
+    const lead = leadsMap.get(f.lead_id || '');
+    switch (key) {
+      case 'customer': return lead?.customer_name;
+      case 'project': return projectMap.get(lead?.project_id || '');
+      case 'sourcingManager': return profileMap.get(lead?.owner_id || '');
+      case 'leadStatus': return lead?.status;
+      case 'dueAt': return f.due_at;
+      case 'status': return f.status;
+      default: return null;
+    }
+  };
+  const sortedFollowups = useMemo(() => {
+    if (!sortKey) return filteredFollowups;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...filteredFollowups].sort((a, b) => compareValues(followupSortValue(a, sortKey), followupSortValue(b, sortKey)) * dir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredFollowups, sortKey, sortDir, leadsMap, projectMap, profileMap]);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -542,7 +599,7 @@ export const Followups: React.FC = () => {
           </button>
           {isSuperAdmin(role) && (
             <button
-              onClick={handleExportExcel}
+              onClick={() => setExportModalOpen(true)}
               disabled={exportingFollowups}
               className="flex items-center space-x-2 bg-white border border-slate-200 px-4 py-2 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm focus:outline-none disabled:opacity-50"
             >
@@ -550,6 +607,13 @@ export const Followups: React.FC = () => {
               <span>{exportingFollowups ? 'Exporting...' : 'Export to Excel'}</span>
             </button>
           )}
+          <ExportModal
+            open={exportModalOpen}
+            onClose={() => setExportModalOpen(false)}
+            entityLabel="follow-ups"
+            filteredCount={totalCount}
+            onExport={(scope) => handleExportExcel(scope)}
+          />
           <button
             onClick={() => setIsCreateOpen(true)}
             className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg transition-all focus:outline-none"
@@ -688,25 +752,29 @@ export const Followups: React.FC = () => {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
-                    <th className="py-3.5 px-6">Customer / Lead</th>
-                    <th className="py-3.5 px-6">Associated Project</th>
-                    <th className="py-3.5 px-6">Sourcing Manager</th>
-                    <th className="py-3.5 px-6">Lead Status</th>
-                    <th className="py-3.5 px-6">Scheduled Date & Time</th>
-                    <th className="py-3.5 px-6">Follow-up Status</th>
+                    <SortableTh label="Customer / Lead" active={sortKey === 'customer'} direction={sortDir} onClick={() => toggleSort('customer')} className="py-3.5 px-6" />
+                    <SortableTh label="Associated Project" active={sortKey === 'project'} direction={sortDir} onClick={() => toggleSort('project')} className="py-3.5 px-6" />
+                    <SortableTh label="Sourcing Manager" active={sortKey === 'sourcingManager'} direction={sortDir} onClick={() => toggleSort('sourcingManager')} className="py-3.5 px-6" />
+                    <SortableTh label="Lead Status" active={sortKey === 'leadStatus'} direction={sortDir} onClick={() => toggleSort('leadStatus')} className="py-3.5 px-6" />
+                    <SortableTh label="Scheduled Date & Time" active={sortKey === 'dueAt'} direction={sortDir} onClick={() => toggleSort('dueAt')} className="py-3.5 px-6" />
+                    <SortableTh label="Follow-up Status" active={sortKey === 'status'} direction={sortDir} onClick={() => toggleSort('status')} className="py-3.5 px-6" />
                     <th className="py-3.5 px-6 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredFollowups.length > 0 ? (
-                    filteredFollowups.map((f) => {
+                  {sortedFollowups.length > 0 ? (
+                    sortedFollowups.map((f) => {
                       const lead = leadsMap.get(f.lead_id || '');
                       const canManage = canEditLead(role, user?.id, lead?.owner_id || null, null, null);
                       return (
                         <tr key={f.id} ref={registerRow(f.id)} className={`hover:bg-slate-50/50 transition-colors group ${rowClass(f.id)}`}>
                           <td className="py-4 px-6">
                             <span className="block font-semibold text-slate-900">{lead?.customer_name || 'N/A'}</span>
-                            <span className="block text-xs text-slate-400">{lead?.mobile || 'No contact'}</span>
+                            {lead?.mobile ? (
+                              <PhoneActions phone={lead.mobile} className="mt-0.5" />
+                            ) : (
+                              <span className="block text-xs text-slate-400">No contact</span>
+                            )}
                           </td>
                           <td className="py-4 px-6 text-sm text-slate-600">
                             {projectMap.get(lead?.project_id || '') || 'N/A'}
@@ -785,6 +853,16 @@ export const Followups: React.FC = () => {
                                 <Eye className="h-3.5 w-3.5" />
                                 <span>View</span>
                               </button>
+                              {canDeleteFollowup(role, lead?.project_id, assignedProjects) && (
+                                <button
+                                  onClick={() => handleDeleteFollowup(f)}
+                                  disabled={deletingFollowupId === f.id}
+                                  className="p-1.5 rounded-lg border border-slate-200 bg-white text-rose-500 hover:bg-rose-50 hover:border-rose-200 focus:outline-none transition-colors disabled:opacity-50"
+                                  title="Delete follow-up"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -988,22 +1066,33 @@ export const Followups: React.FC = () => {
       )}
 
       {/* CREATE FOLLOW-UP MODAL */}
-      {isCreateOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsCreateOpen(false)} />
-          
-          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            {/* Header */}
-            <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">Schedule New Follow-up</span>
-              <button type="button" onClick={() => setIsCreateOpen(false)} className="p-1 rounded-lg text-indigo-200 hover:text-white focus:outline-none">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Form */}
-            <form onSubmit={handleCreateSubmit}>
-              <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+      <SlideOverPanel
+        open={isCreateOpen}
+        onClose={() => setIsCreateOpen(false)}
+        title="Schedule New Follow-up"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setIsCreateOpen(false)}
+              className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="followup-create-form"
+              disabled={createLoading}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
+            >
+              {createLoading ? 'Scheduling...' : 'Schedule Follow-up'}
+            </button>
+          </>
+        }
+      >
+        {isCreateOpen && (
+            <form id="followup-create-form" onSubmit={handleCreateSubmit}>
+              <div className="space-y-4">
                 {createError && (
                   <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl flex items-start space-x-2.5">
                     <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
@@ -1082,45 +1171,37 @@ export const Followups: React.FC = () => {
                   />
                 </div>
               </div>
-
-              {/* Form Footer */}
-              <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsCreateOpen(false)}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={createLoading}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
-                >
-                  {createLoading ? 'Scheduling...' : 'Schedule Follow-up'}
-                </button>
-              </div>
             </form>
-          </div>
-        </div>
-      )}
+        )}
+      </SlideOverPanel>
       {/* EDIT FOLLOW-UP MODAL */}
-      {isEditOpen && editingFollowup && (
-        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => { setIsEditOpen(false); setEditingFollowup(null); }} />
-          
-          <div className="relative bg-white rounded-2xl shadow-xl border border-slate-100 max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            {/* Header */}
-            <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
-              <span className="font-bold tracking-tight">Edit / Reschedule Follow-up</span>
-              <button type="button" onClick={() => { setIsEditOpen(false); setEditingFollowup(null); }} className="p-1 rounded-lg text-indigo-200 hover:text-white focus:outline-none">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Form */}
-            <form onSubmit={handleEditSubmit}>
-              <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+      <SlideOverPanel
+        open={isEditOpen && !!editingFollowup}
+        onClose={() => { setIsEditOpen(false); setEditingFollowup(null); }}
+        title="Edit / Reschedule Follow-up"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => { setIsEditOpen(false); setEditingFollowup(null); }}
+              className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="followup-edit-form"
+              disabled={editLoading}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
+            >
+              {editLoading ? 'Saving...' : 'Save Changes'}
+            </button>
+          </>
+        }
+      >
+        {isEditOpen && editingFollowup && (
+            <form id="followup-edit-form" onSubmit={handleEditSubmit}>
+              <div className="space-y-4">
                 {editError && (
                   <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl flex items-start space-x-2.5">
                     <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
@@ -1188,28 +1269,9 @@ export const Followups: React.FC = () => {
                   />
                 </div>
               </div>
-
-              {/* Form Footer */}
-              <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => { setIsEditOpen(false); setEditingFollowup(null); }}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 transition-colors focus:outline-none"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={editLoading}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/10 hover:shadow-lg disabled:opacity-50 transition-all focus:outline-none"
-                >
-                  {editLoading ? 'Saving...' : 'Save Changes'}
-                </button>
-              </div>
             </form>
-          </div>
-        </div>
-      )}
+        )}
+      </SlideOverPanel>
     </div>
   );
 };
