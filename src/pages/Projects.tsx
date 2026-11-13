@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../hooks/useAuth';
+import { PageSizeSelect, usePageSize } from '../components/ui/PageSizeSelect';
 import { canManageProjects, canCreateProject, canBulkAddUnits, isSuperAdmin } from '../utils/permissions';
 import { parseDescription, serializeDescription } from '../utils/projectDescription';
 import {
@@ -180,7 +181,7 @@ export const Projects: React.FC = () => {
 
   // Table Pagination
   const [page, setPage] = useState(0);
-  const [pageSize] = useState(10);
+  const [pageSize, setPageSize] = usePageSize('projects');
 
   // Loaders & Errors
   const [loading, setLoading] = useState(true);
@@ -1064,6 +1065,7 @@ export const Projects: React.FC = () => {
                       <span className="text-slate-800">{filteredProjects.length}</span> projects
                     </span>
                     <div className="flex items-center space-x-2">
+                      <PageSizeSelect value={pageSize} onChange={(n) => { setPageSize(n); setPage(0); }} />
                       <button
                         onClick={() => setPage(p => Math.max(p - 1, 0))}
                         disabled={page === 0}

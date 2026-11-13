@@ -10,6 +10,7 @@ import { SortableTh, compareValues, type SortDirection } from '../components/ui/
 import { PhoneActions } from '../components/ui/PhoneActions';
 import { ExportModal } from '../components/ui/ExportModal';
 import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { PageSizeSelect, usePageSize } from '../components/ui/PageSizeSelect';
 import { BulkSelectHeaderCell, BulkSelectCell, BulkActionBar } from '../components/ui/BulkActionBar';
 import {
   uploadWhatsAppAttachment,
@@ -79,7 +80,7 @@ export const Leads: React.FC = () => {
   // Clear any bulk-select checkboxes when the page changes, so a stale
   // selection from a previous page can't be bulk-deleted by mistake.
   useEffect(() => { setSelectedLeadIds(new Set()); }, [page]);
-  const [pageSize] = useState(10);
+  const [pageSize, setPageSize] = usePageSize('leads');
   const [totalCount, setTotalCount] = useState(0);
 
   // Data states
@@ -1312,8 +1313,12 @@ export const Leads: React.FC = () => {
       } else if (err.message && err.message.toLowerCase().includes('already exists for this project')) {
         // Raised by prevent_duplicate_lead_phone_trigger — dedup is
         // project-scoped, so the same number is fine on a different
-        // project. Strip the internal lead id before showing it.
-        setCreateError('A lead with this mobile number already exists for this project. The same number can still be added under a different project.');
+        // project. The trigger names the blocking lead (e.g. "lead LD-123");
+        // show that so it can be searched, instead of a vague message.
+        const blocking = err.message.match(/\(lead (LD-[\w-]+)\)/i)?.[1];
+        setCreateError(
+          `A lead with this mobile number already exists for this project${blocking ? ` (${blocking})` : ''}. Search for it in Leads or Bulk Uploads; the same number can still be added under a different project.`
+        );
       } else if (err.message && err.message.toLowerCase().includes('only super admin or site head can change')) {
         // Raised by enforce_lead_source_change_trigger.
         setCreateError('Only Super Admin or Site Head can change a lead\'s source once it has been added.');
@@ -1777,6 +1782,7 @@ export const Leads: React.FC = () => {
                   <span className="font-semibold text-slate-800">{totalCount}</span> leads
                 </span>
                 <div className="flex items-center space-x-2">
+                  <PageSizeSelect value={pageSize} onChange={(n) => { setPageSize(n); setPage(0); }} />
                   <button
                     onClick={() => setPage(prev => Math.max(prev - 1, 0))}
                     disabled={page === 0}

@@ -9,6 +9,7 @@ import { useHighlightParam } from '../hooks/useHighlightParam';
 import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
 import { ExportModal } from '../components/ui/ExportModal';
 import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { PageSizeSelect, usePageSize } from '../components/ui/PageSizeSelect';
 import { BulkSelectHeaderCell, BulkSelectCell, BulkActionBar } from '../components/ui/BulkActionBar';
 import {
   Search,
@@ -122,7 +123,7 @@ export const Bookings: React.FC = () => {
   // Clear any bulk-select checkboxes when the page changes, so a stale
   // selection from a previous page can't be bulk-deleted by mistake.
   useEffect(() => { setSelectedBookingIds(new Set()); }, [page]);
-  const [pageSize] = useState(10);
+  const [pageSize, setPageSize] = usePageSize('bookings');
   const [totalCount, setTotalCount] = useState(0);
 
   // Data states
@@ -2109,6 +2110,7 @@ export const Bookings: React.FC = () => {
                   <span className="font-semibold text-slate-800">{totalCount}</span> bookings
                 </span>
                 <div className="flex items-center space-x-2">
+                  <PageSizeSelect value={pageSize} onChange={(n) => { setPageSize(n); setPage(0); }} />
                   <button
                     onClick={() => setPage(prev => Math.max(prev - 1, 0))}
                     disabled={page === 0}

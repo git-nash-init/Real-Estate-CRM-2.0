@@ -10,6 +10,10 @@ import { useAuth } from '../hooks/useAuth';
 import { buildReportScope, type ReportScope, type TeamMember } from '../services/reportScope';
 import { resolveDateRange, presetOptions, type DateRangePreset } from '../services/dateRangePresets';
 
+/** Roles that are presales/telecaller in nature and should see call-performance data. */
+const PRESALES_ROLES = new Set(['presales', 'presales_tl']);
+
+
 interface Lead {
   id: string;
   status: string | null;
@@ -226,6 +230,10 @@ export const Reports: React.FC = () => {
   const fetchData = useCallback(async () => {
     if (!scope) return;
     const isOrg = scope.tier === 'org';
+    const isPresalesUser = PRESALES_ROLES.has(role || '');
+    // Fetch call logs for org tier (full board) OR for presales users / any
+    // team tier where the manager is presales_tl (so their team call stats show).
+    const needsCallLogs = isOrg || isPresalesUser || scope.tier === 'team';
 
     try {
       let query = supabase
@@ -284,19 +292,33 @@ export const Reports: React.FC = () => {
       reportQueryError('Reports: bookings', err);
     }
 
-    if (isOrg) {
+    if (needsCallLogs) {
       try {
-        const { data, error } = await supabase
+        // For non-org presales/team: scope call logs to the employee ids in
+        // this report so we don't pull the whole company's data.
+        let clQuery = supabase
           .from('call_logs')
           .select('id, employee_id, lead_id, outcome, duration_seconds, called_at')
           .gte('called_at', range.startISO)
           .lt('called_at', range.endISO);
+
+        if (!isOrg && scope.employeeId) {
+          // Collect employee ids in scope. scope.employeeId is the viewer's
+          // own employee row; for team tier we also need direct reports'
+          // employee ids — those are available on scope.team.
+          const empIds = [scope.employeeId, ...scope.team.map((m) => m.employeeId)].filter(Boolean);
+          if (empIds.length) clQuery = clQuery.in('employee_id', empIds);
+        }
+
+        const { data, error } = await clQuery;
         if (error) reportQueryError('Reports: call logs', error);
         else setCallLogs(data || []);
       } catch (err) {
         reportQueryError('Reports: call logs', err);
       }
+    }
 
+    if (isOrg) {
       try {
         const { data, error } = await supabase
           .from('attendance')
@@ -306,7 +328,10 @@ export const Reports: React.FC = () => {
       } catch (err) {
         reportQueryError('Reports: attendance', err);
       }
+    }
 
+    // Employees map is needed any time we show call performance (org + presales + team).
+    if (isOrg || needsCallLogs) {
       try {
         const { data, error } = await supabase.from('employees').select('id, first_name, last_name');
         if (error) reportQueryError('Reports: employees', error);
@@ -314,7 +339,9 @@ export const Reports: React.FC = () => {
       } catch (err) {
         reportQueryError('Reports: employees', err);
       }
+    }
 
+    if (isOrg) {
       try {
         const { data, error } = await supabase.from('user_profiles').select('id, full_name');
         if (error) reportQueryError('Reports: profiles', error);
@@ -326,7 +353,8 @@ export const Reports: React.FC = () => {
 
     setLoading(false);
     setSyncing(false);
-  }, [scope, range.startISO, range.endISO]);
+  }, [scope, role, range.startISO, range.endISO]);
+
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -492,6 +520,54 @@ export const Reports: React.FC = () => {
     return { leadsCount, conversionsFromLeads, bookingsClosed: confirmed.length, revenue, memberCount: all.length };
   }, [scope, leads, bookings]);
 
+  // Whether the current viewer is a presales/telecaller role (affects which
+  // panels are shown and whether call logs are included in the fetch).
+  const isPresalesUser = PRESALES_ROLES.has(role || '');
+
+  // Own call stats — used in the individual tier panel for presales users.
+  const ownCallStats = useMemo(() => {
+    if (!scope || !isPresalesUser) return null;
+    const myCalls = callLogs.filter((c) => c.employee_id === scope.employeeId);
+    const connected = myCalls.filter((c) => c.outcome === 'connected').length;
+    const totalDuration = myCalls.reduce((s, c) => s + (c.duration_seconds || 0), 0);
+    return {
+      totalCalls: myCalls.length,
+      connectRate: myCalls.length > 0 ? Math.round((connected / myCalls.length) * 100) : 0,
+      avgDurationSec: myCalls.length > 0 ? Math.round(totalDuration / myCalls.length) : 0,
+    };
+  }, [scope, isPresalesUser, callLogs]);
+
+  // Team call stats — used in the team tier panel for presales_tl managers.
+  const presalesTeamCallStats = useMemo(() => {
+    if (!scope || !isPresalesUser) return [];
+    const map = new Map<string, { total: number; connected: number; totalDuration: number }>();
+    for (const c of callLogs) {
+      if (!c.employee_id) continue;
+      const entry = map.get(c.employee_id) || { total: 0, connected: 0, totalDuration: 0 };
+      entry.total += 1;
+      if (c.outcome === 'connected') entry.connected += 1;
+      entry.totalDuration += c.duration_seconds || 0;
+      map.set(c.employee_id, entry);
+    }
+    const allMembers = [
+      { employeeId: scope.employeeId || '', name: 'You' },
+      ...scope.team.map((m) => ({ employeeId: m.employeeId, name: m.name })),
+    ].filter((m) => m.employeeId);
+    return allMembers
+      .map(({ employeeId, name }) => {
+        const v = map.get(employeeId) || { total: 0, connected: 0, totalDuration: 0 };
+        return {
+          name: employeesMap.get(employeeId) || name,
+          totalCalls: v.total,
+          connectRate: v.total > 0 ? Math.round((v.connected / v.total) * 100) : 0,
+          avgDurationSec: v.total > 0 ? Math.round(v.totalDuration / v.total) : 0,
+        };
+      })
+      .filter((r) => r.totalCalls > 0)
+      .sort((a, b) => b.totalCalls - a.totalCalls);
+  }, [scope, isPresalesUser, callLogs, employeesMap]);
+
+
   if (scopeLoading || !scope) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -559,6 +635,23 @@ export const Reports: React.FC = () => {
           <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
             <h3 className="text-sm font-bold text-slate-800 mb-1">Bookings You Personally Closed</h3>
             <p className="text-xs text-slate-500">{m.bookingsClosed} booking{m.bookingsClosed === 1 ? '' : 's'} in this period, worth ₹{m.revenueClosed.toLocaleString('en-IN')}.</p>
+          </div>
+        )}
+        {/* Presales/Telecaller: show own call performance stats */}
+        {isPresalesUser && ownCallStats && (
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
+            <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
+              <PhoneCall className="h-4 w-4 text-indigo-600" /> Your Call Performance
+            </h3>
+            {ownCallStats.totalCalls > 0 ? (
+              <div className="grid grid-cols-3 gap-4">
+                <MetricCard icon={<PhoneCall className="h-3 w-3" />} label="Total Calls" value={String(ownCallStats.totalCalls)} />
+                <MetricCard icon={<TrendingUp className="h-3 w-3" />} label="Connect Rate" value={`${ownCallStats.connectRate}%`} accent="text-emerald-600" />
+                <MetricCard icon={<Target className="h-3 w-3" />} label="Avg Duration" value={`${Math.floor(ownCallStats.avgDurationSec / 60)}m ${ownCallStats.avgDurationSec % 60}s`} />
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400 italic">No calls logged yet. Log calls from the Leads page to populate this report.</p>
+            )}
           </div>
         )}
         {m.leadsCount === 0 && (
@@ -658,6 +751,41 @@ export const Reports: React.FC = () => {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {/* presales_tl: show team call performance table */}
+        {isPresalesUser && (
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
+            <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
+              <PhoneCall className="h-4 w-4 text-indigo-600" /> Presales (Telecaller) Call Performance
+            </h3>
+            {presalesTeamCallStats.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-sm">
+                  <thead>
+                    <tr className="text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-100">
+                      <th className="py-2">Presales (Telecaller)</th>
+                      <th className="py-2 text-right">Total Calls</th>
+                      <th className="py-2 text-right">Connect Rate</th>
+                      <th className="py-2 text-right">Avg Duration</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {presalesTeamCallStats.map((row, i) => (
+                      <tr key={i}>
+                        <td className="py-2 font-semibold text-slate-800">{row.name}</td>
+                        <td className="py-2 text-right text-slate-600">{row.totalCalls}</td>
+                        <td className="py-2 text-right text-slate-600">{row.connectRate}%</td>
+                        <td className="py-2 text-right text-slate-600">{Math.floor(row.avgDurationSec / 60)}m {row.avgDurationSec % 60}s</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400 italic">No calls logged yet. Log calls from the Leads page to populate this report.</p>
+            )}
           </div>
         )}
       </div>

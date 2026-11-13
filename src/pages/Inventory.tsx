@@ -5,6 +5,8 @@ import { exportRowsToExcel } from '../utils/exportExcel';
 import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
 import { ExportModal } from '../components/ui/ExportModal';
 import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { TablePagination, paginate } from '../components/ui/TablePagination';
+import { usePageSize } from '../components/ui/PageSizeSelect';
 import { BulkSelectHeaderCell, BulkSelectCell, BulkActionBar } from '../components/ui/BulkActionBar';
 import {
   Search,
@@ -848,6 +850,10 @@ export const Inventory: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredInventory, sortKey, sortDir]);
 
+  const [invPage, setInvPage] = useState(0);
+  const [invPageSize, setInvPageSize] = usePageSize('inventory');
+  const { pageRows: invPageRows, safePage: invSafePage } = paginate(sortedInventory, invPage, invPageSize);
+
   // Towers & Floors lists for filter dropdowns
   const filteredTowersForDropdown = towers.filter(t => t.project_id === projectFilter);
   const filteredFloorsForDropdown = floors.filter(f => f.tower_id === towerFilter);
@@ -1298,7 +1304,7 @@ export const Inventory: React.FC = () => {
                     <tr className="bg-slate-50 text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
                       {isSuperAdmin && (
                         <BulkSelectHeaderCell
-                          allIds={sortedInventory.map((u: any) => u.id)}
+                          allIds={invPageRows.map((u: any) => u.id)}
                           selectedIds={selectedUnitIds}
                           onToggleAll={toggleAllUnitsSelected}
                         />
@@ -1314,8 +1320,8 @@ export const Inventory: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {sortedInventory.length > 0 ? (
-                      sortedInventory.map((item) => {
+                    {invPageRows.length > 0 ? (
+                      invPageRows.map((item) => {
                         return (
                           <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
                             {isSuperAdmin && (
@@ -1389,6 +1395,7 @@ export const Inventory: React.FC = () => {
                   </tbody>
                 </table>
               </div>
+              <TablePagination total={sortedInventory.length} page={invSafePage} pageSize={invPageSize} onPage={setInvPage} onPageSize={setInvPageSize} label="units" />
               </>
             )}
           </div>

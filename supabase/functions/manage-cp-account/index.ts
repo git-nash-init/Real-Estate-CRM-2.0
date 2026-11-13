@@ -1,3 +1,4 @@
+// @ts-nocheck — Deno edge function; type-checked by Deno toolchain, not tsc.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
@@ -168,6 +169,49 @@ Deno.serve(async (req: Request) => {
       }
 
       return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (action === "update_email") {
+      const { email } = await req.json();
+      if (!user_id || !email) {
+        return new Response(JSON.stringify({ error: "user_id and email are required to update email" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      let sanitizedEmail = String(email).trim().toLowerCase().replace(/\s+/g, "");
+      const atCount = (sanitizedEmail.match(/@/g) || []).length;
+      if (atCount > 1) {
+        const lastAtIndex = sanitizedEmail.lastIndexOf("@");
+        const localPart = sanitizedEmail
+          .slice(0, lastAtIndex)
+          .replace(/@+/g, ".")
+          .replace(/\.+/g, ".")
+          .replace(/^\.|\.$/g, "");
+        const domainPart = sanitizedEmail.slice(lastAtIndex + 1);
+        sanitizedEmail = `${localPart}@${domainPart}`;
+      }
+
+      const { error: updateError } = await adminClient.auth.admin.updateUserById(user_id, {
+        email: sanitizedEmail,
+        email_confirm: true,
+      });
+      if (updateError) {
+        return new Response(JSON.stringify({ error: updateError.message }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      await adminClient
+        .from("channel_partners")
+        .update({ email: sanitizedEmail, updated_at: new Date().toISOString() })
+        .eq("id", cp_id);
+
+      return new Response(JSON.stringify({ success: true, email: sanitizedEmail }), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });

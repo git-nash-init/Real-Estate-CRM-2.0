@@ -1,3 +1,4 @@
+// @ts-nocheck — Deno edge function; type-checked by Deno toolchain, not tsc.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 

@@ -1,3 +1,4 @@
+// @ts-nocheck — Deno edge function; type-checked by Deno toolchain, not tsc.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
@@ -96,8 +97,22 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    // Normalize email (converts double '@' like anil@company@gmail.com into anil.company@gmail.com)
+    let sanitizedEmail = String(email).trim().toLowerCase().replace(/\s+/g, "");
+    const atCount = (sanitizedEmail.match(/@/g) || []).length;
+    if (atCount > 1) {
+      const lastAtIndex = sanitizedEmail.lastIndexOf("@");
+      const localPart = sanitizedEmail
+        .slice(0, lastAtIndex)
+        .replace(/@+/g, ".")
+        .replace(/\.+/g, ".")
+        .replace(/^\.|\.$/g, "");
+      const domainPart = sanitizedEmail.slice(lastAtIndex + 1);
+      sanitizedEmail = `${localPart}@${domainPart}`;
+    }
+
     const { data: created, error: createError } = await adminClient.auth.admin.createUser({
-      email,
+      email: sanitizedEmail,
       password,
       email_confirm: true,
       user_metadata: full_name ? { full_name } : undefined,

@@ -66,7 +66,7 @@ export const tierForRole = (role: UserRole | null): ReportTier => {
 
 const functionForRole = (role: UserRole | null): TeamFunction => {
   if (!role) return 'other';
-  if (role.startsWith('sourcing_manager')) return 'sourcing';
+  if (role.startsWith('sourcing_manager') || role === 'presales' || role === 'presales_tl') return 'sourcing';
   if (role.startsWith('closing_manager')) return 'closing';
   return 'other';
 };

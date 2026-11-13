@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../services/supabaseClient';
 import { reportQueryError } from '../services/queryLogger';
 import { useAuth } from '../hooks/useAuth';
+import { normalizeEmail } from '../utils/emailNormalize';
 import {
   Settings as SettingsIcon,
   MessageSquare,
@@ -404,7 +405,7 @@ const MyCpProfilePanel: React.FC = () => {
         mobile: form.mobile.trim() || null,
         alternate_mobile: form.alternate_mobile.trim() || null,
         whatsapp_number: form.whatsapp_number.trim() || null,
-        email: form.email.trim() || null,
+        email: normalizeEmail(form.email) || null,
         city: form.city.trim() || null,
         address: form.address.trim() || null,
         pan_number: form.pan_number.trim().toUpperCase() || null,

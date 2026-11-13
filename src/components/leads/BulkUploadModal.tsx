@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import { supabase } from '../../services/supabaseClient';
 import { useAuth } from '../../hooks/useAuth';
 import { isSuperAdmin } from '../../utils/permissions';
-import { X, Upload, Download, Loader2 } from 'lucide-react';
+import { X, Upload, Download, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 
 interface BulkUploadModalProps {
   isOpen: boolean;
@@ -11,26 +11,247 @@ interface BulkUploadModalProps {
   onUploadComplete: () => void;
 }
 
+interface ParsedLead {
+  customer_name: string;
+  mobile: string;
+  configuration: string | null;
+  budget: string | null;
+  notes: string | null;
+  cpName: string | null;
+}
+
+interface SheetAnalysis {
+  sheetName: string;
+  leads: ParsedLead[];
+  skippedCount: number;
+  colNames: {
+    name?: string;
+    mobile?: string;
+    config?: string;
+    budget?: string;
+    notes?: string;
+    cp?: string;
+  };
+}
+
+/**
+ * Clean and normalize phone numbers from Excel cells.
+ * Strips non-digits, handles numbers/floats/scientific notation,
+ * and strips common country codes (91, 0, 091) to yield clean mobile numbers.
+ */
+function cleanPhone(val: any): string {
+  if (val === null || val === undefined) return '';
+  let str = '';
+  if (typeof val === 'number') {
+    str = Math.round(val).toString();
+  } else {
+    str = String(val).trim();
+  }
+  let digits = str.replace(/[^0-9]/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  } else if (digits.length === 13 && digits.startsWith('091')) {
+    digits = digits.slice(3);
+  }
+  return digits;
+}
+
+function cleanText(val: any): string {
+  if (val === null || val === undefined) return '';
+  return String(val).trim();
+}
+
+/**
+ * Match column header text against common real-estate lead spreadsheet variations.
+ */
+function matchHeaderType(header: any): 'name' | 'mobile' | 'config' | 'budget' | 'cp' | 'notes' | 'email' | null {
+  const norm = String(header || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+  if (!norm) return null;
+
+  // Skip typical metadata/row index columns
+  if (norm.includes('srno') || norm.includes('serial') || norm.includes('date') || norm.includes('time') || norm === 'id' || norm === 'sno') {
+    return null;
+  }
+
+  // Channel Partner (checked first so "Channel Partner Name" isn't misidentified as lead name)
+  const cpAliases = ['channelpartner', 'channelpartnername', 'cpname', 'cp', 'broker', 'brokername', 'agent', 'agentname', 'referral', 'sourcecp'];
+  if (cpAliases.some(a => norm === a || norm.includes(a))) return 'cp';
+
+  // Mobile / Phone
+  const mobileAliases = ['mobilenumber', 'mobileno', 'mobile', 'phonenumber', 'phoneno', 'phone', 'contactnumber', 'contactno', 'contact', 'whatsapp', 'cell', 'tel', 'callingnumber', 'callnumber', 'number', 'mob'];
+  if (mobileAliases.some(a => norm === a || (norm.includes(a) && !norm.includes('person')))) return 'mobile';
+
+  // Configuration / Typology / Requirement
+  const configAliases = ['configuration', 'config', 'requirement', 'requirements', 'req', 'typology', 'bhk', 'unittype', 'propertytype', 'flattype'];
+  if (configAliases.some(a => norm === a || norm.includes(a))) return 'config';
+
+  // Budget
+  const budgetAliases = ['budget', 'budgetrange', 'price', 'pricing', 'cost', 'investment', 'budgetlacs'];
+  if (budgetAliases.some(a => norm === a || norm.includes(a))) return 'budget';
+
+  // Notes / Remarks / Status
+  const notesAliases = ['remark', 'remarks', 'remark1', 'remark2', 'note', 'notes', 'comment', 'comments', 'feedback', 'stay', 'callingstatus', 'callstatus'];
+  if (notesAliases.some(a => norm === a || norm.includes(a))) return 'notes';
+
+  // Email
+  const emailAliases = ['email', 'emailid', 'mail'];
+  if (emailAliases.some(a => norm === a || norm.includes(a))) return 'email';
+
+  // Lead / Customer / Client Name
+  const nameAliases = ['customername', 'clientname', 'leadname', 'fullname', 'custname', 'customer', 'client', 'prospect', 'lead', 'name', 'contactperson', 'buyer'];
+  if (nameAliases.some(a => norm === a || norm.includes(a))) return 'name';
+
+  return null;
+}
+
+/**
+ * Robust Excel workbook parser.
+ * Handles:
+ * - Title banners or metadata rows before actual headers
+ * - Any column order (e.g. SR NO, DATE, NAME, CONTACT, REQUIREMENT, BUDGET, REMARK)
+ * - Multi-sheet workbooks
+ * - Heuristic fallback if headers are unlabelled
+ */
+function parseWorkbookBuffer(buffer: ArrayBuffer): SheetAnalysis[] {
+  const wb = XLSX.read(new Uint8Array(buffer), { type: 'array', cellDates: true });
+  const results: SheetAnalysis[] = [];
+
+  for (const sheetName of wb.SheetNames) {
+    const ws = wb.Sheets[sheetName];
+    if (!ws) continue;
+    const rawRows: any[] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    if (!rawRows || rawRows.length === 0) continue;
+
+    let headerRowIdx = -1;
+    let colMap = { name: -1, mobile: -1, config: -1, budget: -1, cp: -1, notes: -1 };
+    let colNames: Record<string, string> = {};
+
+    // Scan top 20 rows for header row
+    for (let r = 0; r < Math.min(rawRows.length, 20); r++) {
+      const row = rawRows[r];
+      if (!Array.isArray(row)) continue;
+
+      let nIdx = -1, mIdx = -1, cfgIdx = -1, bIdx = -1, cpIdx = -1, notIdx = -1;
+      let matchedHeadersCount = 0;
+
+      row.forEach((cell, idx) => {
+        const type = matchHeaderType(cell);
+        if (type === 'name' && nIdx === -1) { nIdx = idx; matchedHeadersCount++; }
+        else if (type === 'mobile' && mIdx === -1) { mIdx = idx; matchedHeadersCount++; }
+        else if (type === 'config' && cfgIdx === -1) { cfgIdx = idx; matchedHeadersCount++; }
+        else if (type === 'budget' && bIdx === -1) { bIdx = idx; matchedHeadersCount++; }
+        else if (type === 'cp' && cpIdx === -1) { cpIdx = idx; matchedHeadersCount++; }
+        else if (type === 'notes' && notIdx === -1) { notIdx = idx; matchedHeadersCount++; }
+      });
+
+      // Valid header row if mobile is matched, or at least 2 headers matched
+      if (mIdx !== -1 || (nIdx !== -1 && matchedHeadersCount >= 2)) {
+        headerRowIdx = r;
+        colMap = { name: nIdx, mobile: mIdx, config: cfgIdx, budget: bIdx, cp: cpIdx, notes: notIdx };
+        row.forEach((cell, idx) => {
+          if (idx === nIdx) colNames.name = cleanText(cell);
+          if (idx === mIdx) colNames.mobile = cleanText(cell);
+          if (idx === cfgIdx) colNames.config = cleanText(cell);
+          if (idx === bIdx) colNames.budget = cleanText(cell);
+          if (idx === cpIdx) colNames.cp = cleanText(cell);
+          if (idx === notIdx) colNames.notes = cleanText(cell);
+        });
+        break;
+      }
+    }
+
+    // Heuristic fallback: if mobile column wasn't detected by header, inspect sample data
+    if (colMap.mobile === -1) {
+      const sample = rawRows.slice(0, 30);
+      const phoneScores: number[] = [];
+      const nameScores: number[] = [];
+
+      sample.forEach(r => {
+        if (!Array.isArray(r)) return;
+        r.forEach((c, idx) => {
+          const ph = cleanPhone(c);
+          if (ph.length >= 10 && ph.length <= 13) {
+            phoneScores[idx] = (phoneScores[idx] || 0) + 1;
+          }
+          const s = cleanText(c);
+          if (/^[a-zA-Z\s]{2,40}$/.test(s) && !/date|phone|mobile|status|sr|contact/i.test(s)) {
+            nameScores[idx] = (nameScores[idx] || 0) + 1;
+          }
+        });
+      });
+
+      let bestMobile = -1, maxPh = 0;
+      phoneScores.forEach((score, idx) => {
+        if (score > maxPh) { maxPh = score; bestMobile = idx; }
+      });
+
+      if (bestMobile !== -1) {
+        colMap.mobile = bestMobile;
+        colNames.mobile = 'Auto-detected';
+        let bestName = -1, maxNm = 0;
+        nameScores.forEach((score, idx) => {
+          if (idx !== bestMobile && score > maxNm) { maxNm = score; bestName = idx; }
+        });
+        if (bestName !== -1) {
+          colMap.name = bestName;
+          colNames.name = 'Auto-detected';
+        }
+        if (headerRowIdx === -1) headerRowIdx = 0;
+      }
+    }
+
+    if (colMap.mobile === -1) continue;
+
+    const dataRows = rawRows.slice(headerRowIdx + 1);
+    const parsed: ParsedLead[] = [];
+    let skippedInvalid = 0;
+
+    dataRows.forEach(row => {
+      if (!Array.isArray(row) || row.length === 0) return;
+      const phone = cleanPhone(colMap.mobile !== -1 ? row[colMap.mobile] : '');
+      if (!phone || phone.length < 10) {
+        const hasContent = row.some(c => c !== null && c !== undefined && String(c).trim() !== '');
+        if (hasContent) skippedInvalid++;
+        return;
+      }
+
+      let name = colMap.name !== -1 ? cleanText(row[colMap.name]) : '';
+      if (!name || /^[0-9]+$/.test(name)) name = 'Unknown';
+
+      parsed.push({
+        customer_name: name,
+        mobile: phone,
+        configuration: colMap.config !== -1 ? cleanText(row[colMap.config]) || null : null,
+        budget: colMap.budget !== -1 ? cleanText(row[colMap.budget]) || null : null,
+        notes: colMap.notes !== -1 ? cleanText(row[colMap.notes]) || null : null,
+        cpName: colMap.cp !== -1 ? cleanText(row[colMap.cp]) || null : null,
+      });
+    });
+
+    results.push({
+      sheetName,
+      leads: parsed,
+      skippedCount: skippedInvalid,
+      colNames
+    });
+  }
+
+  return results;
+}
+
 export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClose, onUploadComplete }) => {
   const { user, role, assignedProjects } = useAuth();
-  // A channel partner uploading their own batch isn't "assigning to a CP"
-  // (they ARE the CP) and has no business picking which internal
-  // telecaller follows up -- that's a staff decision. Both sections below
-  // are hidden for them; their own channel_partners.id is resolved and
-  // attached automatically instead of showing a dropdown of every partner
-  // (which RLS scopes to just their own row anyway, so it'd be a
-  // dropdown with exactly one option -- confusing, not useful).
   const isChannelPartner = role === 'channel_partner';
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 'file' is the original CSV/Excel batch flow. 'single' reuses the exact
-  // same insert pipeline (bulk_lead_uploads record + source: 'bulk_upload'
-  // + bulk_upload_id) for one manually-typed lead, so it stays a distinct
-  // pool from the main Leads directory just like a CSV batch does --
-  // client's explicit ask: sourcing manager/presales who can bulk-upload
-  // should also be able to add a single lead here, not just via a file.
   const [mode, setMode] = useState<'file' | 'single'>('file');
   const [file, setFile] = useState<File | null>(null);
+  const [parsedSheets, setParsedSheets] = useState<SheetAnalysis[]>([]);
+  const [selectedSheetIndex, setSelectedSheetIndex] = useState(0);
+  const [parsingFile, setParsingFile] = useState(false);
+
   const [singleName, setSingleName] = useState('');
   const [singleMobile, setSingleMobile] = useState('');
   const [singleConfig, setSingleConfig] = useState('');
@@ -58,6 +279,9 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
   const resetForm = () => {
     setMode('file');
     setFile(null);
+    setParsedSheets([]);
+    setSelectedSheetIndex(0);
+    setParsingFile(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
     setSingleName('');
     setSingleMobile('');
@@ -76,29 +300,24 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
   const fetchDropdownData = async () => {
     try {
       if (isChannelPartner) {
-        // Resolve their own channel_partners.id directly -- not filtered
-        // by status='active', since a partner uploading for themselves
-        // should work regardless of that flag; RLS already scopes this
-        // query to their own row (user_id = auth.uid()) regardless.
         const { data: ownCp } = await supabase.from('channel_partners').select('id').eq('user_id', user?.id).maybeSingle();
         if (ownCp) {
           setChannelPartnerId(ownCp.id);
-          // Project dropdown limited to projects actually assigned to
-          // this partner (channel_partner_projects), not every project
-          // in the company.
           const { data: assignments } = await supabase.from('channel_partner_projects').select('project_id, projects(project_name)').eq('channel_partner_id', ownCp.id);
           setProjects((assignments || []).map((a: any) => ({ id: a.project_id, name: a.projects?.project_name || 'Unknown' })));
         }
-        return; // no telecaller list needed -- that section is hidden for them
+        return;
       }
 
       // Fetch Projects - scoped to user's assigned projects for non-super-admins
       const { data: projData } = await supabase.from('projects').select('id, project_name');
+      let initialPid = '';
       if (projData) {
         const filtered = projData.filter(p => isSuperAdmin(role) || (assignedProjects && assignedProjects.includes(p.id)));
         setProjects(filtered.map(p => ({ id: p.id, name: p.project_name })));
         if (!isSuperAdmin(role) && assignedProjects && assignedProjects.length === 1) {
-          setProjectId(assignedProjects[0]);
+          initialPid = assignedProjects[0];
+          setProjectId(initialPid);
         }
       }
 
@@ -119,8 +338,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
       });
       setProjectTeamMap(teamMap);
 
-      // Fetch Telecallers (role = presales or presales_tl -- telecaller was
-      // removed as a role entirely, merged into presales)
+      // Fetch Telecallers (role = presales or presales_tl)
       const { data: roles, error: rErr } = await supabase.from('roles').select('id, name');
       if (rErr) console.error('Error fetching roles:', rErr);
       const tcRoleIds = (roles || []).filter(r => ['presales', 'presales_tl'].includes(r.name)).map(r => r.id);
@@ -133,17 +351,18 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
           const { data: profiles, error: pErr } = await supabase.from('user_profiles').select('id, full_name, status').in('id', userIds);
           if (pErr) console.error('Error fetching user_profiles:', pErr);
           if (profiles) {
-            setTelecallers(
-              profiles
-                .filter(p => p.status === 'active')
-                .map(p => ({ id: p.id, name: p.full_name || 'Unknown' }))
-            );
+            const activeTcs = profiles
+              .filter(p => p.status === 'active')
+              .map(p => ({ id: p.id, name: p.full_name || 'Unknown' }));
+            setTelecallers(activeTcs);
+
+            // Auto-select telecallers if initial project is already set
+            if (initialPid && teamMap.has(initialPid)) {
+              const assignedIds = activeTcs.filter(tc => teamMap.get(initialPid)!.has(tc.id)).map(tc => tc.id);
+              setTelecallerIds(assignedIds);
+            }
           }
-        } else {
-          console.log('No user_roles found for telecaller role IDs:', tcRoleIds);
         }
-      } else {
-        console.log('Telecaller role ID not found in roles table.');
       }
     } catch (err) {
       console.error('Failed to fetch dropdown data for bulk upload', err);
@@ -152,7 +371,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
 
   const handleDownloadTemplate = () => {
     const ws = XLSX.utils.aoa_to_sheet([
-      ['Customer Name', 'Mobile Number', 'Configuration', 'Budget', 'Channel Partner Name']
+      ['Customer Name', 'Mobile Number', 'Configuration', 'Budget', 'Channel Partner Name', 'Notes']
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Leads');
@@ -162,7 +381,13 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
   const handleProjectChange = (newProjectId: string) => {
     setProjectId(newProjectId);
     const newTeam = projectTeamMap.get(newProjectId);
-    setTelecallerIds(prev => prev.filter(id => newTeam?.has(id)));
+    if (newTeam) {
+      // Auto-select all presales assigned to this project by default for round-robin
+      const defaultTcIds = telecallers.filter(tc => newTeam.has(tc.id)).map(tc => tc.id);
+      setTelecallerIds(defaultTcIds);
+    } else {
+      setTelecallerIds([]);
+    }
   };
 
   const visibleTelecallers = projectId
@@ -170,9 +395,41 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
     : [];
 
   const toggleTelecaller = (id: string) => {
-    setTelecallerIds(prev => 
+    setTelecallerIds(prev =>
       prev.includes(id) ? prev.filter(tid => tid !== id) : [...prev, id]
     );
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0] || null;
+    setFile(selectedFile);
+    setParsedSheets([]);
+    setSelectedSheetIndex(0);
+    setError(null);
+
+    if (!selectedFile) return;
+
+    try {
+      setParsingFile(true);
+      const buffer = await selectedFile.arrayBuffer();
+      const sheets = parseWorkbookBuffer(buffer);
+
+      if (sheets.length === 0 || sheets.every(s => s.leads.length === 0)) {
+        setError(
+          'Could not detect valid lead records in this Excel file. Ensure your spreadsheet contains Customer Name and Mobile Number columns with valid 10-digit mobile numbers.'
+        );
+      } else {
+        setParsedSheets(sheets);
+        // Default to first sheet with leads
+        const firstValidIdx = sheets.findIndex(s => s.leads.length > 0);
+        setSelectedSheetIndex(firstValidIdx >= 0 ? firstValidIdx : 0);
+      }
+    } catch (err: any) {
+      console.error('Error parsing excel file:', err);
+      setError(`Failed to read Excel file: ${err.message || 'Unknown error'}`);
+    } finally {
+      setParsingFile(false);
+    }
   };
 
   const generateLeadNumber = async () => {
@@ -195,44 +452,48 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
     return `LD-${Date.now()}`;
   };
 
+  const currentSheet = parsedSheets[selectedSheetIndex];
+
   const handleUpload = async () => {
-    if (mode === 'file' && !file) return setError('Please select an Excel file.');
+    if (mode === 'file') {
+      if (!file) return setError('Please select an Excel file.');
+      if (parsedSheets.length === 0 || !currentSheet || currentSheet.leads.length === 0) {
+        return setError('The selected Excel sheet does not contain valid leads. Ensure it has Customer Name and Mobile Number columns.');
+      }
+    }
     if (mode === 'single' && (!singleName.trim() || !singleMobile.trim())) {
       return setError('Please enter both Customer Name and Mobile Number.');
     }
     if (!projectId) return setError('Please select a project.');
 
+    if (!isChannelPartner && visibleTelecallers.length > 0 && telecallerIds.length === 0) {
+      return setError('Please select at least one Presales (Telecaller) before uploading.');
+    }
+
     setLoading(true);
     setError(null);
     setSuccess(null);
 
-    if (!isChannelPartner && telecallerIds.length === 0) {
-      setError('Please select at least one Presales (Telecaller) before uploading.');
-      setLoading(false);
-      return;
-    }
-
     try {
-      // 1. Get the rows to insert -- either parsed from the Excel file, or
-      // the single manually-typed lead.
-      let rows: any[];
+      let leadsToProcess: ParsedLead[];
       if (mode === 'single') {
-        rows = [[singleName.trim(), singleMobile.trim(), singleConfig.trim(), singleBudget.trim()]];
-      } else {
-        const data = await file!.arrayBuffer();
-        const workbook = XLSX.read(data);
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        // Skip header row
-        const json: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-        rows = json.slice(1).filter(row => row.length > 0 && row[0] && row[1]); // Must have name and mobile
-
-        if (rows.length === 0) {
-          throw new Error('The excel sheet is empty or invalid. Ensure you have Customer Name and Mobile Number.');
+        const cleanSinglePhone = cleanPhone(singleMobile);
+        if (!cleanSinglePhone || cleanSinglePhone.length < 10) {
+          throw new Error('Please enter a valid 10-digit mobile number.');
         }
+        leadsToProcess = [{
+          customer_name: singleName.trim(),
+          mobile: cleanSinglePhone,
+          configuration: singleConfig.trim() || null,
+          budget: singleBudget.trim() || null,
+          notes: null,
+          cpName: null,
+        }];
+      } else {
+        leadsToProcess = currentSheet.leads;
       }
 
-      // 2. Create Bulk Upload Directory Record
+      // 1. Create Bulk Upload Directory Record
       const { data: bulkRecord, error: bulkErr } = await supabase.from('bulk_lead_uploads').insert({
         file_name: mode === 'single' ? `Manual Entry — ${singleName.trim()}` : file!.name,
         uploaded_by: user?.id,
@@ -242,7 +503,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
 
       if (bulkErr || !bulkRecord) throw new Error(bulkErr?.message || 'Failed to create bulk upload record.');
 
-      // 3. Prepare Leads data
+      // 2. Prepare Leads data
       const leadBaseNumber = await generateLeadNumber();
       let prefix = 'LD-';
       let startNum = 10001;
@@ -252,42 +513,52 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
         startNum = parseInt(match[2], 10);
       }
 
-      const newLeads = rows.map((row, index) => {
-        // Round Robin Telecaller Assignment
+      const newLeads = leadsToProcess.map((lead, index) => {
         let assignedTelecaller = null;
         if (telecallerIds.length > 0) {
           assignedTelecaller = telecallerIds[index % telecallerIds.length];
         }
 
-        const lNum = `${prefix}${String(startNum + index).padStart(String(startNum).length, '0')}`;
+        const lNum = `${prefix}${String(startNum + index).padStart(Math.max(String(startNum).length, 5), '0')}`;
+
+        // If CP was chosen in dropdown, use that.
+        // Otherwise if lead has cpName and partner exists in partners list, map it.
+        let resolvedCpId = channelPartnerId || null;
+        if (!resolvedCpId && lead.cpName) {
+          const matchCp = partners.find(
+            p => (p.company_name && p.company_name.toLowerCase() === lead.cpName?.toLowerCase()) ||
+                 (p.name && p.name.toLowerCase() === lead.cpName?.toLowerCase())
+          );
+          if (matchCp) resolvedCpId = matchCp.id;
+        }
 
         return {
           lead_number: lNum,
-          customer_name: row[0]?.toString().trim() || 'Unknown',
-          mobile: row[1]?.toString().trim() || '',
-          configuration: row[2]?.toString().trim() || null,
-          budget: row[3]?.toString().trim() || null,
-          // row[4] is CP Name from excel, but we already have dropdown. If CP is set in dropdown, we use that.
-          channel_partner_id: channelPartnerId || null,
+          customer_name: lead.customer_name || 'Unknown',
+          mobile: lead.mobile,
+          configuration: lead.configuration || null,
+          budget: lead.budget || null,
+          channel_partner_id: resolvedCpId,
           project_id: projectId,
           telecaller_id: assignedTelecaller,
           bulk_upload_id: bulkRecord.id,
           created_by: user?.id,
           owner_id: user?.id,
-          status: 'new', // Default status for bulk uploads
-          source: 'bulk_upload'
+          status: 'new' as const,
+          source: 'bulk_upload',
+          notes: lead.notes || null,
         };
       });
 
-      // 4. Insert Leads. The DB blocks a second lead with the same mobile in
-      // the same project (prevent_duplicate_lead_phone), and one duplicate
-      // used to abort the whole upload and leave an empty batch behind.
-      // Duplicates are now skipped and reported instead, so the rest of the
-      // file still goes in.
+      // 3. Prevent duplicate mobile numbers within this project
       const normPhone = (p: string) => {
-        const d = (p || '').replace(/[^0-9]/g, '');
-        return d.length === 12 && d.startsWith('91') ? d.slice(2) : d;
+        let d = (p || '').replace(/[^0-9]/g, '');
+        if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
+        else if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+        else if (d.length === 13 && d.startsWith('091')) d = d.slice(3);
+        return d;
       };
+
       const existing = new Set<string>();
       for (let from = 0; ; from += 1000) {
         const { data: existingRows } = await supabase
@@ -295,11 +566,12 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
         (existingRows || []).forEach((r: any) => existing.add(normPhone(r.mobile)));
         if (!existingRows || existingRows.length < 1000) break;
       }
+
       let skipped = 0;
       const toInsert = newLeads.filter((l) => {
         const n = normPhone(l.mobile);
-        if (!n) { skipped++; return false; }       // no usable number
-        if (existing.has(n)) { skipped++; return false; } // already in project / repeated in file
+        if (!n) { skipped++; return false; }
+        if (existing.has(n)) { skipped++; return false; }
         existing.add(n);
         return true;
       });
@@ -321,19 +593,11 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
       }
 
       if (inserted === 0) {
-        // Nothing went in -- don't leave an empty batch in the history.
         await supabase.from('bulk_lead_uploads').delete().eq('id', bulkRecord.id);
         throw new Error(
           `No leads were uploaded: all ${newLeads.length} number(s) already exist in this project (or are blank/repeated in the file).`
         );
       }
-
-      // Notifying assignees is now handled by the
-      // trg_notify_bulk_upload_assignment DB trigger (statement-level on
-      // leads, aggregated per upload+assignee with its own dedupe guard for
-      // chunked inserts) -- it fires regardless of who performs the upload,
-      // unlike this frontend version which silently failed under RLS
-      // whenever the uploader wasn't a super_admin.
 
       setSuccess(
         mode === 'single'
@@ -347,8 +611,6 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
 
     } catch (err: any) {
       setError(err.message || 'An error occurred during upload.');
-      // Cleanup bulk record if it failed during lead insertion
-      // For a robust system, we should have transactions, but RPC or manual cleanup is okay here.
     } finally {
       setLoading(false);
     }
@@ -367,8 +629,18 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
         </div>
 
         <div className="p-6 overflow-y-auto space-y-6">
-          {error && <div className="p-4 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>}
-          {success && <div className="p-4 bg-emerald-50 text-emerald-700 rounded-lg text-sm">{success}</div>}
+          {error && (
+            <div className="p-4 bg-red-50 text-red-700 rounded-lg text-sm flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-red-600" />
+              <span>{error}</span>
+            </div>
+          )}
+          {success && (
+            <div className="p-4 bg-emerald-50 text-emerald-700 rounded-lg text-sm flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{success}</span>
+            </div>
+          )}
 
           <div className="flex rounded-lg border border-slate-200 overflow-hidden w-fit">
             {(['file', 'single'] as const).map((m) => (
@@ -407,9 +679,94 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
                   type="file"
                   accept=".xlsx, .xls, .csv"
                   ref={fileInputRef}
-                  onChange={(e) => setFile(e.target.files?.[0] || null)}
+                  onChange={handleFileChange}
                   className="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 border border-slate-300 rounded-lg"
                 />
+
+                {parsingFile && (
+                  <div className="flex items-center gap-2 mt-2 text-xs text-indigo-600">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Analyzing spreadsheet columns and rows...</span>
+                  </div>
+                )}
+
+                {parsedSheets.length > 0 && currentSheet && (
+                  <div className="mt-3 p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2.5">
+                    {parsedSheets.length > 1 && (
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                          Select Sheet ({parsedSheets.length} sheets found in workbook)
+                        </label>
+                        <select
+                          value={selectedSheetIndex}
+                          onChange={(e) => setSelectedSheetIndex(Number(e.target.value))}
+                          className="w-full text-xs px-2.5 py-1.5 bg-white border border-slate-300 rounded-md focus:ring-1 focus:ring-indigo-500"
+                        >
+                          {parsedSheets.map((s, idx) => (
+                            <option key={idx} value={idx}>
+                              {s.sheetName} ({s.leads.length} leads{s.skippedCount > 0 ? `, ${s.skippedCount} skipped` : ''})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between">
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        {currentSheet.leads.length} lead(s) ready to import
+                      </span>
+                      {currentSheet.skippedCount > 0 && (
+                        <span className="text-[11px] text-slate-400">
+                          ({currentSheet.skippedCount} empty or non-lead rows skipped)
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Column mapping tags */}
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {currentSheet.colNames.name && (
+                        <span className="text-[11px] px-2 py-0.5 bg-white border border-slate-200 rounded text-slate-600">
+                          Name: <strong className="text-slate-800">{currentSheet.colNames.name}</strong>
+                        </span>
+                      )}
+                      {currentSheet.colNames.mobile && (
+                        <span className="text-[11px] px-2 py-0.5 bg-white border border-slate-200 rounded text-slate-600">
+                          Mobile: <strong className="text-slate-800">{currentSheet.colNames.mobile}</strong>
+                        </span>
+                      )}
+                      {currentSheet.colNames.config && (
+                        <span className="text-[11px] px-2 py-0.5 bg-white border border-slate-200 rounded text-slate-600">
+                          Config: <strong className="text-slate-800">{currentSheet.colNames.config}</strong>
+                        </span>
+                      )}
+                      {currentSheet.colNames.budget && (
+                        <span className="text-[11px] px-2 py-0.5 bg-white border border-slate-200 rounded text-slate-600">
+                          Budget: <strong className="text-slate-800">{currentSheet.colNames.budget}</strong>
+                        </span>
+                      )}
+                      {currentSheet.colNames.notes && (
+                        <span className="text-[11px] px-2 py-0.5 bg-white border border-slate-200 rounded text-slate-600">
+                          Notes: <strong className="text-slate-800">{currentSheet.colNames.notes}</strong>
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Preview of first 3 leads */}
+                    {currentSheet.leads.length > 0 && (
+                      <div className="text-[11px] text-slate-500 bg-white p-2 rounded border border-slate-200 space-y-1">
+                        <p className="font-semibold text-slate-700">Preview (first {Math.min(3, currentSheet.leads.length)}):</p>
+                        {currentSheet.leads.slice(0, 3).map((lead, i) => (
+                          <div key={i} className="truncate">
+                            • <span className="font-medium text-slate-800">{lead.customer_name}</span> ({lead.mobile})
+                            {lead.configuration ? ` — ${lead.configuration}` : ''}
+                            {lead.budget ? ` [${lead.budget}]` : ''}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -525,7 +882,11 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
           </button>
           <button
             onClick={handleUpload}
-            disabled={loading || !projectId || (mode === 'file' ? !file : !singleName.trim() || !singleMobile.trim())}
+            disabled={
+              loading ||
+              !projectId ||
+              (mode === 'file' ? (!file || !currentSheet || currentSheet.leads.length === 0) : (!singleName.trim() || !singleMobile.trim()))
+            }
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}

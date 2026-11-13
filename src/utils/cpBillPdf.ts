@@ -305,7 +305,9 @@ export function downloadCpTaxInvoicePdf(data: CpTaxInvoiceData) {
     { text: `Project:  ${data.projectName}${data.wing ? `   ·   Wing: ${data.wing}` : ''}${data.flatNo ? `   ·   Unit: ${data.flatNo}` : ''}` },
     { text: `Agreement / Unit Cost:  Rs. ${fmtRupees(data.unitCost)}`, muted: true },
     {
-      text: `Brokerage / Referral Fee${data.brokeragePercentage != null ? ` @ ${data.brokeragePercentage}%` : ''}`,
+      // Client's instruction: no "Brokerage / Referral Fee" wording and no
+      // "@ x%" rate on the invoice -- just the amount under a neutral label.
+      text: 'Channel Partner Service Fee',
       amount: fmtRupees(data.brokerageAmount),
       bold: true,
     },

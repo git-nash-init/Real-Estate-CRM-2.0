@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { supabase } from '../services/supabaseClient';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useNotifications } from '../hooks/useNotifications';
@@ -40,7 +41,7 @@ import {
 } from 'lucide-react';
 
 export const AppLayout: React.FC = () => {
-  const { profile, role, logout } = useAuth();
+  const { user, profile, role, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -53,6 +54,16 @@ export const AppLayout: React.FC = () => {
   const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
   const { notifications, unreadCount, markAsRead, markAllAsRead, deleteNotification, justArrived, dismissJustArrived } = useNotifications();
   const { pinnedPaths, togglePin } = useSidebarPins();
+
+  // View-only accounts (read_only_users): full super-admin visibility, but
+  // the database refuses every write. This just tells the person why a save
+  // or delete they attempt gets rejected.
+  const [isReadOnlyAccount, setIsReadOnlyAccount] = useState(false);
+  useEffect(() => {
+    if (!user?.id) { setIsReadOnlyAccount(false); return; }
+    supabase.from('read_only_users').select('user_id').eq('user_id', user.id).maybeSingle()
+      .then(({ data }) => setIsReadOnlyAccount(!!data));
+  }, [user?.id]);
   const { toast: waSentToast, dismiss: dismissWaSent } = useWhatsAppSentToast();
 
   // Single click handler for both the bell dropdown and the "just arrived"
@@ -285,6 +296,12 @@ export const AppLayout: React.FC = () => {
           sidebarOpen ? 'md:pl-64' : 'md:pl-20'
         }`}
       >
+        {isReadOnlyAccount && (
+          <div className="bg-amber-50 border-b border-amber-200 text-amber-800 text-xs font-semibold px-4 py-1.5 text-center">
+            View-only account — you can browse everything, but changes (add, edit, delete) are not saved.
+          </div>
+        )}
+
         {/* TOP HEADER */}
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-3 sm:px-6 sticky top-0 z-10 shadow-sm gap-2">
           {/* Header Title / Search */}

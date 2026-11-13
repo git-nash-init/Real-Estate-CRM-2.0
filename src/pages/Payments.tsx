@@ -10,6 +10,7 @@ import { parseDescription } from '../utils/projectDescription';
 import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
 import { ExportModal } from '../components/ui/ExportModal';
 import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { PageSizeSelect, usePageSize } from '../components/ui/PageSizeSelect';
 import { BulkSelectHeaderCell, BulkSelectCell, BulkActionBar } from '../components/ui/BulkActionBar';
 import {
   Search,
@@ -118,7 +119,7 @@ export const Payments: React.FC = () => {
   // Clear any bulk-select checkboxes when the page changes, so a stale
   // selection from a previous page can't be bulk-deleted by mistake.
   useEffect(() => { setSelectedPaymentIds(new Set()); }, [page]);
-  const [pageSize] = useState(10);
+  const [pageSize, setPageSize] = usePageSize('payments');
 
   const { role } = useAuth();
 
@@ -1673,6 +1674,7 @@ export const Payments: React.FC = () => {
                   <span className="font-semibold text-slate-800">{totalFilteredCount}</span> transactions
                 </span>
                 <div className="flex items-center space-x-2">
+                  <PageSizeSelect value={pageSize} onChange={(n) => { setPageSize(n); setPage(0); }} />
                   <button
                     onClick={() => setPage(prev => Math.max(prev - 1, 0))}
                     disabled={page === 0}
@@ -1782,6 +1784,7 @@ export const Payments: React.FC = () => {
                   <span className="font-semibold text-slate-800">{totalFilteredCommCount}</span> payouts
                 </span>
                 <div className="flex items-center space-x-2">
+                  <PageSizeSelect value={pageSize} onChange={(n) => { setPageSize(n); setPage(0); }} />
                   <button
                     onClick={() => setPage(prev => Math.max(prev - 1, 0))}
                     disabled={page === 0}

@@ -5,6 +5,8 @@ import { exportRowsToExcel } from '../utils/exportExcel';
 import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
 import { PhoneActions } from '../components/ui/PhoneActions';
 import { ExportModal } from '../components/ui/ExportModal';
+import { TablePagination, paginate } from '../components/ui/TablePagination';
+import { usePageSize } from '../components/ui/PageSizeSelect';
 import {
   MessageSquare,
   RefreshCw,
@@ -161,6 +163,10 @@ export const WhatsAppMessages: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredRows, sortKey, sortDir, usersMap]);
 
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = usePageSize('whatsapp-messages');
+  const { pageRows, safePage } = paginate(sortedRows, page, pageSize);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -268,8 +274,8 @@ export const WhatsAppMessages: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {sortedRows.length > 0 ? (
-                sortedRows.map(r => (
+              {pageRows.length > 0 ? (
+                pageRows.map(r => (
                   <tr key={r.id} className="hover:bg-slate-50/50 align-top">
                     <td className="py-3 px-6 whitespace-nowrap"><PhoneActions phone={r.to_phone} /></td>
                     <td className="py-3 px-6 max-w-sm">
@@ -329,6 +335,7 @@ export const WhatsAppMessages: React.FC = () => {
             </tbody>
           </table>
         </div>
+        <TablePagination total={sortedRows.length} page={safePage} pageSize={pageSize} onPage={setPage} onPageSize={setPageSize} label="messages" />
       </div>
     </div>
   );

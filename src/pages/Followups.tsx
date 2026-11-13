@@ -9,6 +9,7 @@ import { SortableTh, compareValues, type SortDirection } from '../components/ui/
 import { PhoneActions } from '../components/ui/PhoneActions';
 import { ExportModal } from '../components/ui/ExportModal';
 import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { PageSizeSelect, usePageSize } from '../components/ui/PageSizeSelect';
 import {
   Search,
   RefreshCw,
@@ -58,7 +59,7 @@ export const Followups: React.FC = () => {
 
   // Pagination states
   const [page, setPage] = useState(0);
-  const [pageSize] = useState(10);
+  const [pageSize, setPageSize] = usePageSize('followups');
   const [totalCount, setTotalCount] = useState(0);
 
   // Data states
@@ -896,6 +897,7 @@ export const Followups: React.FC = () => {
                   <span className="font-semibold text-slate-800">{totalCount}</span> followups
                 </span>
                 <div className="flex items-center space-x-2">
+                  <PageSizeSelect value={pageSize} onChange={(n) => { setPageSize(n); setPage(0); }} />
                   <button
                     onClick={() => setPage(prev => Math.max(prev - 1, 0))}
                     disabled={page === 0}

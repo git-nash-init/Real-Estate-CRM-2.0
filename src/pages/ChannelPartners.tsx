@@ -9,7 +9,9 @@ import { SortableTh, compareValues, type SortDirection } from '../components/ui/
 import { PhoneActions } from '../components/ui/PhoneActions';
 import { ExportModal } from '../components/ui/ExportModal';
 import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { PageSizeSelect, usePageSize } from '../components/ui/PageSizeSelect';
 import { BulkSelectHeaderCell, BulkSelectCell, BulkActionBar } from '../components/ui/BulkActionBar';
+import { normalizeEmail, isValidEmail } from '../utils/emailNormalize';
 import {
   Search,
   RefreshCw,
@@ -175,7 +177,7 @@ export const ChannelPartners: React.FC = () => {
   // Clear any bulk-select checkboxes when the page changes, so a stale
   // selection from a previous page can't be bulk-deleted by mistake.
   useEffect(() => { setSelectedCpIds(new Set()); }, [page]);
-  const [pageSize] = useState(10);
+  const [pageSize, setPageSize] = usePageSize('channel-partners');
 
   // A `channel_partner`/`cp_request_approved`/`cp_request_rejected`
   // notification opens the edit modal for that partner; a `cp_request`
@@ -616,7 +618,8 @@ export const ChannelPartners: React.FC = () => {
     setApprovalLoading(req.id);
     try {
       // 1. Generate credentials
-      const targetEmail = req.email?.trim() || `${req.phone.trim().slice(-10)}@partner.opalproperties.com`;
+      const cleanReqEmail = normalizeEmail(req.email);
+      const targetEmail = cleanReqEmail || `${req.phone.trim().slice(-10)}@partner.opalproperties.com`;
       const generatedPassword = generateRandomPassword();
       const { data: maxCP } = await supabase
         .from('channel_partners')
@@ -658,7 +661,7 @@ export const ChannelPartners: React.FC = () => {
         company_name: req.company_name || null,
         mobile: req.phone,
         whatsapp_number: req.whatsapp_number || req.phone,
-        email: req.email?.trim() || null,
+        email: cleanReqEmail || null,
         address: req.address || null,
         city: formattedCity,
         rera_number: req.rera_number || null,
@@ -813,8 +816,9 @@ export const ChannelPartners: React.FC = () => {
       setFormError('Please enter a valid 10-digit Indian mobile number.');
       return;
     }
-    if (email.trim() && !/\S+@\S+\.\S+/.test(email)) {
-      setFormError('Please provide a valid email format.');
+    const cleanEmail = normalizeEmail(email);
+    if (cleanEmail && !isValidEmail(cleanEmail)) {
+      setFormError('Please provide a valid email format (e.g. partner@example.com).');
       return;
     }
     if (reraValidFrom && reraValidTo && new Date(reraValidTo) < new Date(reraValidFrom)) {
@@ -833,7 +837,7 @@ export const ChannelPartners: React.FC = () => {
         if (dupeCheck.some(p => p.mobile === phone.trim())) {
           throw new Error('A partner with this phone number is already registered.');
         }
-        if (email.trim() && dupeCheck.some(p => p.email?.toLowerCase() === email.trim().toLowerCase())) {
+        if (cleanEmail && dupeCheck.some(p => p.email?.toLowerCase() === cleanEmail.toLowerCase())) {
           throw new Error('A partner with this email is already registered.');
         }
 
@@ -857,7 +861,7 @@ export const ChannelPartners: React.FC = () => {
           company_name: companyName.trim() || null,
           mobile: phone.trim(),
           whatsapp_number: sameAsPhone ? phone.trim() : (whatsappNum.trim() || phone.trim()),
-          email: email.trim() || null,
+          email: cleanEmail || null,
           address: address.trim() || null,
           city: formattedCity,
           rera_number: reraNumber.trim() || null,
@@ -874,6 +878,22 @@ export const ChannelPartners: React.FC = () => {
         };
         const { error: editErr } = await supabase.from('channel_partners').update(payload).eq('id', partnerId);
         if (editErr) throw editErr;
+
+        // Keep the LOGIN email in step with the partner's email. Without
+        // this, fixing a mistyped email here left the real login on the old
+        // address, so "Forgot password" for the correct address matched no
+        // account and no reset email was ever sent.
+        const newEmail = cleanEmail;
+        if (isSuperAdmin && editingPartner.user_id && newEmail && newEmail !== (editingPartner.email || '').trim().toLowerCase()) {
+          const { data: sessionData } = await supabase.auth.getSession();
+          const { data: fnData, error: fnError } = await supabase.functions.invoke('manage-cp-account', {
+            body: { action: 'update_email', cp_id: partnerId, user_id: editingPartner.user_id, email: newEmail },
+            headers: { Authorization: `Bearer ${sessionData.session?.access_token}` },
+          });
+          if (fnError || fnData?.error) {
+            setNotification({ type: 'error', message: `Partner saved, but the login email could not be updated: ${fnData?.error || fnError?.message}` });
+          }
+        }
 
         // Sync project mappings
         await supabase.from('channel_partner_projects').delete().eq('channel_partner_id', partnerId);
@@ -912,7 +932,7 @@ export const ChannelPartners: React.FC = () => {
         contact_person: contactPerson.trim() || null,
         phone: phone.trim(),
         whatsapp_number: sameAsPhone ? phone.trim() : (whatsappNum.trim() || phone.trim()),
-        email: email.trim() || null,
+        email: cleanEmail || null,
         address: address.trim() || null,
         city: city.trim() || null,
         state: state.trim() || null,
@@ -1487,6 +1507,7 @@ export const ChannelPartners: React.FC = () => {
                   <span className="font-semibold text-slate-800">{totalFilteredCount}</span> partners
                 </span>
                 <div className="flex items-center space-x-2">
+                  <PageSizeSelect value={pageSize} onChange={(n) => { setPageSize(n); setPage(0); }} />
                   <button
                     onClick={() => setPage(prev => Math.max(prev - 1, 0))}
                     disabled={page === 0}
@@ -1679,13 +1700,26 @@ export const ChannelPartners: React.FC = () => {
                       )}
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Email Address *</label>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Email Address *</label>
+                        {(email.match(/@/g) || []).length > 1 && (
+                          <span className="text-[11px] font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                            Will format as: {normalizeEmail(email)}
+                          </span>
+                        )}
+                      </div>
                       <input
-                        type="email"
+                        type="text"
                         required
                         placeholder="partner@example.com"
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
+                        onBlur={() => {
+                          const cleaned = normalizeEmail(email);
+                          if (cleaned && cleaned !== email) {
+                            setEmail(cleaned);
+                          }
+                        }}
                         className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-sm focus:bg-white focus:outline-none transition-all"
                       />
                     </div>

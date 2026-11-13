@@ -21,6 +21,8 @@ import { SortableTh, compareValues, type SortDirection } from '../components/ui/
 import { PhoneActions } from '../components/ui/PhoneActions';
 import { ExportModal } from '../components/ui/ExportModal';
 import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { TablePagination, paginate } from '../components/ui/TablePagination';
+import { usePageSize } from '../components/ui/PageSizeSelect';
 
 interface OutreachEntry {
   id: string;
@@ -383,6 +385,10 @@ export const CPOutreach: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredEntries, sortKey, sortDir, sourcingManagers]);
 
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = usePageSize('cp-outreach');
+  const { pageRows, safePage } = paginate(sortedEntries, page, pageSize);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -470,8 +476,8 @@ export const CPOutreach: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {sortedEntries.length > 0 ? (
-                sortedEntries.map(en => (
+              {pageRows.length > 0 ? (
+                pageRows.map(en => (
                   <tr key={en.id} ref={registerRow(en.id)} className={`hover:bg-slate-50/50 ${rowClass(en.id)}`}>
                       <td className="py-3 px-6 text-slate-800 font-semibold">
                         <span className="block">{new Date(en.created_at).toLocaleDateString('en-IN')}</span>
@@ -512,6 +518,7 @@ export const CPOutreach: React.FC = () => {
             </tbody>
           </table>
         </div>
+        <TablePagination total={sortedEntries.length} page={safePage} pageSize={pageSize} onPage={setPage} onPageSize={setPageSize} label="visits" />
       </div>
 
       <SlideOverPanel

@@ -5,6 +5,7 @@ import { exportRowsToExcel } from '../utils/exportExcel';
 import { SortableTh, compareValues, type SortDirection } from '../components/ui/SortableTh';
 import { ExportModal } from '../components/ui/ExportModal';
 import { SlideOverPanel } from '../components/ui/SlideOverPanel';
+import { PageSizeSelect, usePageSize } from '../components/ui/PageSizeSelect';
 import { BulkSelectHeaderCell, BulkSelectCell, BulkActionBar } from '../components/ui/BulkActionBar';
 import {
   Search,
@@ -22,6 +23,7 @@ import {
 } from 'lucide-react';
 import type { UserRole } from '../types/auth';
 import { useAuth } from '../hooks/useAuth';
+import { normalizeEmail } from '../utils/emailNormalize';
 
 interface Employee {
   id: string;
@@ -122,7 +124,7 @@ export const Employees: React.FC = () => {
   // Clear any bulk-select checkboxes when the page changes, so a stale
   // selection from a previous page can't be bulk-offboarded by mistake.
   useEffect(() => { setSelectedEmployeeIds(new Set()); }, [page]);
-  const [pageSize] = useState(10);
+  const [pageSize, setPageSize] = usePageSize('employees');
   const [totalCount, setTotalCount] = useState(0);
 
   // Data states
@@ -616,9 +618,11 @@ export const Employees: React.FC = () => {
 
     try {
       // 1. Transaction-safe check/insert for user_profiles if no profile is linked
+      const cleanPersonal = normalizeEmail(personalEmail);
+      const cleanOfficial = normalizeEmail(officialEmail);
       if (!finalUserId) {
-        const isSyntheticEmail = !personalEmail && !officialEmail;
-        const targetEmail = personalEmail || officialEmail || `${employeeIdVal.toLowerCase()}@estatecrm.internal`;
+        const isSyntheticEmail = !cleanPersonal && !cleanOfficial;
+        const targetEmail = cleanPersonal || cleanOfficial || `${employeeIdVal.toLowerCase()}@estatecrm.internal`;
 
         // Check if profile already exists with this email
         const { data: existingProfile, error: checkError } = await supabase
@@ -763,7 +767,7 @@ export const Employees: React.FC = () => {
         emergency_contact_mobile: emergencyContactPhone || null,
         emergency_contact_phone: emergencyContactPhone || null,
         work_location: workLocation || null,
-        official_email: officialEmail || null,
+        official_email: cleanOfficial || null,
         official_mobile: mobile,
         profile_photo: profilePhoto || null,
         gender: gender || null,
@@ -771,7 +775,7 @@ export const Employees: React.FC = () => {
         mobile: mobile,
         alternate_mobile: alternateMobile || null,
         whatsapp_number: sameAsMobile ? mobile : (whatsappNumber || mobile),
-        personal_email: personalEmail || null,
+        personal_email: cleanPersonal || null,
         employment_type: employmentType,
         branch: branch || null,
         address: address || null,
@@ -1460,6 +1464,7 @@ export const Employees: React.FC = () => {
                   <span className="font-semibold text-slate-800">{totalCount}</span> employees
                 </span>
                 <div className="flex items-center space-x-2">
+                  <PageSizeSelect value={pageSize} onChange={(n) => { setPageSize(n); setPage(0); }} />
                   <button
                     onClick={() => setPage(prev => Math.max(prev - 1, 0))}
                     disabled={page === 0}
