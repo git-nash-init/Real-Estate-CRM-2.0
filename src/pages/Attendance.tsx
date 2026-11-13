@@ -42,6 +42,8 @@ interface LeaveRequest {
   created_at: string;
 }
 
+const ATTENDANCE_HISTORY_DAYS = 45;
+
 const leaveStatusColors: Record<string, string> = {
   pending: 'bg-amber-50 text-amber-700',
   approved: 'bg-emerald-50 text-emerald-700',
@@ -90,6 +92,8 @@ export const Attendance: React.FC = () => {
   const [filterEmployeeId, setFilterEmployeeId] = useState<string>('');
   const [filterDateFrom, setFilterDateFrom] = useState<string>('');
   const [filterDateTo, setFilterDateTo] = useState<string>('');
+  const [myHistoryDateFrom, setMyHistoryDateFrom] = useState<string>('');
+  const [myHistoryDateTo, setMyHistoryDateTo] = useState<string>('');
   const [filterProjectId, setFilterProjectId] = useState<string>('');
   const [filterNumber, setFilterNumber] = useState<string>('');
   const [projectsList, setProjectsList] = useState<{id: string, name: string}[]>([]);
@@ -109,6 +113,13 @@ export const Attendance: React.FC = () => {
 
   const fetchData = useCallback(async () => {
     if (!user) { setLoading(false); return; }
+
+    // Attendance history is scoped to a rolling window rather than a row
+    // count, so the number of days shown stays constant regardless of how
+    // many employees or records exist.
+    const fortyFiveDaysAgo = new Date(Date.now() - ATTENDANCE_HISTORY_DAYS * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
 
     let employeeId: string | null = null;
     try {
@@ -190,8 +201,8 @@ export const Attendance: React.FC = () => {
           .from('attendance')
           .select('*')
           .eq('employee_id', employeeId)
-          .order('attendance_date', { ascending: false })
-          .limit(30);
+          .gte('attendance_date', fortyFiveDaysAgo)
+          .order('attendance_date', { ascending: false });
         if (error) reportQueryError('Attendance: my history', error);
         else setMyHistory(data || []);
       } catch (err) {
@@ -215,8 +226,8 @@ export const Attendance: React.FC = () => {
       const { data, error } = await supabase
         .from('attendance')
         .select('*')
-        .order('attendance_date', { ascending: false })
-        .limit(200);
+        .gte('attendance_date', fortyFiveDaysAgo)
+        .order('attendance_date', { ascending: false });
       if (error) reportQueryError('Attendance: team', error);
       else setTeamAttendance(data || []);
     } catch (err) {
@@ -384,6 +395,12 @@ export const Attendance: React.FC = () => {
     return true;
   });
 
+  const filteredMyHistory = myHistory.filter(row => {
+    if (myHistoryDateFrom && row.attendance_date < myHistoryDateFrom) return false;
+    if (myHistoryDateTo && row.attendance_date > myHistoryDateTo) return false;
+    return true;
+  });
+
   const handleReviewLeave = async (id: string, status: 'approved' | 'rejected') => {
     const { error } = await supabase
       .from('leave_requests')
@@ -529,14 +546,31 @@ export const Attendance: React.FC = () => {
 
       {tab === 'my' && (
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-slate-200 flex items-center justify-between">
-            <h3 className="text-sm font-bold text-slate-800">My History (last 30 records)</h3>
-            <button
-              onClick={() => handleExport(myHistory, 'my_attendance.csv')}
-              className="flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:underline"
-            >
-              <Download className="h-3.5 w-3.5" /> Export CSV
-            </button>
+          <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <h3 className="text-sm font-bold text-slate-800">My History (last {ATTENDANCE_HISTORY_DAYS} days)</h3>
+            <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <input
+                  type="date"
+                  value={myHistoryDateFrom}
+                  onChange={(e) => setMyHistoryDateFrom(e.target.value)}
+                  className="w-full sm:w-36 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white"
+                />
+                <span className="text-slate-400 text-xs font-medium">to</span>
+                <input
+                  type="date"
+                  value={myHistoryDateTo}
+                  onChange={(e) => setMyHistoryDateTo(e.target.value)}
+                  className="w-full sm:w-36 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white"
+                />
+              </div>
+              <button
+                onClick={() => handleExport(filteredMyHistory, 'my_attendance.csv')}
+                className="flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:underline shrink-0"
+              >
+                <Download className="h-3.5 w-3.5" /> Export CSV
+              </button>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-sm">
@@ -550,7 +584,7 @@ export const Attendance: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {myHistory.length > 0 ? myHistory.map(r => (
+                {filteredMyHistory.length > 0 ? filteredMyHistory.map(r => (
                   <tr key={r.id}>
                     <td className="py-3 px-6 font-semibold text-slate-800">{new Date(r.attendance_date).toLocaleDateString('en-IN')}</td>
                     <td className="py-3 px-6 text-slate-600">{r.check_in ? new Date(r.check_in).toLocaleTimeString('en-IN') : '—'}</td>
