@@ -401,6 +401,100 @@ export const Attendance: React.FC = () => {
     return true;
   });
 
+  const QUICK_DATE_RANGES = [
+    { key: 'today', label: 'Today' },
+    { key: 'yesterday', label: 'Yesterday' },
+    { key: 'week', label: 'This Week' },
+    { key: 'd15', label: 'Last 15 Days' },
+    { key: 'd30', label: 'Last 30 Days' },
+    { key: 'd45', label: 'Last 45 Days' },
+  ] as const;
+  type QuickRangeKey = typeof QUICK_DATE_RANGES[number]['key'];
+
+  const getQuickDateRange = (key: QuickRangeKey): { from: string; to: string } => {
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    const today = new Date();
+    switch (key) {
+      case 'today':
+        return { from: fmt(today), to: fmt(today) };
+      case 'yesterday': {
+        const d = new Date(today);
+        d.setDate(d.getDate() - 1);
+        return { from: fmt(d), to: fmt(d) };
+      }
+      case 'week': {
+        const d = new Date(today);
+        const dayOfWeek = d.getDay();
+        const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+        d.setDate(d.getDate() - diffToMonday);
+        return { from: fmt(d), to: fmt(today) };
+      }
+      case 'd15': {
+        const d = new Date(today);
+        d.setDate(d.getDate() - 14);
+        return { from: fmt(d), to: fmt(today) };
+      }
+      case 'd30': {
+        const d = new Date(today);
+        d.setDate(d.getDate() - 29);
+        return { from: fmt(d), to: fmt(today) };
+      }
+      case 'd45': {
+        const d = new Date(today);
+        d.setDate(d.getDate() - 44);
+        return { from: fmt(d), to: fmt(today) };
+      }
+    }
+  };
+
+  const applyQuickDateRange = (key: QuickRangeKey, target: 'team' | 'my') => {
+    const { from, to } = getQuickDateRange(key);
+    if (target === 'team') {
+      setFilterDateFrom(from);
+      setFilterDateTo(to);
+    } else {
+      setMyHistoryDateFrom(from);
+      setMyHistoryDateTo(to);
+    }
+  };
+
+  const renderQuickDateRangeBar = (target: 'team' | 'my') => {
+    const activeFrom = target === 'team' ? filterDateFrom : myHistoryDateFrom;
+    const activeTo = target === 'team' ? filterDateTo : myHistoryDateTo;
+    const clear = target === 'team'
+      ? () => { setFilterDateFrom(''); setFilterDateTo(''); }
+      : () => { setMyHistoryDateFrom(''); setMyHistoryDateTo(''); };
+    return (
+      <div key={target} className="flex flex-wrap items-center gap-2 px-6 py-3 bg-slate-50/60 border-b border-slate-200">
+        {QUICK_DATE_RANGES.map(({ key, label }) => {
+          const { from, to } = getQuickDateRange(key);
+          const isActive = activeFrom === from && activeTo === to;
+          return (
+            <button
+              key={key}
+              onClick={() => applyQuickDateRange(key, target)}
+              className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                isActive
+                  ? 'bg-indigo-600 border-indigo-600 text-white'
+                  : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600'
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
+        {(activeFrom || activeTo) && (
+          <button
+            onClick={clear}
+            className="px-3 py-1 rounded-full text-xs font-semibold text-slate-400 hover:text-rose-600"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+    );
+  };
+
   const handleReviewLeave = async (id: string, status: 'approved' | 'rejected') => {
     const { error } = await supabase
       .from('leave_requests')
@@ -546,6 +640,7 @@ export const Attendance: React.FC = () => {
 
       {tab === 'my' && (
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+          {renderQuickDateRangeBar('my')}
           <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <h3 className="text-sm font-bold text-slate-800">My History (last {ATTENDANCE_HISTORY_DAYS} days)</h3>
             <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
@@ -605,6 +700,7 @@ export const Attendance: React.FC = () => {
 
       {tab === 'team' && (
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+          {renderQuickDateRangeBar('team')}
           <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2"><Users className="h-4 w-4 text-indigo-600" /> Team Attendance</h3>
             
